@@ -1,0 +1,15 @@
+# Render deployment config
+# Connect GitHub repo at render.com → auto-deploys
+
+services:
+  - type: web
+    name: tap-and-go
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: node server/index.js
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 3000

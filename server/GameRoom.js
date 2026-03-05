@@ -1,0 +1,400 @@
+/**
+ * GameRoom — Manages a single game session between two players.
+ *
+ * Handles:
+ * - Player connections/disconnections
+ * - Deck submission and game start
+ * - Game state management
+ * - Visibility filtering (information hiding)
+ * - Action processing and broadcasting
+ * - Reconnection support
+ */
+
+const crypto = require('crypto');
+
+class GameRoom {
+  constructor(id, hostNickname) {
+    this.id = id;
+    this.createdAt = Date.now();
+    this.lastActivity = Date.now();
+    this.status = 'waiting'; // waiting | ready | playing | finished
+
+    // Player slots
+    this.players = [
+      { nickname: hostNickname, playerId: this.generatePlayerId(), socketId: null, connected: false, deck: null, ready: false, avatar: null },
+      { nickname: null, playerId: null, socketId: null, connected: false, deck: null, ready: false, avatar: null }
+    ];
+    this.hostPlayerId = this.players[0].playerId;
+
+    // Game state (will be populated when both decks are submitted)
+    this.gameState = null;
+    this.actionLog = [];
+    this.cleanupTimer = null;
+  }
+
+  generatePlayerId() {
+    return crypto.randomBytes(16).toString('hex');
+  }
+
+  /**
+   * Add a player to this room (connect via socket)
+   */
+  addPlayer(socket, nickname, existingPlayerId) {
+    this.lastActivity = Date.now();
+
+    // Check if this is a reconnection (player has an existing ID)
+    if (existingPlayerId) {
+      const idx = this.players.findIndex(p => p.playerId === existingPlayerId);
+      if (idx !== -1) {
+        this.players[idx].socketId = socket.id;
+        this.players[idx].connected = true;
+        if (this.cleanupTimer) {
+          clearTimeout(this.cleanupTimer);
+          this.cleanupTimer = null;
+        }
+        console.log(`[GameRoom ${this.id}] Player ${idx} (${this.players[idx].nickname}) reconnected`);
+        return { playerIndex: idx, playerId: existingPlayerId };
+      }
+    }
+
+    // New player joining — find an open slot
+    // Player 0 (host) is always pre-created, so check if they need to connect
+    if (!this.players[0].connected && this.players[0].socketId === null) {
+      // Host connecting for the first time
+      this.players[0].socketId = socket.id;
+      this.players[0].connected = true;
+      this.players[0].nickname = nickname || this.players[0].nickname;
+      console.log(`[GameRoom ${this.id}] Host (P0) connected: ${this.players[0].nickname}`);
+      return { playerIndex: 0, playerId: this.players[0].playerId };
+    }
+
+    // Second player joining
+    if (this.players[1].nickname === null) {
+      this.players[1].nickname = nickname;
+      this.players[1].playerId = this.generatePlayerId();
+      this.players[1].socketId = socket.id;
+      this.players[1].connected = true;
+      this.status = 'ready';
+      console.log(`[GameRoom ${this.id}] Player 1 joined: ${nickname}`);
+      return { playerIndex: 1, playerId: this.players[1].playerId };
+    }
+
+    // Room is full
+    return { error: 'Room is full' };
+  }
+
+  /**
+   * Check if both player slots are taken
+   */
+  isFull() {
+    return this.players[0].nickname !== null && this.players[1].nickname !== null;
+  }
+
+  /**
+   * Submit a deck for a player
+   */
+  submitDeck(playerIndex, deck, avatar) {
+    if (playerIndex < 0 || playerIndex > 1) return { error: 'Invalid player' };
+    if (!deck || !Array.isArray(deck) || deck.length === 0) return { error: 'Invalid deck' };
+
+    this.players[playerIndex].deck = deck;
+    this.players[playerIndex].ready = true;
+    if (avatar) this.players[playerIndex].avatar = avatar;
+    this.lastActivity = Date.now();
+
+    console.log(`[GameRoom ${this.id}] Player ${playerIndex} submitted deck (${deck.length} cards)`);
+    return { ok: true };
+  }
+
+  /**
+   * Check if both players have submitted decks
+   */
+  bothDecksSubmitted() {
+    return this.players[0].ready && this.players[1].ready;
+  }
+
+  /**
+   * Initialize game state from both decks
+   */
+  startGame() {
+    this.status = 'playing';
+    this.lastActivity = Date.now();
+
+    // Flatten deck entries ({ card, qty } or raw card objects) into individual cards
+    const flattenDeck = (deck) => {
+      const cards = [];
+      for (const entry of deck) {
+        if (entry.card && entry.qty) {
+          // { card, qty } format from DeckChooser
+          for (let i = 0; i < entry.qty; i++) {
+            const card = { ...entry.card, id: require('crypto').randomBytes(8).toString('hex'), tapped: false, counters: {}, enteredThisTurn: false };
+            if (entry.card._reskin) card._reskin = entry.card._reskin;
+            cards.push(card);
+          }
+        } else {
+          // Raw card object — add an ID if missing
+          if (!entry.id) entry.id = require('crypto').randomBytes(8).toString('hex');
+          cards.push(entry);
+        }
+      }
+      return cards;
+    };
+
+    // Shuffle each player's deck
+    const shuffleDeck = (deck) => {
+      const arr = [...deck];
+      for (let i = arr.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [arr[i], arr[j]] = [arr[j], arr[i]];
+      }
+      return arr;
+    };
+
+    const p0Deck = shuffleDeck(flattenDeck(this.players[0].deck));
+    const p1Deck = shuffleDeck(flattenDeck(this.players[1].deck));
+
+    // Draw initial hands (7 cards each)
+    const p0Hand = p0Deck.splice(0, 7);
+    const p1Hand = p1Deck.splice(0, 7);
+
+    // Random coin flip for who goes first
+    const firstPlayer = Math.random() < 0.5 ? 0 : 1;
+
+    this.gameState = {
+      avatars: [this.players[0].avatar || null, this.players[1].avatar || null],
+      players: [
+        {
+          nickname: this.players[0].nickname,
+          life: 20,
+          poison: 0,
+          library: p0Deck,
+          hand: p0Hand,
+          battlefield: [],
+          graveyard: [],
+          exile: [],
+          commandZone: [],
+          manaPool: { W: 0, U: 0, B: 0, R: 0, G: 0, C: 0 },
+          counters: {},
+          emblems: [],
+          landPlayedThisTurn: false,
+          dealtDamageThisTurn: false,
+          commanderCastCount: 0,
+          commanderDamageReceived: {},
+          mulligansTaken: 0
+        },
+        {
+          nickname: this.players[1].nickname,
+          life: 20,
+          poison: 0,
+          library: p1Deck,
+          hand: p1Hand,
+          battlefield: [],
+          graveyard: [],
+          exile: [],
+          commandZone: [],
+          manaPool: { W: 0, U: 0, B: 0, R: 0, G: 0, C: 0 },
+          counters: {},
+          emblems: [],
+          landPlayedThisTurn: false,
+          dealtDamageThisTurn: false,
+          commanderCastCount: 0,
+          commanderDamageReceived: {},
+          mulligansTaken: 0
+        }
+      ],
+      activePlayer: firstPlayer,
+      currentPhase: 'main1',
+      currentStep: 'untap',
+      turnNumber: 1,
+      stack: [],
+      combatState: null,
+      priorityPlayer: firstPlayer,
+      timestamp: Date.now()
+    };
+
+    console.log(`[GameRoom ${this.id}] Game started!`);
+    return this.gameState;
+  }
+
+  /**
+   * Get state filtered for a specific player (information hiding)
+   * Each player only sees their own hand and library count.
+   */
+  getVisibleState(playerIndex) {
+    if (!this.gameState) return null;
+
+    const state = JSON.parse(JSON.stringify(this.gameState)); // deep clone
+    const opponentIndex = playerIndex === 0 ? 1 : 0;
+
+    // Hide opponent's hand — only send count and card backs
+    const opponentHand = state.players[opponentIndex].hand;
+    state.players[opponentIndex].hand = opponentHand.map(() => ({
+      hidden: true,
+      id: crypto.randomBytes(4).toString('hex') // random ID so client can render card backs
+    }));
+    state.players[opponentIndex].handCount = opponentHand.length;
+
+    // Hide opponent's library — only send count
+    // Keep viewer's own library so they can draw/search
+    state.players[opponentIndex].libraryCount = state.players[opponentIndex].library.length;
+    state.players[opponentIndex].library = [];
+    // For viewer's own library: keep full data but also include count
+    state.players[playerIndex].libraryCount = state.players[playerIndex].library.length;
+
+    // Add viewer info
+    state.viewerIndex = playerIndex;
+
+    return state;
+  }
+
+  /**
+   * Process a game action from a player
+   * For the MVP, we use a "trust the client" model:
+   * the client sends state diffs and the server applies them.
+   * This keeps the existing game logic on the client side.
+   */
+  processAction(playerIndex, action) {
+    if (!this.gameState) return { error: 'Game not started' };
+    this.lastActivity = Date.now();
+
+    // For MVP: the client sends the updated state for its own zones.
+    // Server merges and broadcasts.
+    if (action.type === 'stateSync') {
+      // Client sends its view of the full state — server merges
+      const update = action.state;
+
+      // Merge player states
+      for (let i = 0; i < 2; i++) {
+        if (update.players && update.players[i]) {
+          const u = update.players[i];
+          const s = this.gameState.players[i];
+
+          // Update public zones (any player can modify — e.g. combat affects opponent)
+          if (u.life !== undefined) s.life = u.life;
+          if (u.poison !== undefined) s.poison = u.poison;
+          if (u.battlefield) s.battlefield = u.battlefield;
+          if (u.graveyard) s.graveyard = u.graveyard;
+          if (u.exile) s.exile = u.exile;
+          if (u.manaPool) s.manaPool = u.manaPool;
+          if (u.counters) s.counters = u.counters;
+          if (u.emblems) s.emblems = u.emblems;
+          if (u.commandZone) s.commandZone = u.commandZone;
+          if (u.commanderDamageReceived) s.commanderDamageReceived = u.commanderDamageReceived;
+
+          // Semi-private game tracking (only owning player updates these)
+          if (i === playerIndex) {
+            if (u.hand) s.hand = u.hand;
+            if (u.library) s.library = u.library;
+            if (u.landPlayedThisTurn !== undefined) s.landPlayedThisTurn = u.landPlayedThisTurn;
+            if (u.dealtDamageThisTurn !== undefined) s.dealtDamageThisTurn = u.dealtDamageThisTurn;
+            if (u.commanderCastCount !== undefined) s.commanderCastCount = u.commanderCastCount;
+          }
+        }
+      }
+
+      // Update game-level state
+      if (update.activePlayer !== undefined) this.gameState.activePlayer = update.activePlayer;
+      if (update.currentPhase) this.gameState.currentPhase = update.currentPhase;
+      if (update.currentStep) this.gameState.currentStep = update.currentStep;
+      if (update.turnNumber) this.gameState.turnNumber = update.turnNumber;
+      if (update.stack) this.gameState.stack = update.stack;
+      if (update.combatState !== undefined) this.gameState.combatState = update.combatState;
+      if (update.priorityPlayer !== undefined) this.gameState.priorityPlayer = update.priorityPlayer;
+
+      // Mulligan state
+      if (update.mulliganPhase !== undefined) this.gameState.mulliganPhase = update.mulliganPhase;
+      if (update.mulliganPlayer !== undefined) this.gameState.mulliganPlayer = update.mulliganPlayer;
+      if (update.mulliganCounts) this.gameState.mulliganCounts = update.mulliganCounts;
+
+      this.gameState.timestamp = Date.now();
+    }
+
+    // Log the action
+    this.actionLog.push({
+      playerIndex,
+      action: { type: action.type },
+      timestamp: Date.now()
+    });
+
+    return { ok: true };
+  }
+
+  /**
+   * Handle player disconnection
+   */
+  playerDisconnected(playerIndex, socketId) {
+    if (playerIndex >= 0 && playerIndex <= 1) {
+      this.players[playerIndex].connected = false;
+      this.players[playerIndex].socketId = null;
+      this.lastActivity = Date.now();
+      console.log(`[GameRoom ${this.id}] Player ${playerIndex} (${this.players[playerIndex].nickname}) disconnected`);
+    }
+  }
+
+  /**
+   * Start a cleanup timer — if no one reconnects, the room is cleaned up
+   */
+  startCleanupTimer(onCleanup, timeoutMs = 5 * 60 * 1000) {
+    // Only start timer if BOTH players are disconnected
+    if (this.players.some(p => p.connected)) return;
+
+    if (this.cleanupTimer) clearTimeout(this.cleanupTimer);
+    this.cleanupTimer = setTimeout(() => {
+      if (!this.players.some(p => p.connected)) {
+        onCleanup();
+      }
+    }, timeoutMs);
+  }
+
+  /**
+   * Check if room has been abandoned (both disconnected for too long)
+   */
+  isAbandoned(timeoutMs) {
+    if (this.players.some(p => p.connected)) return false;
+    return Date.now() - this.lastActivity > timeoutMs;
+  }
+
+  /**
+   * Get socket IDs for both players
+   */
+  getSocketIds() {
+    return this.players.map(p => p.socketId);
+  }
+
+  /**
+   * Get a player's nickname
+   */
+  getNickname(playerIndex) {
+    return this.players[playerIndex]?.nickname || 'Unknown';
+  }
+
+  /**
+   * Get public room info (safe to send to anyone)
+   */
+  getPublicInfo() {
+    return {
+      id: this.id,
+      status: this.status,
+      createdAt: this.createdAt,
+      players: this.players.map(p => ({
+        nickname: p.nickname,
+        connected: p.connected,
+        ready: p.ready
+      }))
+    };
+  }
+
+  /**
+   * Clean up resources
+   */
+  destroy() {
+    if (this.cleanupTimer) {
+      clearTimeout(this.cleanupTimer);
+      this.cleanupTimer = null;
+    }
+    this.gameState = null;
+    this.actionLog = [];
+  }
+}
+
+module.exports = GameRoom;
