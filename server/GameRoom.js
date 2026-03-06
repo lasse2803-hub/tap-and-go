@@ -30,6 +30,13 @@ class GameRoom {
     this.gameState = null;
     this.actionLog = [];
     this.cleanupTimer = null;
+
+    // Match state (Best of 3)
+    this.matchType = 'single'; // 'single' | 'bo3'
+    this.matchScore = [0, 0];
+    this.matchGame = 0;
+    this.matchWinner = null;
+    this.lastGameWinnerIndex = null;
   }
 
   generatePlayerId() {
@@ -116,9 +123,11 @@ class GameRoom {
   /**
    * Initialize game state from both decks
    */
-  startGame() {
+  startGame(matchType = null, firstPlayerIndex = null) {
     this.status = 'playing';
     this.lastActivity = Date.now();
+    if (matchType) this.matchType = matchType;
+    if (this.matchGame === 0) this.matchGame = 1;
 
     // Flatten deck entries ({ card, qty } or raw card objects) into individual cards
     const flattenDeck = (deck) => {
@@ -157,8 +166,8 @@ class GameRoom {
     const p0Hand = p0Deck.splice(0, 7);
     const p1Hand = p1Deck.splice(0, 7);
 
-    // Random coin flip for who goes first
-    const firstPlayer = Math.random() < 0.5 ? 0 : 1;
+    // Who goes first: use provided index (Bo3 loser's choice) or random coin flip
+    const firstPlayer = firstPlayerIndex !== null ? firstPlayerIndex : (Math.random() < 0.5 ? 0 : 1);
 
     this.gameState = {
       avatars: [this.players[0].avatar || null, this.players[1].avatar || null],
@@ -212,8 +221,50 @@ class GameRoom {
       timestamp: Date.now()
     };
 
-    console.log(`[GameRoom ${this.id}] Game started!`);
+    console.log(`[GameRoom ${this.id}] Game ${this.matchGame} started! (${this.matchType}, first player: ${firstPlayer})`);
     return this.gameState;
+  }
+
+  /**
+   * Report a game win in a match — updates score, checks for match winner
+   */
+  gameWon(winnerIndex) {
+    if (winnerIndex < 0 || winnerIndex > 1) return { error: 'Invalid winner' };
+    this.lastGameWinnerIndex = winnerIndex;
+    this.lastActivity = Date.now();
+
+    if (this.matchType === 'single') {
+      this.matchWinner = winnerIndex;
+      this.status = 'finished';
+      return { matchOver: true, winner: winnerIndex };
+    }
+
+    // Bo3: increment score
+    this.matchScore[winnerIndex]++;
+    console.log(`[GameRoom ${this.id}] Game ${this.matchGame} won by player ${winnerIndex}. Score: ${this.matchScore[0]}-${this.matchScore[1]}`);
+
+    if (this.matchScore[winnerIndex] >= 2) {
+      this.matchWinner = winnerIndex;
+      this.status = 'finished';
+      return { matchOver: true, winner: winnerIndex, matchScore: [...this.matchScore] };
+    }
+
+    // Match continues — next game
+    this.status = 'between-games';
+    const loserIndex = winnerIndex === 0 ? 1 : 0;
+    return { matchOver: false, loser: loserIndex, nextGame: this.matchGame + 1, matchScore: [...this.matchScore] };
+  }
+
+  /**
+   * Start the next game in a Bo3 match — re-shuffles same decks, new hands
+   */
+  startNextGame(firstPlayerIndex) {
+    this.matchGame++;
+    // Reset player ready state but keep decks
+    this.players[0].ready = true;
+    this.players[1].ready = true;
+    // Re-start the game with the same decks
+    return this.startGame(null, firstPlayerIndex);
   }
 
   /**
@@ -306,6 +357,9 @@ class GameRoom {
       if (update.mulliganPlayer !== undefined) this.gameState.mulliganPlayer = update.mulliganPlayer;
       if (update.mulliganCounts) this.gameState.mulliganCounts = update.mulliganCounts;
 
+      // Forward game log entries from one player to the other
+      if (update.__logEntry) this.gameState.__logEntry = update.__logEntry;
+
       this.gameState.timestamp = Date.now();
     }
 
@@ -380,7 +434,13 @@ class GameRoom {
         nickname: p.nickname,
         connected: p.connected,
         ready: p.ready
-      }))
+      })),
+      matchInfo: {
+        type: this.matchType,
+        score: [...this.matchScore],
+        game: this.matchGame,
+        winner: this.matchWinner
+      }
     };
   }
 

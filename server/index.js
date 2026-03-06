@@ -92,12 +92,17 @@ io.on('connection', (socket) => {
   });
 
   // Player submits their deck
-  socket.on('submitDeck', ({ deck, avatar }, callback) => {
+  socket.on('submitDeck', ({ deck, avatar, matchType }, callback) => {
     const room = roomManager.getRoom(socket.roomId);
     if (!room) return callback?.({ error: 'Room not found' });
 
     const result = room.submitDeck(socket.playerIndex, deck, avatar);
     if (result.error) return callback?.({ error: result.error });
+
+    // Store matchType from the first submission (host sets it)
+    if (matchType && room.matchType === 'single') {
+      room.matchType = matchType;
+    }
 
     callback?.({ ok: true });
 
@@ -106,18 +111,115 @@ io.on('connection', (socket) => {
 
     // If both decks submitted, start the game
     if (room.bothDecksSubmitted()) {
-      const initialStates = room.startGame();
+      const initialStates = room.startGame(room.matchType);
       // Send filtered state to each player
       for (const [idx, sid] of room.getSocketIds().entries()) {
         const playerSocket = io.sockets.sockets.get(sid);
         if (playerSocket) {
           playerSocket.emit('gameStart', {
             state: room.getVisibleState(idx),
-            playerIndex: idx
+            playerIndex: idx,
+            matchInfo: room.getPublicInfo().matchInfo
           });
         }
       }
     }
+  });
+
+  // ─── Best of 3 Match Events ──────────────────────────────
+
+  // Report a game win
+  socket.on('gameWon', ({ winnerIndex }, callback) => {
+    const room = roomManager.getRoom(socket.roomId);
+    if (!room) return callback?.({ error: 'Room not found' });
+
+    const result = room.gameWon(winnerIndex);
+    if (result.error) return callback?.({ error: result.error });
+
+    callback?.({ ok: true, ...result });
+
+    // Broadcast match state to both players
+    io.to(socket.roomId).emit('matchStateUpdate', {
+      matchScore: [...room.matchScore],
+      matchGame: room.matchGame,
+      matchWinner: room.matchWinner,
+      result
+    });
+
+    // If match continues, notify about between-games phase
+    if (!result.matchOver) {
+      io.to(socket.roomId).emit('betweenGames', {
+        loserIndex: result.loser,
+        nextGame: result.nextGame,
+        matchScore: [...room.matchScore]
+      });
+    }
+  });
+
+  // Loser chooses who goes first in next game
+  socket.on('chooseFirstPlayer', ({ firstPlayerIndex }, callback) => {
+    const room = roomManager.getRoom(socket.roomId);
+    if (!room) return callback?.({ error: 'Room not found' });
+    if (room.status !== 'between-games') return callback?.({ error: 'Not between games' });
+
+    // Validate caller is the loser
+    if (room.lastGameWinnerIndex === socket.playerIndex) {
+      return callback?.({ error: 'Only the loser of the previous game can choose' });
+    }
+
+    // Start next game
+    room.startNextGame(firstPlayerIndex);
+    callback?.({ ok: true });
+
+    // Send new game state to each player
+    for (const [idx, sid] of room.getSocketIds().entries()) {
+      const playerSocket = io.sockets.sockets.get(sid);
+      if (playerSocket) {
+        playerSocket.emit('gameStart', {
+          state: room.getVisibleState(idx),
+          playerIndex: idx,
+          matchInfo: room.getPublicInfo().matchInfo
+        });
+      }
+    }
+  });
+
+  // Player concedes the current game
+  socket.on('concede', (_, callback) => {
+    const room = roomManager.getRoom(socket.roomId);
+    if (!room) return callback?.({ error: 'Room not found' });
+    if (room.status !== 'playing') return callback?.({ error: 'Game not in progress' });
+
+    const loserIndex = socket.playerIndex;
+    const winnerIndex = loserIndex === 0 ? 1 : 0;
+    const loserName = room.players[loserIndex]?.nickname || `Player ${loserIndex + 1}`;
+
+    // Broadcast concede event to both players so they can show gameOver
+    io.to(socket.roomId).emit('playerConceded', {
+      loserIndex,
+      loserName,
+      winnerIndex
+    });
+
+    // For Bo3, process the game win
+    if (room.matchType === 'bo3') {
+      const result = room.gameWon(winnerIndex);
+      io.to(socket.roomId).emit('matchStateUpdate', {
+        matchScore: [...room.matchScore],
+        matchGame: room.matchGame,
+        matchWinner: room.matchWinner,
+        result
+      });
+      if (!result.matchOver) {
+        io.to(socket.roomId).emit('betweenGames', {
+          loserIndex: result.loser,
+          nextGame: result.nextGame,
+          matchScore: [...room.matchScore]
+        });
+      }
+    }
+
+    callback?.({ ok: true });
   });
 
   // Player sends a game action
