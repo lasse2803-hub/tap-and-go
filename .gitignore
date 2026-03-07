@@ -2,3 +2,8 @@ node_modules/
 .env
 package-lock.json
 .DS_Store
+sounds/Free Fantasy SFX Pack By TomMusic.zip
+sounds/Free Fantasy SFX Pack By TomMusic/
+sounds/*.zip
+sounds/270413__littlerobotsoundfactory__footstep_dirt_02.wav
+.DS_Store
