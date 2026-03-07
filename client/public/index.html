@@ -630,7 +630,7 @@
 
   /* ===== GAME ACTION LOG ===== */
   .game-log-toggle {
-    position: fixed; top: 8px; right: 8px; z-index: 950;
+    position: fixed; bottom: 8px; right: 8px; z-index: 950;
     background: rgba(20,18,30,0.85); border: 1px solid rgba(200,170,60,0.3);
     color: rgba(200,170,60,0.8); padding: 4px 10px; border-radius: 12px;
     font-size: 11px; font-weight: 700; cursor: pointer;
@@ -644,7 +644,7 @@
     min-width: 14px; text-align: center;
   }
   .game-log-panel {
-    position: fixed; top: 36px; right: 8px; z-index: 940;
+    position: fixed; bottom: 36px; right: 8px; z-index: 940;
     width: 300px; max-height: 340px; overflow-y: auto;
     background: rgba(12,10,20,0.92); border: 1px solid rgba(200,170,60,0.2);
     border-radius: 10px; backdrop-filter: blur(12px);
@@ -818,10 +818,68 @@ const SFX = (() => {
   let reverbBuf = null;
   let hallBuf = null;
 
+  // === WAV file playback system ===
+  const wavCache = {}; // url -> AudioBuffer
+  const wavFiles = {
+    tap: '/sounds/Tap.wav',
+    playLand: '/sounds/Mana_Enters.wav',
+    combatDamage: '/sounds/Creatures_Hit.wav',
+    lifeLoss: '/sounds/Life_Loss_Spells.wav',
+    playerDamage: '/sounds/Life_Loss_Spells.wav',
+    counterspell: '/sounds/Counterspell.wav',
+    planeswalkerEnters: '/sounds/Planeswalker_Enters.wav',
+    playerWins: '/sounds/Player_Wins.wav',
+    massReturn: '/sounds/Return_All_Creatures.wav',
+  };
+
+  const playWav = (key, volume = 0.5) => {
+    const c = getCtx();
+    const url = wavFiles[key];
+    if (!url) return false;
+    if (wavCache[url]) {
+      const src = c.createBufferSource();
+      const gain = c.createGain();
+      gain.gain.value = volume;
+      src.buffer = wavCache[url];
+      src.connect(gain);
+      gain.connect(c.destination);
+      src.start(0);
+      return true;
+    }
+    // Load and play async (first time)
+    fetch(url).then(r => r.arrayBuffer()).then(buf => c.decodeAudioData(buf)).then(decoded => {
+      wavCache[url] = decoded;
+      const src = c.createBufferSource();
+      const gain = c.createGain();
+      gain.gain.value = volume;
+      src.buffer = decoded;
+      src.connect(gain);
+      gain.connect(c.destination);
+      src.start(0);
+    }).catch(() => {});
+    return true;
+  };
+
+  // Preload all WAV files on first interaction
+  let preloaded = false;
+  const preloadWavs = () => {
+    if (preloaded) return;
+    preloaded = true;
+    const c = getCtx();
+    Object.values(wavFiles).forEach(url => {
+      if (!wavCache[url]) {
+        fetch(url).then(r => r.arrayBuffer()).then(buf => c.decodeAudioData(buf)).then(decoded => {
+          wavCache[url] = decoded;
+        }).catch(() => {});
+      }
+    });
+  };
+
   const getCtx = () => {
     if (!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)();
     if (ctx.state === 'suspended') ctx.resume();
     if (!reverbBuf) createReverbs();
+    preloadWavs();
     return ctx;
   };
 
@@ -963,11 +1021,9 @@ const SFX = (() => {
       tone(1800, { vol: 0.02, duration: 0.06, attack: 0.002, release: 0.04, delay: 0.01, reverb: 0.2, hall: true });
     },
 
-    // Tap — short percussive stone-on-wood click
+    // Tap — WAV file
     tap() {
-      tone(1100, { vol: 0.08, duration: 0.05, attack: 0.001, decay: 0.015, sustain: 0.05, release: 0.03, type: 'triangle', reverb: 0.25, hall: true });
-      tone(550, { vol: 0.05, duration: 0.04, attack: 0.001, decay: 0.01, sustain: 0.03, release: 0.02 });
-      noise({ vol: 0.04, duration: 0.03, freq: 4000, release: 0.02, attack: 0.001, reverb: 0.2 });
+      playWav('tap', 0.6);
     },
 
     // Untap — lighter reverse click
@@ -1001,16 +1057,9 @@ const SFX = (() => {
       tone(520, { vol: 0.015, duration: 0.3, attack: 0.04, release: 0.2, delay: 0.08, reverb: 0.5, hall: true, detune: 5 });
     },
 
-    // Land — earthy placement with mana crystal resonance
+    // Land — WAV file (mana enters)
     playLand() {
-      // Soft thud
-      noise({ vol: 0.04, duration: 0.06, freq: 600, freqEnd: 200, attack: 0.002, release: 0.05, Q: 1.5, reverb: 0.2 });
-      // Warm earth tone
-      tone(180, { vol: 0.06, duration: 0.45, attack: 0.008, decay: 0.1, sustain: 0.2, release: 0.3, freqEnd: 110, reverb: 0.35, hall: true });
-      // Mana crystal chime
-      tone(440, { vol: 0.03, duration: 0.35, attack: 0.01, decay: 0.08, sustain: 0.15, release: 0.2, type: 'triangle', delay: 0.03, detune: 3, reverb: 0.4, hall: true });
-      // High harmonic shimmer
-      tone(880, { vol: 0.012, duration: 0.25, attack: 0.02, release: 0.18, delay: 0.06, reverb: 0.45, hall: true });
+      playWav('playLand', 0.5);
     },
 
     // Spell — ethereal arcane burst with sweeping resonance
@@ -1038,15 +1087,9 @@ const SFX = (() => {
       noise({ vol: 0.01, duration: 0.2, freq: 8000, freqEnd: 12000, delay: 0.1, release: 0.15, reverb: 0.4, hall: true });
     },
 
-    // Life loss — dark descending minor with ominous rumble
+    // Life loss — WAV file
     lifeLoss() {
-      // Descending minor
-      tone(330, { vol: 0.08, duration: 0.35, attack: 0.003, sustain: 0.35, release: 0.25, freqEnd: 110, reverb: 0.3, hall: true });
-      tone(220, { vol: 0.05, duration: 0.3, attack: 0.005, sustain: 0.3, release: 0.2, type: 'triangle', delay: 0.02, freqEnd: 80, reverb: 0.3, hall: true });
-      // Dark rumble
-      tone(55, { vol: 0.06, duration: 0.3, attack: 0.01, release: 0.25, delay: 0.04, reverb: 0.35, hall: true });
-      // Distortion-like noise
-      noise({ vol: 0.035, duration: 0.15, freq: 800, freqEnd: 200, attack: 0.003, release: 0.12, Q: 2, reverb: 0.2 });
+      playWav('lifeLoss', 0.5);
     },
 
     // Damage — sharp punchy hit with arena-style impact
@@ -1134,21 +1177,14 @@ const SFX = (() => {
       tone(440, { vol: 0.03, duration: 0.08, attack: 0.001, release: 0.06, delay: 0.02 });
     },
 
-    // Combat damage — heavy impact with bass
+    // Combat damage — WAV file (creatures hit)
     combatDamage() {
-      // Deep bass impact
-      tone(60, { vol: 0.1, duration: 0.35, attack: 0.003, release: 0.3, type: 'sine', reverb: 0.4, hall: true });
-      // Crunch
-      noise({ vol: 0.07, duration: 0.12, freq: 2000, freqEnd: 400, release: 0.08, reverb: 0.2 });
-      // Sub rumble
-      tone(40, { vol: 0.04, duration: 0.5, attack: 0.01, release: 0.4, delay: 0.05, type: 'sine', hall: true });
+      playWav('combatDamage', 0.5);
     },
 
-    // Player damage — painful impact
+    // Player damage — WAV file (life loss spells)
     playerDamage() {
-      tone(150, { vol: 0.08, duration: 0.25, attack: 0.002, release: 0.2, type: 'sawtooth', freqEnd: 60, reverb: 0.35, hall: true });
-      noise({ vol: 0.05, duration: 0.15, freq: 4000, freqEnd: 1000, release: 0.1, reverb: 0.25 });
-      tone(90, { vol: 0.05, duration: 0.4, attack: 0.01, release: 0.35, delay: 0.08, type: 'sine', hall: true });
+      playWav('playerDamage', 0.5);
     },
 
     // Creature death — dramatic
@@ -1180,6 +1216,26 @@ const SFX = (() => {
       tone(1174, { vol: 0.015, duration: 0.4, attack: 0.005, release: 0.3, delay: 0.03, reverb: 0.55, hall: true });
       // Subtle shimmer
       noise({ vol: 0.008, duration: 0.3, freq: 6000, freqEnd: 10000, delay: 0.08, release: 0.25, reverb: 0.4, hall: true });
+    },
+
+    // Counterspell — WAV file
+    counterspell() {
+      playWav('counterspell', 0.6);
+    },
+
+    // Planeswalker enters battlefield — WAV file
+    planeswalkerEnters() {
+      playWav('planeswalkerEnters', 0.5);
+    },
+
+    // Player wins — WAV file (only for the winner)
+    playerWins() {
+      playWav('playerWins', 0.5);
+    },
+
+    // Mass return/bounce — WAV file
+    massReturn() {
+      playWav('massReturn', 0.5);
     }
   };
 })();
@@ -1851,6 +1907,22 @@ const parseSpellEffects = (card) => {
     const lifeThreshold2 = lifeCondMatch2 ? parseInt(lifeCondMatch2[1]) : 0;
     effects.push({ type: 'board_wipe', subtype: 'exile_opponent_artifacts_creatures', lifeThreshold: lifeThreshold2, exileSelf: false, description: 'Exile opponent\'s artifacts & creatures' });
   }
+  // Return all creatures to owners' hands (Whelming Wave, Evacuation, etc.)
+  const bounceAllMatch = allText.match(/return all (creatures|nonland permanents|permanents)(?:\s+(?:you don't control\s+))?to their owners?[''']?s? hands?/);
+  if (bounceAllMatch) {
+    const whatToBounce = bounceAllMatch[1]; // 'creatures', 'nonland permanents', 'permanents'
+    // Check for exceptions: "except for Krakens, Leviathans, Octopuses, and Serpents"
+    const exceptMatch = allText.match(/except (?:for )?(.+?)(?:\.|$)/);
+    const exceptions = exceptMatch ? exceptMatch[1].split(/,\s*(?:and\s+)?/).map(s => s.trim().toLowerCase()) : [];
+    const opponentOnly = /you don't control/.test(allText);
+    effects.push({
+      type: 'board_wipe', subtype: 'bounce_all',
+      target: whatToBounce, exceptions, opponentOnly,
+      description: opponentOnly
+        ? `Return all ${whatToBounce} you don't control to hand`
+        : `Return all ${whatToBounce} to hand${exceptions.length ? ` (except ${exceptions.join(', ')})` : ''}`
+    });
+  }
   // Deals X damage to each creature (Blasphemous Act, Anger of the Gods, etc.)
   const dmgEachCreatureMatch = allText.match(/deals? (\d+) damage to each creature/);
   if (dmgEachCreatureMatch) {
@@ -1873,6 +1945,33 @@ const parseSpellEffects = (card) => {
   // Prevent all combat damage (Fog, Tangle, Settle the Wreckage-style)
   if (/prevent all combat damage/.test(allText)) {
     effects.push({ type: 'prevent_combat_damage', description: 'Prevent all combat damage this turn' });
+  }
+
+  // Add mana to mana pool (Dark Ritual, Seething Song, Pyretic Ritual, etc.)
+  // Matches patterns like "add {B}{B}{B}", "add {R}{R}{R}{R}{R}", "add {C}{C}", "add three mana of any one color"
+  const addManaMatch = allText.match(/add\s+(\{[wubrgc]\}(?:\{[wubrgc]\})*)/);
+  if (addManaMatch) {
+    const manaStr = addManaMatch[1];
+    const manaToAdd = { W: 0, U: 0, B: 0, R: 0, G: 0, C: 0 };
+    const symbolMatches = manaStr.match(/\{([wubrgc])\}/g) || [];
+    for (const sym of symbolMatches) {
+      const color = sym.replace(/[{}]/g, '').toUpperCase();
+      if (manaToAdd[color] !== undefined) manaToAdd[color]++;
+    }
+    const totalMana = Object.values(manaToAdd).reduce((a, b) => a + b, 0);
+    if (totalMana > 0) {
+      const manaDesc = symbolMatches.map(s => s.toUpperCase()).join('');
+      effects.push({ type: 'add_mana', mana: manaToAdd, description: `Add ${manaDesc}` });
+    }
+  }
+  // "add X mana of any one color" / "add X mana of any color" (e.g. Irencrag Feat)
+  if (!addManaMatch) {
+    const addAnyMatch = allText.match(/add (\w+) mana of any (?:one )?color/);
+    if (addAnyMatch) {
+      const numWords = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7 };
+      const amount = numWords[addAnyMatch[1]] || parseInt(addAnyMatch[1]) || 1;
+      effects.push({ type: 'add_mana_choice', amount, description: `Add ${amount} mana of any one color` });
+    }
   }
 
   // Each opponent loses life (e.g. Gary)
@@ -3979,7 +4078,9 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     // Play appropriate sound based on destination
     try {
       if (to === 'battlefield') {
-        if (isCreature(card) || (card.isToken && card.type_line?.toLowerCase().includes('creature'))) {
+        if (isPlaneswalker(card)) {
+          SFX.planeswalkerEnters();
+        } else if (isCreature(card) || (card.isToken && card.type_line?.toLowerCase().includes('creature'))) {
           SFX.playCreature();
         } else if (isLand(card)) {
           SFX.playLand();
@@ -5846,6 +5947,36 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
             setCastError({ pIdx, message: `Exiled ${exiled} enchantment(s)` });
             setTimeout(() => setCastError(null), 2000);
             setTimeout(() => cleanupAttachments([0, 1]), 50);
+          } else if (effect.subtype === 'bounce_all') {
+            // Mass bounce: Whelming Wave, Evacuation, Cyclonic Rift overload, etc.
+            let bounced = 0;
+            const exceptions = (effect.exceptions || []).map(e => e.toLowerCase());
+            const targetPlayers = effect.opponentOnly ? [opponentIdx] : [0, 1];
+            targetPlayers.forEach(pi => {
+              setState(pi, prev => {
+                const toBounce = prev.battlefield.filter(c => {
+                  // Determine what gets bounced based on target type
+                  if (effect.target === 'creatures' && !isCreature(c)) return false;
+                  if (effect.target === 'nonland permanents' && isLand(c)) return false;
+                  // Check exceptions (creature subtypes like Kraken, Leviathan, etc.)
+                  if (exceptions.length > 0) {
+                    const typeLine = (c.type_line || '').toLowerCase();
+                    for (const ex of exceptions) {
+                      if (typeLine.includes(ex)) return false;
+                    }
+                  }
+                  return true;
+                });
+                const rest = prev.battlefield.filter(c => !toBounce.includes(c));
+                bounced += toBounce.length;
+                return { ...prev, battlefield: rest, hand: [...prev.hand, ...toBounce.map(c => ({ ...c, tapped: false, counters: {}, tempBuffs: null }))] };
+              });
+            });
+            try { SFX.massReturn(); } catch(e) {}
+            const excStr = exceptions.length > 0 ? ` (except ${exceptions.join(', ')})` : '';
+            setCastError({ pIdx, message: `Bounced ${bounced} ${effect.target} to hand${excStr}` });
+            setTimeout(() => setCastError(null), 2500);
+            setTimeout(() => cleanupAttachments(targetPlayers), 50);
           }
           break;
         }
@@ -5986,6 +6117,41 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
             setPeekingHand({ targetPIdx: opponentIdx, allowDiscard: true });
           }
           break;
+        case 'add_mana': {
+          const mana = effect.mana;
+          setState(pIdx, prev => {
+            const newPool = { ...prev.manaPool };
+            for (const [color, amount] of Object.entries(mana)) {
+              if (amount > 0) newPool[color] = (newPool[color] || 0) + amount;
+            }
+            return { ...prev, manaPool: newPool };
+          });
+          const parts = [];
+          for (const [color, amount] of Object.entries(mana)) {
+            if (amount > 0) parts.push(`${amount}x {${color}}`);
+          }
+          try { SFX.manaAdd?.() || SFX.tapLand?.(); } catch(e) {}
+          setCastError({ pIdx, message: `🔮 Added ${parts.join(', ')} to mana pool`, background: '#1a1a2a' });
+          setTimeout(() => setCastError(null), 2500);
+          break;
+        }
+        case 'add_mana_choice': {
+          const colorChoice = prompt(`Add ${effect.amount} mana of which color?\nW (White), U (Blue), B (Black), R (Red), G (Green), C (Colorless):`);
+          if (colorChoice) {
+            const color = colorChoice.trim().toUpperCase().charAt(0);
+            if (['W', 'U', 'B', 'R', 'G', 'C'].includes(color)) {
+              setState(pIdx, prev => {
+                const newPool = { ...prev.manaPool };
+                newPool[color] = (newPool[color] || 0) + effect.amount;
+                return { ...prev, manaPool: newPool };
+              });
+              try { SFX.manaAdd?.() || SFX.tapLand?.(); } catch(e) {}
+              setCastError({ pIdx, message: `🔮 Added ${effect.amount}x {${color}} to mana pool`, background: '#1a1a2a' });
+              setTimeout(() => setCastError(null), 2500);
+            }
+          }
+          break;
+        }
         default:
           break;
       }
@@ -6060,6 +6226,10 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     // Creature / permanent — put on battlefield
     const fromZone = stackEntry.fromExile ? 'exile' : 'hand';
     moveCard(pIdx, card, fromZone, 'battlefield');
+    // Play planeswalker entrance sound
+    if (isPlaneswalker(card)) {
+      try { SFX.planeswalkerEnters(); } catch(e) {}
+    }
     const etbEffects = parseETBEffects(card);
 
     // Check battlefield for "whenever another creature enters" triggers (Purphoros, Soul Warden, etc.)
@@ -6077,7 +6247,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
   // Counter a spell on the stack
   const counterSpellOnStack = (stackEntry) => {
     const { pIdx, card, fromExile } = stackEntry;
-    try { SFX.toGraveyard(); } catch(e) {}
+    try { SFX.counterspell(); } catch(e) {}
     // Countered spell goes to graveyard, card removed from source zone (mana already paid)
     const sourceZone = fromExile ? 'exile' : 'hand';
     setState(pIdx, prev => {
@@ -9345,6 +9515,12 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         const isBo3 = matchInfo && matchInfo.type === 'bo3';
         const matchOver = isBo3 && matchInfo.winner !== null && matchInfo.winner !== undefined;
         const winnerIdx = gameOver.winner === players[0] ? 0 : 1;
+        // Play win sound only for the winning player
+        const iAmWinner = onlineMode ? (winnerIdx === onlinePlayerIndex) : true;
+        if (iAmWinner && !gameOver._soundPlayed) {
+          gameOver._soundPlayed = true;
+          try { SFX.playerWins(); } catch(e) {}
+        }
 
         return (
           <div style={{

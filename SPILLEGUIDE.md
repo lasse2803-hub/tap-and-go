@@ -279,6 +279,12 @@ Betalte abilities vises i kontekstmenuen. Mana betales automatisk, og effekten u
 
 Permanents med upkeep-triggers (f.eks. Midnight Clock's automatiske hour counter) håndteres automatisk ved tur-start. Midnight Clock's 12. hour counter trigger udføres også automatisk: shuffle hånd+graveyard ind i library, træk 7 kort, exil Midnight Clock.
 
+### Mana-adding spells (Dark Ritual, Seething Song, Pyretic Ritual, etc.)
+
+Instants og sorceries der tilføjer mana til din pool (f.eks. Dark Ritual: "Add {B}{B}{B}") **eksekveres automatisk**. Når spellen resolver, tilføjes mana direkte til din mana pool. Du får en besked der bekræfter hvor meget mana der blev tilføjet.
+
+For spells der tilføjer mana af en valgfri farve (f.eks. "Add three mana of any one color"), bliver du bedt om at vælge farve.
+
 ---
 
 ## 11. Specielle mekanikker

@@ -363,6 +363,111 @@ class GameRoom {
       this.gameState.timestamp = Date.now();
     }
 
+    // ── Server-side cross-visibility actions ──────────────────
+    // These actions modify an opponent's hand or library, which can't
+    // be done through the normal stateSync path (visibility filter blocks it).
+    // The server operates on the true (unfiltered) game state.
+
+    if (action.type === 'bounce') {
+      // Move a card from any zone to a player's hand (bounce, return from graveyard, etc.)
+      const { targetPlayerIndex, cardId, fromZone } = action;
+      const target = this.gameState.players[targetPlayerIndex];
+      if (!target) return { error: 'Invalid target player' };
+      // Search for card in source zone, or across all zones if not specified
+      const zones = fromZone ? [fromZone] : ['battlefield', 'graveyard', 'exile', 'commandZone'];
+      let card = null;
+      let foundZone = null;
+      for (const z of zones) {
+        if (!target[z]) continue;
+        const idx = target[z].findIndex(c => c.id === cardId);
+        if (idx !== -1) {
+          card = { ...target[z][idx], tapped: false, enteredThisTurn: false };
+          target[z].splice(idx, 1);
+          foundZone = z;
+          break;
+        }
+      }
+      if (!card) return { error: 'Card not found' };
+      // Clean up zone-specific properties
+      if (foundZone === 'battlefield') {
+        if (card.counters) card.counters = {};
+        if (card.animatedCreature) { delete card.animatedCreature; delete card.power; delete card.toughness; delete card.keywords; }
+        delete card.temporaryControl; delete card.originalOwner; delete card.grantedHaste;
+      }
+      target.hand.push(card);
+      this.gameState.timestamp = Date.now();
+    }
+
+    if (action.type === 'discardFromHand') {
+      // Force-discard a specific card from a player's hand (by card index)
+      // Used by discard effects (Thoughtseize, Duress, etc.)
+      const { targetPlayerIndex, cardIndex } = action;
+      const target = this.gameState.players[targetPlayerIndex];
+      if (!target) return { error: 'Invalid target player' };
+      if (cardIndex < 0 || cardIndex >= target.hand.length) return { error: 'Invalid card index' };
+      const card = target.hand.splice(cardIndex, 1)[0];
+      target.graveyard.push(card);
+      this.gameState.timestamp = Date.now();
+      return { ok: true, discardedCard: { name: card.name, id: card.id } };
+    }
+
+    if (action.type === 'peekHand') {
+      // Let a player see an opponent's hand (for discard selection)
+      const { targetPlayerIndex } = action;
+      const target = this.gameState.players[targetPlayerIndex];
+      if (!target) return { error: 'Invalid target player' };
+      return { ok: true, hand: target.hand };
+    }
+
+    if (action.type === 'mulligan') {
+      // Server-side mulligan: shuffle hand+library, draw new hand
+      const { targetPlayerIndex, newCount } = action;
+      const target = this.gameState.players[targetPlayerIndex];
+      if (!target) return { error: 'Invalid target player' };
+      const drawSize = 7 - newCount;
+      const allCards = [...target.hand, ...target.library];
+      // Fisher-Yates shuffle
+      for (let i = allCards.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [allCards[i], allCards[j]] = [allCards[j], allCards[i]];
+      }
+      if (drawSize <= 0) {
+        target.hand = [];
+        target.library = allCards;
+      } else {
+        target.hand = allCards.slice(0, drawSize);
+        target.library = allCards.slice(drawSize);
+      }
+      if (!this.gameState.mulliganCounts) this.gameState.mulliganCounts = [0, 0];
+      this.gameState.mulliganCounts[targetPlayerIndex] = newCount;
+      this.gameState.timestamp = Date.now();
+    }
+
+    if (action.type === 'returnToOwnerZone') {
+      // Return a stolen card to its original owner's zone (hand, graveyard, etc.)
+      // Used when temporarily controlled creatures leave the battlefield
+      const { controllerIndex, cardId, destinationZone } = action;
+      const controller = this.gameState.players[controllerIndex];
+      if (!controller) return { error: 'Invalid controller' };
+      const cardIdx = controller.battlefield.findIndex(c => c.id === cardId);
+      if (cardIdx === -1) return { error: 'Card not on battlefield' };
+      const card = { ...controller.battlefield[cardIdx], tapped: false };
+      const ownerIndex = card.originalOwner;
+      if (ownerIndex === undefined || ownerIndex === controllerIndex) return { error: 'Card is not stolen' };
+      const owner = this.gameState.players[ownerIndex];
+      if (!owner) return { error: 'Invalid owner' };
+      // Clean up card
+      if (card.counters) card.counters = {};
+      delete card.temporaryControl; delete card.originalOwner; delete card.grantedHaste;
+      if (card.animatedCreature) { delete card.animatedCreature; delete card.power; delete card.toughness; delete card.keywords; }
+      // Move card
+      controller.battlefield.splice(cardIdx, 1);
+      const zone = destinationZone || 'graveyard';
+      if (!owner[zone]) return { error: 'Invalid zone' };
+      owner[zone].push(card);
+      this.gameState.timestamp = Date.now();
+    }
+
     // Log the action
     this.actionLog.push({
       playerIndex,

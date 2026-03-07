@@ -230,7 +230,8 @@ io.on('connection', (socket) => {
     const result = room.processAction(socket.playerIndex, action);
     if (result.error) return callback?.({ error: result.error });
 
-    callback?.({ ok: true });
+    // Forward the full result (includes extra data like peeked hand, discarded card name)
+    callback?.(result.ok ? result : { ok: true });
 
     // Send updated filtered state to each player
     for (const [idx, sid] of room.getSocketIds().entries()) {

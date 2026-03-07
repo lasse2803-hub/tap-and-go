@@ -1137,6 +1137,351 @@ async function testBo3EdgeCases(loadedDecks) {
 }
 
 // ═══════════════════════════════════════════════════
+// Server-side cross-visibility action tests
+// ═══════════════════════════════════════════════════
+async function testServerActions(loadedDecks) {
+  console.log('\n▸ Server-side action tests (bounce, discard, peek, steal return)');
+
+  const deckNames = Object.keys(loadedDecks);
+  const deck1 = loadedDecks[deckNames[0]];
+  const deck2 = loadedDecks[deckNames[1]];
+
+  // Helper to set up a game and return sockets + game state
+  async function setupGame() {
+    const roomData = await createRoom('P1');
+    const s1 = createSocket();
+    const s2 = createSocket();
+    await Promise.all([
+      new Promise(r => s1.on('connect', r)),
+      new Promise(r => s2.on('connect', r))
+    ]);
+    await emitCb(s1, 'joinGame', { roomId: roomData.roomId, nickname: 'Player1' });
+    await emitCb(s2, 'joinGame', { roomId: roomData.roomId, nickname: 'Player2' });
+    const p1Start = waitForEvent(s1, 'gameStart');
+    const p2Start = waitForEvent(s2, 'gameStart');
+    await emitCb(s1, 'submitDeck', { deck: deck1 });
+    await emitCb(s2, 'submitDeck', { deck: deck2 });
+    const gs1 = await p1Start;
+    const gs2 = await p2Start;
+    return { s1, s2, gs1, gs2 };
+  }
+
+  // TEST 1: Bounce — move card from opponent's battlefield to hand via server
+  process.stdout.write('  Bounce: battlefield → hand via server...');
+  try {
+    const { s1, s2, gs1, gs2 } = await setupGame();
+
+    // P2 plays a card to battlefield
+    const cardToPlay = gs2.state.players[1].hand[0];
+    drainEvents(s1, 'stateUpdate');
+    const s1SeesBF = waitForEvent(s1, 'stateUpdate');
+    await emitCb(s2, 'gameAction', {
+      action: { type: 'stateSync', state: {
+        players: [ gs2.state.players[0], {
+          ...gs2.state.players[1],
+          hand: gs2.state.players[1].hand.slice(1),
+          battlefield: [{ ...cardToPlay, tapped: false }],
+        }],
+        activePlayer: gs2.state.activePlayer, currentPhase: 'main1', turnNumber: 1,
+      }}
+    });
+    await s1SeesBF;
+
+    // Now P1 bounces P2's card via server action
+    drainEvents(s1, 'stateUpdate');
+    drainEvents(s2, 'stateUpdate');
+    await new Promise(r => setTimeout(r, 100));
+    const s2SeesBounce = waitForEvent(s2, 'stateUpdate');
+    const s1SeesBounce = waitForEvent(s1, 'stateUpdate');
+
+    await emitCb(s1, 'gameAction', {
+      action: { type: 'bounce', targetPlayerIndex: 1, cardId: cardToPlay.id }
+    });
+
+    const bounceUpdateP2 = await s2SeesBounce;
+    const bounceUpdateP1 = await s1SeesBounce;
+
+    // P2 should see the card back in their hand (7 cards after playing 1 then bouncing back = 7)
+    const p2HandAfter = bounceUpdateP2.state.players[1].hand;
+    assertEqual(p2HandAfter.length, 7, 'Bounce: P2 hand should have 7 cards after bounce');
+    const bouncedBack = p2HandAfter.find(c => c.id === cardToPlay.id);
+    assert(!!bouncedBack, 'Bounce: bounced card should be in P2 hand');
+
+    // P2's battlefield should be empty
+    const p2BfAfter = bounceUpdateP2.state.players[1].battlefield;
+    assertEqual(p2BfAfter.length, 0, 'Bounce: P2 battlefield should be empty after bounce');
+
+    // P1 should see P2's hand count = 7 (hidden cards)
+    const p2HandFromP1 = bounceUpdateP1.state.players[1].handCount;
+    assertEqual(p2HandFromP1, 7, 'Bounce: P1 should see P2 hand count = 7');
+
+    console.log('\r  ✓ Bounce: battlefield → hand via server — card returned correctly');
+    s1.disconnect(); s2.disconnect();
+  } catch (err) {
+    console.log(`\r  ✗ Bounce: ${err.message}`);
+    failed++;
+  }
+
+  // TEST 2: Peek Hand — server reveals opponent's real hand
+  process.stdout.write('  Peek hand: server reveals real cards...');
+  try {
+    const { s1, s2, gs1, gs2 } = await setupGame();
+
+    // P1 peeks at P2's hand
+    const peekRes = await emitCb(s1, 'gameAction', {
+      action: { type: 'peekHand', targetPlayerIndex: 1 }
+    });
+
+    assert(peekRes.ok, 'PeekHand: server should return ok');
+    assert(peekRes.hand && Array.isArray(peekRes.hand), 'PeekHand: should return hand array');
+    assertEqual(peekRes.hand.length, 7, 'PeekHand: hand should have 7 cards');
+    assert(peekRes.hand[0].name !== undefined, 'PeekHand: cards should have real names (not hidden)');
+    assert(!peekRes.hand[0].hidden, 'PeekHand: cards should not be hidden');
+
+    console.log('\r  ✓ Peek hand: server reveals real cards — 7 real card objects returned');
+    s1.disconnect(); s2.disconnect();
+  } catch (err) {
+    console.log(`\r  ✗ PeekHand: ${err.message}`);
+    failed++;
+  }
+
+  // TEST 3: Discard from hand — server removes specific card
+  process.stdout.write('  Discard: server removes card from opponent hand...');
+  try {
+    const { s1, s2, gs1, gs2 } = await setupGame();
+
+    // First peek to know what cards opponent has
+    const peekRes = await emitCb(s1, 'gameAction', {
+      action: { type: 'peekHand', targetPlayerIndex: 1 }
+    });
+    const targetCard = peekRes.hand[2]; // pick 3rd card
+    const targetIndex = 2;
+
+    // Discard it
+    drainEvents(s1, 'stateUpdate');
+    drainEvents(s2, 'stateUpdate');
+    await new Promise(r => setTimeout(r, 100));
+    const s2SeesDiscard = waitForEvent(s2, 'stateUpdate');
+
+    const discardRes = await emitCb(s1, 'gameAction', {
+      action: { type: 'discardFromHand', targetPlayerIndex: 1, cardIndex: targetIndex }
+    });
+
+    assert(discardRes.ok, 'Discard: server should return ok');
+    assertEqual(discardRes.discardedCard.name, targetCard.name, 'Discard: returned card name should match');
+
+    const discardUpdate = await s2SeesDiscard;
+    const p2HandAfter = discardUpdate.state.players[1].hand;
+    assertEqual(p2HandAfter.length, 6, 'Discard: P2 hand should have 6 cards after discard');
+    const p2GYAfter = discardUpdate.state.players[1].graveyard;
+    assertEqual(p2GYAfter.length, 1, 'Discard: P2 graveyard should have 1 card');
+    assertEqual(p2GYAfter[0].name, targetCard.name, 'Discard: discarded card should be in graveyard');
+
+    console.log('\r  ✓ Discard: server removes card from opponent hand — card in graveyard');
+    s1.disconnect(); s2.disconnect();
+  } catch (err) {
+    console.log(`\r  ✗ Discard: ${err.message}`);
+    failed++;
+  }
+
+  // TEST 4: Mulligan via server action
+  process.stdout.write('  Mulligan: server shuffles and redraws...');
+  try {
+    const { s1, s2, gs1, gs2 } = await setupGame();
+
+    // Get P1's original hand
+    const origHand = gs1.state.players[0].hand;
+    assertEqual(origHand.length, 7, 'Mulligan: initial hand should be 7');
+
+    drainEvents(s1, 'stateUpdate');
+    drainEvents(s2, 'stateUpdate');
+    await new Promise(r => setTimeout(r, 100));
+    const s1SeesMull = waitForEvent(s1, 'stateUpdate');
+
+    await emitCb(s1, 'gameAction', {
+      action: { type: 'mulligan', targetPlayerIndex: 0, newCount: 1 }
+    });
+
+    const mullUpdate = await s1SeesMull;
+    const p1HandAfter = mullUpdate.state.players[0].hand;
+    assertEqual(p1HandAfter.length, 6, 'Mulligan: hand should be 6 after 1st mulligan');
+    const p1LibAfter = mullUpdate.state.players[0].library.length;
+    assertEqual(p1LibAfter, deck1.length - 6, 'Mulligan: library should have remaining cards');
+
+    console.log('\r  ✓ Mulligan: server shuffles and redraws — 6-card hand correctly');
+    s1.disconnect(); s2.disconnect();
+  } catch (err) {
+    console.log(`\r  ✗ Mulligan: ${err.message}`);
+    failed++;
+  }
+
+  // TEST 5: Return stolen card to owner's zone
+  process.stdout.write('  Steal return: stolen card returns to owner graveyard...');
+  try {
+    const { s1, s2, gs1, gs2 } = await setupGame();
+
+    // P2 plays a card, P1 "steals" it
+    const stolenCard = gs2.state.players[1].hand[0];
+    const stolenOnBF = { ...stolenCard, tapped: false, originalOwner: 1, temporaryControl: true };
+
+    // Put stolen card on P1's battlefield via stateSync
+    drainEvents(s1, 'stateUpdate');
+    drainEvents(s2, 'stateUpdate');
+    await new Promise(r => setTimeout(r, 100));
+    const s2SeeSteal = waitForEvent(s2, 'stateUpdate');
+
+    await emitCb(s1, 'gameAction', {
+      action: { type: 'stateSync', state: {
+        players: [
+          { ...gs1.state.players[0], battlefield: [stolenOnBF] },
+          { ...gs1.state.players[1], hand: gs1.state.players[1].hand, battlefield: [] }
+        ],
+        activePlayer: 0, currentPhase: 'main1', turnNumber: 1,
+      }}
+    });
+    await s2SeeSteal;
+
+    // Now return stolen card to owner via server action
+    drainEvents(s1, 'stateUpdate');
+    drainEvents(s2, 'stateUpdate');
+    await new Promise(r => setTimeout(r, 100));
+    const s2SeesReturn = waitForEvent(s2, 'stateUpdate');
+    const s1SeesReturn = waitForEvent(s1, 'stateUpdate');
+
+    await emitCb(s1, 'gameAction', {
+      action: { type: 'returnToOwnerZone', controllerIndex: 0, cardId: stolenCard.id, destinationZone: 'graveyard' }
+    });
+
+    const returnUpdateP2 = await s2SeesReturn;
+    const returnUpdateP1 = await s1SeesReturn;
+
+    // P1's battlefield should be empty
+    const p1BfAfter = returnUpdateP1.state.players[0].battlefield;
+    assertEqual(p1BfAfter.length, 0, 'StealReturn: P1 battlefield should be empty');
+
+    // P2's graveyard should have the returned card
+    const p2GYAfter = returnUpdateP2.state.players[1].graveyard;
+    assert(p2GYAfter.length >= 1, 'StealReturn: P2 graveyard should have at least 1 card');
+    const returnedCard = p2GYAfter.find(c => c.id === stolenCard.id);
+    assert(!!returnedCard, 'StealReturn: stolen card should be in P2 graveyard');
+
+    console.log('\r  ✓ Steal return: stolen card returns to owner graveyard — card found');
+    s1.disconnect(); s2.disconnect();
+  } catch (err) {
+    console.log(`\r  ✗ StealReturn: ${err.message}`);
+    failed++;
+  }
+
+  // TEST 6: Bounce from graveyard to hand
+  process.stdout.write('  Bounce from graveyard: card moves to hand via server...');
+  try {
+    const { s1, s2, gs1, gs2 } = await setupGame();
+
+    // P2 has a card in graveyard
+    const gyCard = gs2.state.players[1].hand[0];
+
+    drainEvents(s1, 'stateUpdate');
+    drainEvents(s2, 'stateUpdate');
+    await new Promise(r => setTimeout(r, 100));
+    const s2Sees = waitForEvent(s2, 'stateUpdate');
+
+    await emitCb(s2, 'gameAction', {
+      action: { type: 'stateSync', state: {
+        players: [
+          gs2.state.players[0],
+          { ...gs2.state.players[1], hand: gs2.state.players[1].hand.slice(1), graveyard: [gyCard] }
+        ],
+        activePlayer: gs2.state.activePlayer, currentPhase: 'main1', turnNumber: 1,
+      }}
+    });
+    await s2Sees;
+
+    // P1 bounces from P2's graveyard to P2's hand
+    drainEvents(s1, 'stateUpdate');
+    drainEvents(s2, 'stateUpdate');
+    await new Promise(r => setTimeout(r, 100));
+    const s2SeesBounce = waitForEvent(s2, 'stateUpdate');
+
+    await emitCb(s1, 'gameAction', {
+      action: { type: 'bounce', targetPlayerIndex: 1, cardId: gyCard.id }
+    });
+
+    const update = await s2SeesBounce;
+    const p2Hand = update.state.players[1].hand;
+    const bouncedCard = p2Hand.find(c => c.id === gyCard.id);
+    assert(!!bouncedCard, 'GYBounce: card should be in P2 hand');
+    const p2GY = update.state.players[1].graveyard;
+    assertEqual(p2GY.length, 0, 'GYBounce: P2 graveyard should be empty');
+
+    console.log('\r  ✓ Bounce from graveyard: card moves to hand via server — card found');
+    s1.disconnect(); s2.disconnect();
+  } catch (err) {
+    console.log(`\r  ✗ GYBounce: ${err.message}`);
+    failed++;
+  }
+
+  // TEST 7: Discard invalid index rejected
+  process.stdout.write('  Discard invalid index: server rejects...');
+  try {
+    const { s1, s2, gs1, gs2 } = await setupGame();
+
+    const res = await emitCb(s1, 'gameAction', {
+      action: { type: 'discardFromHand', targetPlayerIndex: 1, cardIndex: 99 }
+    });
+
+    assert(res.error, 'DiscardInvalid: server should return error for bad index');
+
+    console.log('\r  ✓ Discard invalid index: server rejects — error returned');
+    s1.disconnect(); s2.disconnect();
+  } catch (err) {
+    console.log(`\r  ✗ DiscardInvalid: ${err.message}`);
+    failed++;
+  }
+
+  // TEST 8: Visibility after bounce — P1 can't see P2's cards
+  process.stdout.write('  Visibility: P1 sees hidden hand after bounce...');
+  try {
+    const { s1, s2, gs1, gs2 } = await setupGame();
+
+    // P2 plays a card
+    const cardToPlay = gs2.state.players[1].hand[0];
+    drainEvents(s1, 'stateUpdate');
+    const s1Sees = waitForEvent(s1, 'stateUpdate');
+    await emitCb(s2, 'gameAction', {
+      action: { type: 'stateSync', state: {
+        players: [ gs2.state.players[0], {
+          ...gs2.state.players[1],
+          hand: gs2.state.players[1].hand.slice(1),
+          battlefield: [{ ...cardToPlay, tapped: false }],
+        }],
+        activePlayer: gs2.state.activePlayer, currentPhase: 'main1', turnNumber: 1,
+      }}
+    });
+    await s1Sees;
+
+    // P1 bounces
+    drainEvents(s1, 'stateUpdate');
+    await new Promise(r => setTimeout(r, 100));
+    const s1SeesBounce = waitForEvent(s1, 'stateUpdate');
+    await emitCb(s1, 'gameAction', {
+      action: { type: 'bounce', targetPlayerIndex: 1, cardId: cardToPlay.id }
+    });
+    const bUpdate = await s1SeesBounce;
+
+    // P1 should NOT see real cards in P2's hand — should be hidden
+    const p2HandFromP1 = bUpdate.state.players[1].hand;
+    assert(p2HandFromP1.every(c => c.hidden === true), 'Visibility: P1 should only see hidden cards in P2 hand');
+    assertEqual(bUpdate.state.players[1].handCount, 7, 'Visibility: P2 hand count should be 7');
+
+    console.log('\r  ✓ Visibility: P1 sees hidden hand after bounce — information hidden correctly');
+    s1.disconnect(); s2.disconnect();
+  } catch (err) {
+    console.log(`\r  ✗ Visibility: ${err.message}`);
+    failed++;
+  }
+}
+
+// ═══════════════════════════════════════════════════
 // MAIN
 // ═══════════════════════════════════════════════════
 async function main() {
@@ -1159,6 +1504,9 @@ async function main() {
 
     // Phase 5: Bo3 edge cases — full 3-game match, validation, concede variants
     await testBo3EdgeCases(loadedDecks);
+
+    // Phase 6: Server-side cross-visibility actions (bounce, discard, peek, steal)
+    await testServerActions(loadedDecks);
   } catch (err) {
     console.error(`\n✗ FATAL ERROR: ${err.message}`);
     console.error(err.stack);
