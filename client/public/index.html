@@ -3419,7 +3419,7 @@ class GameErrorBoundary extends React.Component {
 // ============ GAME BOARD ============
 function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: initCommanders,
                      onlineMode, onlinePlayerIndex, onlineState, onlineLastAction, onStateChange,
-                     matchInfo, onGameWon, onConcede, concession }) {
+                     matchInfo, onGameWon, onConcede, concession, serverGameAction }) {
   const isCommander = gameFormat === 'commander';
   const startingLife = isCommander ? 40 : 20;
 
@@ -3707,6 +3707,51 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     }
   }, [onlineState, onlineLastAction]);
 
+  // Online mode: draw a card when it becomes MY turn (opponent passed to me).
+  // This replaces the old approach where the passing player drew for the next player,
+  // which couldn't cross the server's visibility filter (hand/library are hidden for opponents).
+  const onlineTurnDrawnRef = useRef(null); // tracks which turn we already drew for
+  const prevActivePlayerRef = useRef(activePlayer); // detect actual turn transitions
+  useEffect(() => {
+    if (!onlineMode) return;
+    if (activePlayer !== onlinePlayerIndex) {
+      prevActivePlayerRef.current = activePlayer;
+      return; // not my turn
+    }
+    if (gameOver) return;
+
+    // Build a unique key for this turn to avoid double-drawing
+    const turnKey = `${turnCount}-${activePlayer}`;
+    if (onlineTurnDrawnRef.current === turnKey) return; // already drew for this turn
+
+    // Detect if activePlayer actually CHANGED (a turn was passed).
+    // If prevActivePlayerRef matches current, this is the initial game load — skip.
+    // The starting player sees activePlayer=self from the start → no change → skip.
+    // The non-starting player will see activePlayer change from opponent→self → draw.
+    const turnTransitioned = prevActivePlayerRef.current !== activePlayer;
+    prevActivePlayerRef.current = activePlayer;
+
+    if (!turnTransitioned) {
+      // Initial game load or re-render — don't draw, just record the key
+      onlineTurnDrawnRef.current = turnKey;
+      return;
+    }
+
+    onlineTurnDrawnRef.current = turnKey;
+
+    // Draw a card from my own library
+    const myIdx = onlinePlayerIndex;
+    setState(myIdx, p => {
+      if (p.library.length === 0) return p;
+      return {
+        ...p,
+        library: p.library.slice(1),
+        hand: [...p.hand, p.library[0]],
+      };
+    });
+    try { SFX.draw(); } catch(e) {}
+  });
+
   // Wire up star P/T resolution to access game state
   _starPTStateGetter = getState;
   _starPTAllStatesGetter = () => [p1, p2];
@@ -3725,6 +3770,49 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
   };
 
   const moveCard = (pIdx, card, from, to) => {
+    // ── Online mode: route cross-visibility moves through server ──
+    // When moving a card TO an opponent's hand (bounce) or FROM their hand (discard),
+    // the normal client-side state sync can't work because the server hides hand/library.
+    // Instead, we ask the server to perform the operation on the true game state.
+    if (onlineMode && serverGameAction) {
+      const isOpponent = pIdx !== onlinePlayerIndex;
+
+      // BOUNCE / RETURN TO HAND: moving opponent's card to their hand from any zone
+      if (isOpponent && to === 'hand') {
+        // Remove from source zone locally (visual feedback), server will add to hand
+        if (from !== 'hand') {
+          setState(pIdx, prev => ({ ...prev, [from]: (prev[from] || []).filter(c => c.id !== card.id) }));
+        }
+        serverGameAction({ type: 'bounce', targetPlayerIndex: pIdx, cardId: card.id });
+        addGameLog(pIdx, '↩️', `${card.name} returned to hand`);
+        try { SFX.draw(); } catch(e) {}
+        return;
+      }
+
+      // DISCARD: moving from opponent's hand to graveyard
+      if (isOpponent && from === 'hand' && to === 'graveyard') {
+        // Card might be a real card (from peekHand) or hidden — use server to discard by index
+        const oppHand = getState(pIdx).hand;
+        const cardIndex = oppHand.findIndex(c => c.id === card.id);
+        if (cardIndex >= 0) {
+          serverGameAction({ type: 'discardFromHand', targetPlayerIndex: pIdx, cardIndex });
+          addGameLog(pIdx, '💀', `${card.name || 'a card'} discarded`);
+          try { SFX.toGraveyard(); } catch(e) {}
+        }
+        return;
+      }
+
+      // STOLEN CARD RETURN: card with originalOwner leaving battlefield to opponent's zone
+      if (from === 'battlefield' && to !== 'battlefield' && card.originalOwner !== undefined && card.originalOwner !== pIdx) {
+        // Remove from our battlefield locally
+        setState(pIdx, prev => ({ ...prev, battlefield: prev.battlefield.filter(c => c.id !== card.id) }));
+        // Ask server to return card to owner's zone
+        serverGameAction({ type: 'returnToOwnerZone', controllerIndex: pIdx, cardId: card.id, destinationZone: to });
+        addGameLog(card.originalOwner, '↩️', `${card.name} returned to owner`);
+        return;
+      }
+    }
+
     // If a creature leaves the battlefield during combat, remove it from combat
     if (from === 'battlefield' && combatState) {
       setCombatState(prev => {
@@ -4265,6 +4353,262 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     }));
   };
 
+  // ===== SACRIFICE ABILITIES (Mind Stone, Chromatic Sphere, etc.) =====
+  const getSacrificeAbilities = (card) => {
+    if (isLand(card)) return [];
+    const oracle = (card.oracle_text || '').toLowerCase();
+    const faces = card.card_faces || [];
+    const allText = [oracle, ...faces.map(f => (f.oracle_text || '').toLowerCase())].filter(Boolean).join('\n');
+    const abilities = [];
+    // Match patterns like "{1}, {T}, Sacrifice ~: Draw a card" or "Sacrifice ~: effect"
+    // Also "{1}, Sacrifice ~: effect" (no tap required)
+    const sacPatterns = [
+      /(?:(\{[^}]+\}(?:,\s*\{[^}]+\})*),\s*)?\{t\},\s*sacrifice\s+(?:this|~|[^:]{0,30}):\s*(.+)/gi,
+      /(?:(\{[^}]+\}(?:,\s*\{[^}]+\})*),\s*)?sacrifice\s+(?:this|~|[^:]{0,30}):\s*(.+)/gi,
+    ];
+    for (const pattern of sacPatterns) {
+      let match;
+      while ((match = pattern.exec(allText)) !== null) {
+        const costPart = match[1] || '';
+        const effectText = match[2].trim();
+        // Skip if this is a sacrifice-for-mana (already handled by toggleTap)
+        if (/^add\s+(one mana|(\{[wubrgc]\}[\s,]*)+)/i.test(effectText)) continue;
+        const requiresTap = match[0].includes('{t}');
+        // Parse mana cost from costPart
+        let manaCost = null;
+        let costStr = requiresTap ? '{T}' : '';
+        if (costPart) {
+          manaCost = parseManaCost(costPart);
+          costStr = costPart + (requiresTap ? ', {T}' : '');
+        }
+        costStr += ', Sacrifice';
+        // Parse effect
+        let effect;
+        if (/draw\s+(\w+)\s+cards?/i.test(effectText)) {
+          const countMatch = effectText.match(/draw\s+(\w+)\s+cards?/i);
+          const numWord = countMatch[1].toLowerCase();
+          const numMap = { a: 1, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7 };
+          const count = numMap[numWord] || parseInt(numWord) || 1;
+          effect = { type: 'draw', count, label: `Draw ${count} card${count > 1 ? 's' : ''}` };
+        } else if (/draw a card/i.test(effectText)) {
+          effect = { type: 'draw', count: 1, label: 'Draw a card' };
+        } else if (/gain\s+(\d+)\s+life/i.test(effectText)) {
+          const amt = parseInt(effectText.match(/gain\s+(\d+)\s+life/i)[1]);
+          effect = { type: 'gainLife', amount: amt, label: `Gain ${amt} life` };
+        } else if (/deal\s+(\d+)\s+damage/i.test(effectText)) {
+          const amt = parseInt(effectText.match(/deal\s+(\d+)\s+damage/i)[1]);
+          effect = { type: 'damage', amount: amt, label: `Deal ${amt} damage (manual)` };
+        } else {
+          const shortText = effectText.length > 40 ? effectText.slice(0, 37) + '...' : effectText;
+          effect = { type: 'manual', text: effectText, label: shortText };
+        }
+        abilities.push({ ...effect, manaCost, costStr, requiresTap });
+      }
+    }
+    // Deduplicate (the two patterns may both match the same ability)
+    const seen = new Set();
+    return abilities.filter(ab => {
+      const key = ab.costStr + ':' + ab.label;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  };
+
+  const activateSacrificeAbility = (pIdx, card, ability) => {
+    if (onlineMode && pIdx !== onlinePlayerIndex) return;
+    const p = getState(pIdx);
+    // Check mana cost
+    if (ability.manaCost && !canPayManaCost(p.manaPool, ability.manaCost)) {
+      setCastError({ pIdx, message: 'Not enough mana for sacrifice ability' });
+      setTimeout(() => setCastError(null), 2000);
+      return;
+    }
+    // Check tap requirement
+    if (ability.requiresTap && card.tapped) {
+      setCastError({ pIdx, message: `${card.name} is already tapped` });
+      setTimeout(() => setCastError(null), 2000);
+      return;
+    }
+    // Pay mana
+    let newPool = p.manaPool;
+    if (ability.manaCost) {
+      newPool = deductManaCost(p.manaPool, ability.manaCost);
+    }
+    // Sacrifice: remove from battlefield, add to graveyard
+    try { SFX.toGraveyard(); } catch(e) {}
+    setState(pIdx, prev => ({
+      ...prev,
+      manaPool: newPool,
+      battlefield: prev.battlefield.filter(c => c.id !== card.id),
+      graveyard: [...prev.graveyard, { ...card, tapped: false, counters: {} }],
+    }));
+    // Execute effect
+    if (ability.type === 'draw') {
+      for (let i = 0; i < ability.count; i++) {
+        setTimeout(() => drawCard(pIdx), i * 100);
+      }
+    } else if (ability.type === 'gainLife') {
+      setState(pIdx, prev => ({ ...prev, life: prev.life + ability.amount }));
+    } else if (ability.type === 'damage' || ability.type === 'manual') {
+      setEtbReminder({ pIdx, card, effects: [{ icon: '💀', text: `Sacrificed ${card.name}: ${ability.text || ability.label}` }] });
+    }
+    addGameLog(pIdx, '💀', `Sacrificed ${card.name}: ${ability.label}`);
+    setCastError({ pIdx, message: `Sacrificed ${card.name}: ${ability.label}`, background: '#2a1a1a' });
+    setTimeout(() => setCastError(null), 2000);
+  };
+
+  // ===== PAID ACTIVATED ABILITIES (Midnight Clock, etc.) =====
+  const getPaidAbilities = (card) => {
+    if (isLand(card)) return [];
+    const oracle = (card.oracle_text || '').toLowerCase();
+    const faces = card.card_faces || [];
+    const allText = [oracle, ...faces.map(f => (f.oracle_text || '').toLowerCase())].filter(Boolean).join('\n');
+    const abilities = [];
+    // Match "{cost}: effect" but NOT "{T}: Add mana" (handled by toggleTap)
+    // and NOT "Sacrifice" abilities (handled above)
+    const lines = allText.split('\n');
+    for (const line of lines) {
+      // Skip if it's a sacrifice ability
+      if (/sacrifice/i.test(line)) continue;
+      // Skip if it's tap-for-mana
+      if (/^\{t\}:\s*add\s/i.test(line.trim())) continue;
+      // Match "{cost}: effect" or "{cost}, {T}: effect"
+      const abilityMatch = line.match(/^((?:\{[^}]+\}(?:,\s*)?)+)(?:,\s*\{t\})?\s*:\s*(.+)/i);
+      if (!abilityMatch) continue;
+      const costPart = abilityMatch[1].trim();
+      const effectText = abilityMatch[2].trim();
+      const requiresTap = /,\s*\{t\}/i.test(abilityMatch[0].split(':')[0]);
+      // Skip if the effect is just adding mana
+      if (/^add\s/i.test(effectText)) continue;
+      // Parse mana cost
+      const manaCost = parseManaCost(costPart);
+      let costStr = costPart;
+      if (requiresTap) costStr += ', {T}';
+      // Parse effect
+      let effect;
+      if (/put\s+(?:a|an|one)\s+(\w+)\s+counter/i.test(effectText)) {
+        const counterType = effectText.match(/put\s+(?:a|an|one)\s+(\w+)\s+counter/i)[1];
+        effect = { type: 'addCounter', counterType, label: `Add ${counterType} counter` };
+      } else if (/draw\s+(?:a\s+)?card/i.test(effectText)) {
+        effect = { type: 'draw', count: 1, label: 'Draw a card' };
+      } else if (/create\s+/i.test(effectText)) {
+        const shortText = effectText.length > 40 ? effectText.slice(0, 37) + '...' : effectText;
+        effect = { type: 'manual', text: effectText, label: shortText };
+      } else if (/gain\s+(\d+)\s+life/i.test(effectText)) {
+        const amt = parseInt(effectText.match(/gain\s+(\d+)\s+life/i)[1]);
+        effect = { type: 'gainLife', amount: amt, label: `Gain ${amt} life` };
+      } else {
+        const shortText = effectText.length > 40 ? effectText.slice(0, 37) + '...' : effectText;
+        effect = { type: 'manual', text: effectText, label: shortText };
+      }
+      abilities.push({ ...effect, manaCost, costStr, requiresTap });
+    }
+    return abilities;
+  };
+
+  const activatePaidAbility = (pIdx, card, ability) => {
+    if (onlineMode && pIdx !== onlinePlayerIndex) return;
+    const p = getState(pIdx);
+    // Check mana
+    if (ability.manaCost && !canPayManaCost(p.manaPool, ability.manaCost)) {
+      setCastError({ pIdx, message: 'Not enough mana for ability' });
+      setTimeout(() => setCastError(null), 2000);
+      return;
+    }
+    // Check tap
+    if (ability.requiresTap && card.tapped) {
+      setCastError({ pIdx, message: `${card.name} is already tapped` });
+      setTimeout(() => setCastError(null), 2000);
+      return;
+    }
+    // Pay mana
+    let newPool = p.manaPool;
+    if (ability.manaCost) {
+      newPool = deductManaCost(p.manaPool, ability.manaCost);
+    }
+    // Tap if required
+    try { SFX.tap(); } catch(e) {}
+    setState(pIdx, prev => ({
+      ...prev,
+      manaPool: newPool,
+      battlefield: ability.requiresTap
+        ? prev.battlefield.map(c => c.id === card.id ? { ...c, tapped: true } : c)
+        : prev.battlefield,
+    }));
+    // Execute effect
+    if (ability.type === 'addCounter') {
+      addCounter(pIdx, card.id, ability.counterType);
+      // Check for Midnight Clock 12th hour counter trigger
+      const currentCount = (card.counters?.[ability.counterType] || 0) + 1;
+      if (card.name && card.name.toLowerCase() === 'midnight clock' && ability.counterType === 'hour' && currentCount >= 12) {
+        setTimeout(() => triggerMidnightClock(pIdx, card), 300);
+      }
+    } else if (ability.type === 'draw') {
+      for (let i = 0; i < ability.count; i++) {
+        setTimeout(() => drawCard(pIdx), i * 100);
+      }
+    } else if (ability.type === 'gainLife') {
+      setState(pIdx, prev => ({ ...prev, life: prev.life + ability.amount }));
+    } else if (ability.type === 'manual') {
+      setEtbReminder({ pIdx, card, effects: [{ icon: '⚡', text: `${card.name}: ${ability.text || ability.label}` }] });
+    }
+    addGameLog(pIdx, '⚡', `${card.name}: ${ability.label}`);
+    setCastError({ pIdx, message: `${card.name}: ${ability.label}`, background: '#1a2a33' });
+    setTimeout(() => setCastError(null), 1500);
+  };
+
+  // Midnight Clock special trigger: 12th hour counter
+  const triggerMidnightClock = (pIdx, card) => {
+    try { SFX.playSpell(); } catch(e) {}
+    setState(pIdx, prev => {
+      const clockCard = prev.battlefield.find(c => c.id === card.id);
+      if (!clockCard) return prev;
+      // Combine hand + graveyard + remaining library, shuffle, draw 7
+      const allCards = [...prev.hand, ...prev.graveyard, ...prev.library];
+      // Fisher-Yates shuffle
+      for (let i = allCards.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [allCards[i], allCards[j]] = [allCards[j], allCards[i]];
+      }
+      const newHand = allCards.slice(0, 7);
+      const newLibrary = allCards.slice(7);
+      return {
+        ...prev,
+        hand: newHand,
+        graveyard: [],
+        library: newLibrary,
+        battlefield: prev.battlefield.filter(c => c.id !== card.id),
+        exile: [...prev.exile, { ...clockCard, tapped: false, counters: {} }],
+      };
+    });
+    addGameLog(pIdx, '⏰', 'Midnight Clock struck midnight! Shuffled hand and graveyard into library, drew 7 cards, exiled Midnight Clock.');
+    setCastError({ pIdx, message: '⏰ Midnight Clock struck midnight! Drew 7 cards.', background: '#1a1a3a' });
+    setTimeout(() => setCastError(null), 3000);
+  };
+
+  // ===== UPKEEP TRIGGERS (Midnight Clock, etc.) =====
+  const processUpkeepTriggers = (pIdx) => {
+    const p = getState(pIdx);
+    for (const card of p.battlefield) {
+      const oracle = (card.oracle_text || '').toLowerCase();
+      const faces = card.card_faces || [];
+      const allText = [oracle, ...faces.map(f => (f.oracle_text || '').toLowerCase())].filter(Boolean).join('\n');
+      // "At the beginning of each upkeep, put a [type] counter on ~"
+      const upkeepCounterMatch = allText.match(/at the beginning of (?:each|your) upkeep,?\s*put\s+(?:a|an|one)\s+(\w+)\s+counter\s+on/i);
+      if (upkeepCounterMatch) {
+        const counterType = upkeepCounterMatch[1];
+        addCounter(pIdx, card.id, counterType);
+        addGameLog(pIdx, '⏰', `${card.name}: upkeep — added ${counterType} counter`);
+        // Check Midnight Clock 12th trigger
+        const newCount = (card.counters?.[counterType] || 0) + 1;
+        if (card.name && card.name.toLowerCase() === 'midnight clock' && counterType === 'hour' && newCount >= 12) {
+          setTimeout(() => triggerMidnightClock(pIdx, card), 500);
+        }
+      }
+    }
+  };
+
   const untapAll = (pIdx) => {
     try { SFX.untapAll(); } catch(e) {}
     setState(pIdx, prev => ({
@@ -4497,9 +4841,8 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
 
   const getCardActions = (pIdx, card, zone) => {
     const actions = [];
-    // In online mode, ownership is determined by which player THIS client is
-    // In hotseat mode, ownership is determined by whose turn it is
-    const isOwner = onlineMode ? (pIdx === onlinePlayerIndex) : (pIdx === activePlayer);
+    // Ownership is determined by which player THIS client is
+    const isOwner = pIdx === onlinePlayerIndex;
     const isOpponent = !isOwner;
 
     if (zone === 'hand') {
@@ -4560,6 +4903,38 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         }
         if (card.animatedCreature) {
           actions.push({ label: '🔙 Revert to Land', fn: () => revertCreatureLands(pIdx) });
+        }
+        // Paid activated abilities (Midnight Clock, etc.)
+        if (!isPlaneswalker(card)) {
+          const paidAbilities = getPaidAbilities(card);
+          if (paidAbilities.length > 0) {
+            actions.push({ sep: true });
+            paidAbilities.forEach(ab => {
+              const canPay = !ab.manaCost || canPayManaCost(getState(pIdx).manaPool, ab.manaCost);
+              const tappedBlock = ab.requiresTap && card.tapped;
+              actions.push({
+                label: `⚡ ${ab.label} (${ab.costStr})`,
+                fn: () => activatePaidAbility(pIdx, card, ab),
+                disabled: !canPay || tappedBlock
+              });
+            });
+          }
+        }
+        // Sacrifice abilities (Mind Stone, etc.)
+        {
+          const sacAbilities = getSacrificeAbilities(card);
+          if (sacAbilities.length > 0) {
+            actions.push({ sep: true });
+            sacAbilities.forEach(ab => {
+              const canPay = !ab.manaCost || canPayManaCost(getState(pIdx).manaPool, ab.manaCost);
+              const tappedBlock = ab.requiresTap && card.tapped;
+              actions.push({
+                label: `💀 Sacrifice: ${ab.label} (${ab.costStr})`,
+                fn: () => activateSacrificeAbility(pIdx, card, ab),
+                disabled: !canPay || tappedBlock
+              });
+            });
+          }
         }
         // Planeswalker abilities
         if (isPlaneswalker(card)) {
@@ -5050,7 +5425,8 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
   const [gameOver, setGameOver] = useState(null); // { winner, loser, reason }
   const [concedeConfirm, setConcedeConfirm] = useState(false); // show confirmation dialog
   const [spellTargeting, setSpellTargeting] = useState(null); // { pIdx, card, effects, targetMode }
-  const [spellOnStack, setSpellOnStack] = useState(null); // { pIdx, card, asAdventure, resolveFn }
+  const [spellStack, setSpellStack] = useState([]); // LIFO stack: [{ pIdx, card, asAdventure, fromExile, displayName }, ...]
+  const stackTop = spellStack.length > 0 ? spellStack[spellStack.length - 1] : null;
   const [pwAbilityOnStack, setPwAbilityOnStack] = useState(null); // { pIdx, card, ability: { cost, text } }
   const [pwReminder, setPwReminder] = useState(null); // { pIdx, card, ability }
   const [ltbReminder, setLtbReminder] = useState(null); // { pIdx, card, effects[] }
@@ -5597,7 +5973,18 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         case 'peek_hand':
         case 'discard':
           // Auto-open peek overlay so caster can see and discard from opponent's hand
-          setPeekingHand({ targetPIdx: opponentIdx, allowDiscard: true });
+          if (onlineMode && serverGameAction && opponentIdx !== onlinePlayerIndex) {
+            // In online mode, opponent's hand is hidden — fetch real hand from server
+            serverGameAction({ type: 'peekHand', targetPlayerIndex: opponentIdx }).then(res => {
+              if (res && res.hand) {
+                // Temporarily inject the real hand into opponent's state for the peek overlay
+                setState(opponentIdx, prev => ({ ...prev, hand: res.hand, _peekedHand: true }));
+                setPeekingHand({ targetPIdx: opponentIdx, allowDiscard: effect.type === 'discard' });
+              }
+            });
+          } else {
+            setPeekingHand({ targetPIdx: opponentIdx, allowDiscard: true });
+          }
           break;
         default:
           break;
@@ -5702,6 +6089,66 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     addGameLog(pIdx, '🚫', `${getDisplayName(card)} was countered`);
   };
 
+  // Helper: detect if a card is a counterspell based on oracle text
+  const isCounterSpellCard = (card) => {
+    const oracle = [card.oracle_text || '', ...(card.card_faces || []).map(f => f.oracle_text || '')].join(' ').toLowerCase();
+    return oracle.includes('counter target spell') || oracle.includes('counter target nonland') || oracle.includes('counter that spell');
+  };
+
+  // Helper: detect if a card has "can't be countered"
+  const cardCantBeCountered = (card) => {
+    const oracle = [card.oracle_text || '', ...(card.card_faces || []).map(f => f.oracle_text || '')].join(' ').toLowerCase();
+    const kw = (card.keywords || []).map(k => k.toLowerCase());
+    return oracle.includes("can't be countered") || oracle.includes("this spell can't be countered") || kw.includes("can't be countered");
+  };
+
+  // Resolve the top spell on the stack with auto-counter logic
+  const resolveTopOfStack = () => {
+    if (spellStack.length === 0) return;
+    const topSpell = spellStack[spellStack.length - 1];
+    const spellBelow = spellStack.length > 1 ? spellStack[spellStack.length - 2] : null;
+
+    if (isCounterSpellCard(topSpell.card) && spellBelow) {
+      // This is a counterspell resolving — check if target can be countered
+      if (cardCantBeCountered(spellBelow.card)) {
+        // Target can't be countered — counterspell fizzles, target stays on stack
+        setSpellStack(prev => prev.slice(0, -1)); // remove only top
+        // Move the counterspell to graveyard (it was cast, mana paid, goes to GY)
+        const counterEntry = topSpell;
+        const sourceZone = counterEntry.fromExile ? 'exile' : 'hand';
+        setState(counterEntry.pIdx, prev => {
+          const source = prev[sourceZone].filter(c => c.id !== counterEntry.card.id);
+          return { ...prev, [sourceZone]: source, graveyard: [...prev.graveyard, { ...counterEntry.card, tapped: false }] };
+        });
+        try { SFX.playSpell(); } catch(e) {}
+        const opponentPIdx = topSpell.pIdx === 0 ? 1 : 0;
+        setCastError({ pIdx: opponentPIdx, message: `⚠️ ${spellBelow.displayName} can't be countered! ${topSpell.displayName} fizzles.` });
+        setTimeout(() => setCastError(null), 3000);
+        addGameLog(topSpell.pIdx, '⚠️', `${topSpell.displayName} fizzled — ${spellBelow.displayName} can't be countered`);
+      } else {
+        // Counter succeeds — remove both top and target from stack
+        setSpellStack(prev => prev.slice(0, -2));
+        // Move counterspell to graveyard
+        const counterEntry = topSpell;
+        const counterSourceZone = counterEntry.fromExile ? 'exile' : 'hand';
+        setState(counterEntry.pIdx, prev => {
+          const source = prev[counterSourceZone].filter(c => c.id !== counterEntry.card.id);
+          return { ...prev, [counterSourceZone]: source, graveyard: [...prev.graveyard, { ...counterEntry.card, tapped: false }] };
+        });
+        try { SFX.playSpell(); } catch(e) {}
+        // Counter the target spell
+        counterSpellOnStack(spellBelow);
+        const opponentPIdx = topSpell.pIdx === 0 ? 1 : 0;
+        setCastError({ pIdx: opponentPIdx, message: `✕ ${spellBelow.displayName} was countered by ${topSpell.displayName}!` });
+        setTimeout(() => setCastError(null), 2500);
+      }
+    } else {
+      // Not a counterspell (or nothing below) — resolve normally
+      setSpellStack(prev => prev.slice(0, -1));
+      resolveSpellFromStack(topSpell);
+    }
+  };
+
   const castCard = (pIdx, card, asAdventure = false, altCostStr = null) => {
     const p = getState(pIdx);
 
@@ -5735,7 +6182,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
 
     // Put spell on the stack for opponent to see and optionally counter
     const displayName = asAdventure ? getAdventureFace(card).name + ' (Adventure)' : getDisplayName(card);
-    setSpellOnStack({ pIdx, card, asAdventure, fromExile: isFromExile, displayName });
+    setSpellStack(prev => [...prev, { pIdx, card, asAdventure, fromExile: isFromExile, displayName }]);
     addGameLog(pIdx, '🃏', `${getState(pIdx).name} casts ${displayName}`);
   };
 
@@ -5755,7 +6202,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     const newPool = deductManaCost(p.manaPool, cost);
     setState(pIdx, prev => ({ ...prev, manaPool: newPool }));
     // Put on stack — mark as fromExile so resolve knows where to move from
-    setSpellOnStack({ pIdx, card, asAdventure: false, fromExile: true, displayName: creatureFace.name });
+    setSpellStack(prev => [...prev, { pIdx, card, asAdventure: false, fromExile: true, displayName: creatureFace.name }]);
   };
 
   // ===== CREATURE LAND ACTIVATION =====
@@ -6470,15 +6917,27 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         ...p,
         untilNextTurnEffects: [],
       }));
-      setState(next, p => ({
-        ...p,
-        battlefield: p.battlefield.map(c => ({ ...c, tapped: false, enteredThisTurn: false })),
-        landPlayedThisTurn: false,
-        dealtDamageThisTurn: false,
-        manaPool: { W: 0, U: 0, B: 0, R: 0, G: 0, C: 0 },
-        library: p.library.slice(1),
-        hand: [...p.hand, ...(p.library.length > 0 ? [p.library[0]] : [])],
-      }));
+      setState(next, p => {
+        const base = {
+          ...p,
+          battlefield: p.battlefield.map(c => ({ ...c, tapped: false, enteredThisTurn: false })),
+          landPlayedThisTurn: false,
+          dealtDamageThisTurn: false,
+          manaPool: { W: 0, U: 0, B: 0, R: 0, G: 0, C: 0 },
+        };
+        // In online mode, DON'T draw a card for the other player here.
+        // Each player draws their own card when their turn starts (see onlineTurnDrawEffect).
+        // This avoids the sync issue where hand/library data can't cross the visibility filter.
+        if (onlineMode && next !== onlinePlayerIndex) {
+          return base;
+        }
+        // Hotseat or drawing for ourselves: draw normally
+        return {
+          ...base,
+          library: p.library.slice(1),
+          hand: [...p.hand, ...(p.library.length > 0 ? [p.library[0]] : [])],
+        };
+      });
       setState(prev, p => ({
         ...p,
         manaPool: { W: 0, U: 0, B: 0, R: 0, G: 0, C: 0 },
@@ -6488,7 +6947,18 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     setCurrentPhase('main1');
     setPreventCombatDamage(false);
     try { SFX.untapAll(); } catch(e) {}
-    try { SFX.draw(); } catch(e) {}
+    // In online mode the receiving player plays the draw SFX when they auto-draw
+    if (!onlineMode) { try { SFX.draw(); } catch(e) {} }
+    // Process upkeep triggers for BOTH players (Midnight Clock triggers at beginning of EACH upkeep)
+    // In online mode, only process our own permanents' triggers
+    setTimeout(() => {
+      if (onlineMode) {
+        processUpkeepTriggers(onlinePlayerIndex);
+      } else {
+        processUpkeepTriggers(0);
+        processUpkeepTriggers(1);
+      }
+    }, 200);
   };
 
   // New flow: click YOUR blocker first, then click the attacker to block
@@ -8245,7 +8715,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         const ip = getState(instantCasting.pIdx);
         const instantCards = ip.hand.filter(c => canCastAtInstantSpeed(c));
         const cyclingCards = ip.hand.filter(c => !canCastAtInstantSpeed(c) && getCyclingCost(c));
-        const isRespondingToStack = instantCasting.returnToStack && spellOnStack;
+        const isRespondingToStack = instantCasting.returnToStack && spellStack.length > 0;
         return (
           <div style={{
             position: 'fixed', bottom: 10, left: '50%', transform: 'translateX(-50%)',
@@ -8256,7 +8726,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
           }}>
             {isRespondingToStack && (
               <div style={{ fontSize: 10, color: '#e08040', marginBottom: 6, fontWeight: 700 }}>
-                ⚡ RESPONDING TO: {spellOnStack.displayName} (by {getState(spellOnStack.pIdx).name})
+                ⚡ RESPONDING TO: {stackTop.displayName} (by {getState(stackTop.pIdx).name})
               </div>
             )}
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
@@ -8288,33 +8758,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                   onMouseEnter={e => { e.currentTarget.style.transform = 'scale(1.03)'; }}
                   onMouseLeave={e => { e.currentTarget.style.transform = 'scale(1)'; }}
                   onClick={() => {
-                    const pIdx = instantCasting.pIdx;
-                    // Check if this is a counterspell and we're responding to stack
-                    const oracle = [card.oracle_text || '', ...(card.card_faces || []).map(f => f.oracle_text || '')].join(' ').toLowerCase();
-                    const isCounterSpell = oracle.includes('counter target spell') || oracle.includes('counter target nonland') || oracle.includes('counter that spell');
-                    castInstantFromHand(pIdx, card);
-                    if (isCounterSpell && isRespondingToStack) {
-                      // Check if the spell on stack has "can't be countered"
-                      const targetCard = spellOnStack?.card;
-                      const targetOracle = targetCard ? [targetCard.oracle_text || '', ...(targetCard.card_faces || []).map(f => f.oracle_text || '')].join(' ').toLowerCase() : '';
-                      const targetKw = (targetCard?.keywords || []).map(k => k.toLowerCase());
-                      const cantBeCountered = targetOracle.includes("can't be countered") || targetOracle.includes("this spell can't be countered") || targetKw.includes("can't be countered");
-                      if (cantBeCountered) {
-                        setCastError({ pIdx, message: `⚠️ ${targetCard.name} can't be countered! ${card.name} fizzles.` });
-                        setTimeout(() => setCastError(null), 3000);
-                      } else {
-                        // Auto-counter the spell on stack
-                        setTimeout(() => {
-                          const entry = spellOnStack;
-                          if (entry) {
-                            setSpellOnStack(null);
-                            counterSpellOnStack(entry);
-                            setCastError({ pIdx, message: `✕ ${entry.displayName} was countered by ${card.name}!` });
-                            setTimeout(() => setCastError(null), 2500);
-                          }
-                        }, 300);
-                      }
-                    }
+                    castInstantFromHand(instantCasting.pIdx, card);
                   }}>
                   <img src={getCardNormal(card)} alt={card.name}
                     style={{ height: 140, borderRadius: 8, boxShadow: '0 3px 12px rgba(0,0,0,0.5), 0 0 8px rgba(60,180,220,0.2)' }} />
@@ -8383,6 +8827,15 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                     moveCard(peekingHand.targetPIdx, card, 'hand', 'graveyard');
                     setCastError({ pIdx: activePlayer, message: `Discarded ${card.name} from ${targetP.name}'s hand` });
                     setTimeout(() => setCastError(null), 2000);
+                    // In online mode, clear the peeked hand to restore hidden state
+                    if (onlineMode && targetP._peekedHand) {
+                      // Remove the discarded card locally from the peeked view,
+                      // then restore hidden cards on close
+                      setState(peekingHand.targetPIdx, prev => ({
+                        ...prev,
+                        hand: prev.hand.filter(c => c.id !== card.id),
+                      }));
+                    }
                     setPeekingHand(null);
                   }}>
                   <img src={getCardNormal(card)} alt={card.name}
@@ -8401,52 +8854,77 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
               )}
             </div>
             <button className="btn" style={{ padding: '8px 24px', fontSize: 13 }}
-              onClick={() => setPeekingHand(null)}>
+              onClick={() => {
+                // In online mode, restore opponent's hand to hidden state after peeking
+                if (onlineMode && peekingHand && getState(peekingHand.targetPIdx)._peekedHand) {
+                  const tIdx = peekingHand.targetPIdx;
+                  setState(tIdx, prev => {
+                    const hiddenHand = prev.hand.map(() => ({ hidden: true, id: uid() }));
+                    return { ...prev, hand: hiddenHand, handCount: prev.hand.length, _peekedHand: false };
+                  });
+                }
+                setPeekingHand(null);
+              }}>
               Close
             </button>
           </div>
         );
       })()}
 
-      {spellOnStack && !instantCasting && (
+      {spellStack.length > 0 && !instantCasting && (
         <div className="spell-stack-overlay">
           <div className="spell-stack-card">
+            {/* Show full stack (newest on top) */}
+            {spellStack.length > 1 && (
+              <div style={{ fontSize: 10, color: '#e08040', marginBottom: 8, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 1 }}>
+                Spell Stack ({spellStack.length} spells)
+              </div>
+            )}
+            {spellStack.length > 1 && (
+              <div style={{ display: 'flex', gap: 6, marginBottom: 10, flexWrap: 'wrap', justifyContent: 'center' }}>
+                {[...spellStack].reverse().map((entry, i) => (
+                  <div key={entry.card.id + '-' + i} style={{
+                    display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2,
+                    opacity: i === 0 ? 1 : 0.5, padding: '4px 8px',
+                    background: i === 0 ? 'rgba(60,180,220,0.15)' : 'rgba(255,255,255,0.05)',
+                    borderRadius: 8, border: i === 0 ? '1px solid rgba(60,180,220,0.4)' : '1px solid rgba(255,255,255,0.1)',
+                  }}>
+                    <img src={getCardNormal(entry.card)} alt={entry.displayName}
+                      style={{ height: i === 0 ? 80 : 50, borderRadius: 6 }} />
+                    <span style={{ fontSize: 8, color: i === 0 ? '#60c8e8' : 'rgba(255,255,255,0.5)', fontWeight: 700 }}>
+                      {i === 0 ? '▶ TOP' : `#${spellStack.length - i}`}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
             <div className="spell-stack-caster">
-              {getState(spellOnStack.pIdx).name} casts
+              {getState(stackTop.pIdx).name} casts
             </div>
             <img
-              src={getCardNormal(spellOnStack.card)}
-              alt={spellOnStack.displayName}
+              src={getCardNormal(stackTop.card)}
+              alt={stackTop.displayName}
             />
-            <div className="spell-stack-label">On the Stack</div>
+            <div className="spell-stack-label">On the Stack{spellStack.length > 1 ? ` (resolving top)` : ''}</div>
             <div className="spell-stack-buttons">
               <button className="btn-resolve" onClick={() => {
-                const entry = spellOnStack;
-                setSpellOnStack(null);
-                resolveSpellFromStack(entry);
+                resolveTopOfStack();
               }}>✓ Resolve</button>
               <button className="btn-respond" onClick={() => {
-                const opponentPIdx = spellOnStack.pIdx === 0 ? 1 : 0;
+                const opponentPIdx = stackTop.pIdx === 0 ? 1 : 0;
                 setInstantCasting({ pIdx: opponentPIdx, returnToStack: true });
               }}>⚡ Respond</button>
-              <button className="btn-counter" onClick={() => {
-                const entry = spellOnStack;
-                const targetCard = entry?.card;
-                const targetOracle = targetCard ? [targetCard.oracle_text || '', ...(targetCard.card_faces || []).map(f => f.oracle_text || '')].join(' ').toLowerCase() : '';
-                const targetKw = (targetCard?.keywords || []).map(k => k.toLowerCase());
-                const cantBeCountered = targetOracle.includes("can't be countered") || targetKw.includes("can't be countered");
-                if (cantBeCountered) {
-                  setCastError({ pIdx: entry.pIdx === 0 ? 1 : 0, message: `⚠️ ${targetCard.name} can't be countered!` });
-                  setTimeout(() => setCastError(null), 3000);
-                  return;
-                }
-                setSpellOnStack(null);
-                counterSpellOnStack(entry);
-              }}>✕ Was Countered → GY</button>
             </div>
-            <div style={{ fontSize: 10, opacity: 0.4, marginTop: 4, fontStyle: 'italic' }}>
-              Respond = cast a counterspell first, then click "Was Countered" to send this spell to graveyard.
-            </div>
+            {spellStack.length === 1 && (
+              <div style={{ fontSize: 10, opacity: 0.4, marginTop: 4, fontStyle: 'italic' }}>
+                Respond with a counterspell to counter this spell automatically.
+              </div>
+            )}
+            {spellStack.length > 1 && isCounterSpellCard(stackTop.card) && (
+              <div style={{ fontSize: 10, color: '#e08040', marginTop: 4, fontStyle: 'italic' }}>
+                Resolving will auto-counter {spellStack[spellStack.length - 2].displayName}.
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -9286,55 +9764,30 @@ function useGameSocket() {
     });
   }, [socket]);
 
+  // Server-side action: sends a game action that the server executes on the true game state.
+  // Used for cross-visibility operations (bounce to hand, discard, mulligan, etc.)
+  // These bypass the normal stateSync path and operate server-side.
+  const serverGameAction = useCallback((action) => {
+    if (!socket) return Promise.resolve(null);
+    return new Promise((resolve) => {
+      socket.emit('gameAction', { action }, (res) => {
+        if (res?.error) { setError(res.error); resolve(null); return; }
+        resolve(res);
+      });
+    });
+  }, [socket]);
+
   return {
     socket, connected, roomInfo, playerIndex, playerId,
     error, setError, gameState, lastAction, gameStarted, opponentReady,
     opponentDisconnected, chatMessages,
     createRoom, joinRoom, submitDeck, sendAction, sendChat,
     matchInfo, betweenGames, reportGameWon, chooseFirstPlayer,
-    concession, concedeGame
+    concession, concedeGame, serverGameAction
   };
 }
 
-function MainMenu({ onHotseat, onOnline }) {
-  return (
-    <div className="setup-screen" style={{ textAlign: 'center' }}>
-      <h1 style={{ fontSize: 32, marginBottom: 8 }}>Magic The Gathering - Tap & Go</h1>
-      <p style={{ opacity: 0.5, marginBottom: 32, fontSize: 14 }}>Choose how you want to play</p>
-
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 360, margin: '0 auto' }}>
-        <button className="btn btn-gold" onClick={onOnline}
-          style={{ width: '100%', padding: 18, fontSize: 16, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
-          <span style={{ fontSize: 22 }}>Play Online</span>
-          <span style={{ fontSize: 11, opacity: 0.6, fontWeight: 400 }}>Play against a friend over the internet</span>
-        </button>
-
-        <button className="btn" onClick={onHotseat}
-          style={{
-            width: '100%', padding: 16, fontSize: 15, background: 'rgba(255,255,255,0.05)',
-            border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8, color: 'rgba(255,255,255,0.7)',
-            cursor: 'pointer', transition: 'all 0.2s',
-            display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4
-          }}>
-          <span style={{ fontSize: 18 }}>Hotseat</span>
-          <span style={{ fontSize: 11, opacity: 0.5, fontWeight: 400 }}>Two players on the same computer</span>
-        </button>
-      </div>
-
-      <div style={{ marginTop: 40, maxWidth: 420, margin: '40px auto 0', textAlign: 'left', padding: '16px 20px',
-        background: 'rgba(255,255,255,0.03)', borderRadius: 10, border: '1px solid rgba(255,255,255,0.06)' }}>
-        <h3 style={{ fontSize: 13, color: 'rgba(200,170,60,0.7)', marginBottom: 10, textAlign: 'center' }}>Game Features</h3>
-        <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.5)', lineHeight: 1.6 }}>
-          <div style={{ marginBottom: 6 }}>📋 <strong style={{ color: 'rgba(255,255,255,0.7)' }}>Action Log</strong> — All spells, abilities, and triggers are tracked in a shared log. Both players can see exactly what happened, when, and to which creature. Activated abilities (Heliod, Cursecatcher, etc.) are highlighted with a golden glow on the target.</div>
-          <div style={{ marginBottom: 6 }}>⚔️ <strong style={{ color: 'rgba(255,255,255,0.7)' }}>Full Combat</strong> — Declare attackers, assign blockers, first strike, deathtouch, trample, lifelink, and more.</div>
-          <div style={{ marginBottom: 6 }}>⚡ <strong style={{ color: 'rgba(255,255,255,0.7)' }}>Instant-Speed Response</strong> — Cast instants in response to spells and abilities on the stack.</div>
-          <div style={{ marginBottom: 6 }}>💬 <strong style={{ color: 'rgba(255,255,255,0.7)' }}>In-Game Chat</strong> — Press Enter during a game to send messages to your opponent.</div>
-          <div>🎨 <strong style={{ color: 'rgba(255,255,255,0.7)' }}>Custom Cards</strong> — Use the reskin system (≫) to create custom card art and names.</div>
-        </div>
-      </div>
-    </div>
-  );
-}
+// MainMenu removed — game is online-only now
 
 function OnlineSetup({ gameSocket, onGameReady, onBack, avatars, avatarLoading }) {
   const [subPhase, setSubPhase] = useState('nickname');
@@ -9656,7 +10109,7 @@ function OnlineSetup({ gameSocket, onGameReady, onBack, avatars, avatarLoading }
 
 function OnlineGameWrapper({ gameSocket, initialState, playerIndex, onExit }) {
   const { sendAction, gameState: serverState, lastAction: serverLastAction, opponentDisconnected, chatMessages, sendChat,
-          matchInfo, betweenGames, reportGameWon, chooseFirstPlayer, concession, concedeGame } = gameSocket;
+          matchInfo, betweenGames, reportGameWon, chooseFirstPlayer, concession, concedeGame, serverGameAction } = gameSocket;
   const [chatOpen, setChatOpen] = useState(false);
   const [chatInput, setChatInput] = useState('');
   const lastSyncRef = useRef(0);
@@ -9806,6 +10259,7 @@ function OnlineGameWrapper({ gameSocket, initialState, playerIndex, onExit }) {
           onGameWon={(winnerIndex) => reportGameWon(winnerIndex)}
           onConcede={concedeGame}
           concession={concession}
+          serverGameAction={serverGameAction}
         />
       </GameErrorBoundary>
     </div>
@@ -9817,16 +10271,8 @@ function OnlineGameWrapper({ gameSocket, initialState, playerIndex, onExit }) {
 // ════════════════════════════════════════════════════════════════
 
 function App() {
-  const [mode, setMode] = useState(null); // null (menu) | 'hotseat' | 'online'
-  const [phase, setPhase] = useState('setup');
-  const [gameFormat, setGameFormat] = useState('standard');
-  const [players, setPlayers] = useState(['Player 1', 'Player 2']);
-  const [decks, setDecks] = useState([null, null]);
-  const [commanders, setCommanders] = useState([null, null]);
   const [avatars, setAvatars] = useState([]);
   const [avatarLoading, setAvatarLoading] = useState(true);
-  const [selectedAvatars, setSelectedAvatars] = useState([null, null]);
-
   const [onlineGameState, setOnlineGameState] = useState(null);
   const [onlinePlayerIndex, setOnlinePlayerIndex] = useState(null);
   const gameSocket = useGameSocket();
@@ -9838,187 +10284,35 @@ function App() {
     });
   }, []);
 
-  useEffect(() => {
-    const pathMatch = window.location.pathname.match(/\/game\/([A-Z0-9]{6})/i);
-    if (pathMatch && !mode) {
-      setMode('online');
-    }
-  }, []);
-
-  if (!mode) {
+  if (onlineGameState) {
     return (
-      <MainMenu
-        onHotseat={() => { setMode('hotseat'); setPhase('setup'); }}
-        onOnline={() => setMode('online')}
-      />
-    );
-  }
-
-  if (mode === 'online') {
-    if (onlineGameState) {
-      return (
-        <OnlineGameWrapper
-          gameSocket={gameSocket}
-          initialState={onlineGameState}
-          playerIndex={onlinePlayerIndex}
-          onExit={() => {
-            setOnlineGameState(null);
-            setOnlinePlayerIndex(null);
-            setMode(null);
-            window.history.pushState({}, '', '/');
-          }}
-        />
-      );
-    }
-
-    return (
-      <OnlineSetup
+      <OnlineGameWrapper
         gameSocket={gameSocket}
-        avatars={avatars}
-        avatarLoading={avatarLoading}
-        onGameReady={(state, pIdx) => {
-          setOnlineGameState(state);
-          setOnlinePlayerIndex(pIdx);
-        }}
-        onBack={() => {
-          setMode(null);
+        initialState={onlineGameState}
+        playerIndex={onlinePlayerIndex}
+        onExit={() => {
+          setOnlineGameState(null);
+          setOnlinePlayerIndex(null);
           window.history.pushState({}, '', '/');
         }}
       />
     );
   }
 
-  // ─── Hotseat Mode (existing flow, unchanged) ───
-  if (phase === 'setup') {
-    return (
-      <div className="setup-screen">
-        <h1>Magic The Gathering - Tap & Go</h1>
-        <p>Choose your format, build your decks, and battle.</p>
-
-        <div style={{ marginBottom: 16 }}>
-          <label style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: 1, opacity: 0.35, fontWeight: 600, display: 'block', marginBottom: 6 }}>Game Format</label>
-          <div style={{ display: 'flex', gap: 8 }}>
-            {[
-              { id: 'standard', label: 'Standard (60)', desc: '60 cards · 20 life · 4 copies max' },
-              { id: 'commander', label: 'Commander (100)', desc: '100 cards · 40 life · Singleton · Commander zone' },
-            ].map(fmt => (
-              <div key={fmt.id} onClick={() => setGameFormat(fmt.id)}
-                style={{
-                  flex: 1, padding: '12px 14px', borderRadius: 8, cursor: 'pointer',
-                  background: gameFormat === fmt.id
-                    ? 'linear-gradient(135deg, rgba(200,170,60,0.12), rgba(200,170,60,0.04))'
-                    : 'rgba(255,255,255,0.03)',
-                  border: gameFormat === fmt.id
-                    ? '1px solid rgba(200,170,60,0.35)'
-                    : '1px solid rgba(255,255,255,0.06)',
-                  transition: 'all 0.2s',
-                }}>
-                <div style={{ fontWeight: 700, fontSize: 13, color: gameFormat === fmt.id ? '#d4b44a' : 'rgba(255,255,255,0.7)' }}>{fmt.label}</div>
-                <div style={{ fontSize: 10, opacity: 0.5, marginTop: 2 }}>{fmt.desc}</div>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        <div className="player-setup">
-          <h3>Player 1</h3>
-          <input value={players[0]} onChange={e => setPlayers([e.target.value, players[1]])} placeholder="Player 1 name" />
-          <label style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: 1, opacity: 0.35, fontWeight: 600, display: 'block', marginTop: 8, marginBottom: 2 }}>Choose Avatar</label>
-          <AvatarPicker avatars={avatars} loading={avatarLoading}
-            selected={selectedAvatars[0]}
-            onSelect={(av) => setSelectedAvatars([av, selectedAvatars[1]])} />
-        </div>
-
-        <div className="player-setup">
-          <h3>Player 2</h3>
-          <input value={players[1]} onChange={e => setPlayers([players[0], e.target.value])} placeholder="Player 2 name" />
-          <label style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: 1, opacity: 0.35, fontWeight: 600, display: 'block', marginTop: 8, marginBottom: 2 }}>Choose Avatar</label>
-          <AvatarPicker avatars={avatars} loading={avatarLoading}
-            selected={selectedAvatars[1]}
-            onSelect={(av) => setSelectedAvatars([selectedAvatars[0], av])} />
-        </div>
-
-        <button className="btn btn-gold" style={{ width: '100%', padding: 14, fontSize: 16, marginTop: 12 }}
-          onClick={() => setPhase('choose1')}>
-          Choose Decks
-        </button>
-
-        <button onClick={() => { setMode(null); setPhase('setup'); }}
-          style={{ marginTop: 12, width: '100%', background: 'none', border: 'none', color: 'rgba(255,255,255,0.35)', cursor: 'pointer', fontSize: 12 }}>
-          Back to Menu
-        </button>
-      </div>
-    );
-  }
-
-  if (phase === 'choose1') {
-    return (
-      <DeckChooser
-        playerName={players[0]}
-        onChoosePreset={(deck) => { setDecks([deck, decks[1]]); setPhase('choose2'); }}
-        onPasteList={(deck) => { setDecks([deck, decks[1]]); setPhase('choose2'); }}
-        onBuildCustom={() => setPhase('deck1')}
-        onBack={() => setPhase('setup')}
-      />
-    );
-  }
-
-  if (phase === 'deck1') {
-    return (
-      <DeckBuilder
-        playerName={players[0]}
-        existingDeck={decks[0]}
-        onDone={(deck) => {
-          setDecks([deck, decks[1]]);
-          setPhase('choose2');
-        }}
-        onBack={() => setPhase('choose1')}
-      />
-    );
-  }
-
-  if (phase === 'choose2') {
-    return (
-      <DeckChooser
-        playerName={players[1]}
-        onChoosePreset={(deck) => { setDecks([decks[0], deck]); setPhase('game'); }}
-        onPasteList={(deck) => { setDecks([decks[0], deck]); setPhase('game'); }}
-        onBuildCustom={() => setPhase('deck2')}
-        onBack={() => setPhase('choose1')}
-      />
-    );
-  }
-
-  if (phase === 'deck2') {
-    return (
-      <DeckBuilder
-        playerName={players[1]}
-        existingDeck={decks[1]}
-        onDone={(deck) => {
-          setDecks([decks[0], deck]);
-          setPhase('game');
-        }}
-        onBack={() => setPhase('choose2')}
-      />
-    );
-  }
-
-  if (phase === 'game') {
-    return (
-      <GameErrorBoundary onExit={() => setPhase('setup')}>
-        <GameBoard
-          players={players}
-          decks={decks}
-          avatars={selectedAvatars}
-          onExit={() => setPhase('setup')}
-          gameFormat={gameFormat}
-          commanders={commanders}
-        />
-      </GameErrorBoundary>
-    );
-  }
-
-  return null;
+  return (
+    <OnlineSetup
+      gameSocket={gameSocket}
+      avatars={avatars}
+      avatarLoading={avatarLoading}
+      onGameReady={(state, pIdx) => {
+        setOnlineGameState(state);
+        setOnlinePlayerIndex(pIdx);
+      }}
+      onBack={() => {
+        window.history.pushState({}, '', '/');
+      }}
+    />
+  );
 }
 
 ReactDOM.createRoot(document.getElementById('root')).render(<App />);

@@ -6,16 +6,16 @@ Denne guide forklarer hvordan du bruger spillet rent praktisk. Den forudsætter 
 
 ## 1. Start et spil
 
-Når du åbner spillet ser du to muligheder: **Play Online** (mod en ven over nettet) og **Hotseat** (to spillere på samme computer).
+Når du åbner spillet ser du online-lobbyen, hvor du kan oprette eller joine et spil mod en ven over nettet.
 
-### Online: Opret et rum
+### Opret et rum
 
 1. Indtast dit navn og tryk **Continue**
 2. Klik **Create New Game** — du får en 4-6 cifret rumkode
 3. Del koden eller det fulde link med din modstander (der er en kopieringsknap)
 4. Vent på at de joiner
 
-### Online: Join et rum
+### Join et rum
 
 1. Indtast dit navn og tryk **Continue**
 2. Klik **Join Existing Game**
@@ -196,13 +196,29 @@ Når modstanderen gør noget du kan respondere på (caster et spell, erklærer a
 - **Klik et kort** for at caste det
 - **Klik udenfor** eller **Esc** for at lukke uden at caste noget
 
-### Counter-spells
+### Counter-spells (automatisk)
+
+Counter-spells håndteres **automatisk** af spillet:
 
 1. Modstanderen caster et spell → det vises på stakken
-2. Du får respond-vinduet → klik dit counterspell
-3. Spillet detekterer automatisk "counter target spell" i oracle-teksten
-4. Modstanderens spell sendes til graveyard
-5. Bemærk: kort med "can't be countered" advarer dig
+2. Du klikker **⚡ Respond** → respond-vinduet åbner
+3. Tap dine lands for mana, og klik dit counterspell → det lægges oven på stakken
+4. Modstanderen ser nu **to spells** på stakken og klikker **✓ Resolve**
+5. Spillet detekterer automatisk at det er et counterspell og counters det underliggende spell → begge sendes til graveyard
+
+### Counter-wars (counter mod counter)
+
+Stakken understøtter ubegrænsede niveauer af responses:
+
+1. Spiller A caster en creature → stakken: [Creature]
+2. Spiller B responderer med Counterspell → stakken: [Creature, Counterspell]
+3. Spiller A responderer med Dovin's Veto → stakken: [Creature, Counterspell, Dovin's Veto]
+4. Spiller B klikker **✓ Resolve** på Dovin's Veto → Counterspell counters → stakken: [Creature]
+5. Spiller B klikker **✓ Resolve** på Creature → den lander på battlefield
+
+### "Can't be countered" (Dovin's Veto, Koma, m.fl.)
+
+Kort med "can't be countered" i oracle-teksten er beskyttet. Hvis du prøver at countre dem, fizzler dit counterspell (det går til graveyard), og det beskyttede spell forbliver på stakken. Spillet viser en advarsel: "⚠️ [Kort] kan ikke counters!"
 
 ---
 
@@ -241,7 +257,31 @@ Angribere kan rettes mod planeswalkers i combat (se sektion 7, trin 2). Skade fj
 
 ---
 
-## 10. Specielle mekanikker
+## 10. Mana Rocks og Artifact Abilities
+
+### Tap for mana (Mind Stone, Sol Ring, Arcane Signet, etc.)
+
+Artifacts med "{T}: Add {mana}" i oracle-teksten fungerer ligesom lands: **klik for at tappe**, og mana tilføjes automatisk til din pool. Hvis artefaktet producerer flere farver, vælger du hvilken farve.
+
+### Sacrifice-abilities (Mind Stone: "{1}, {T}, Sacrifice: Draw a card")
+
+**Højreklik → 💀 Sacrifice: Draw a card ({1}, {T}, Sacrifice)**
+
+Spillet parser oracle-teksten og tilbyder sacrifice-abilities i kontekstmenuen. Mana betales automatisk, kortet flyttes til graveyard, og effekten udføres (f.eks. draw et kort).
+
+### Betalte aktiverede abilities (Midnight Clock: "{2}{U}: Put an hour counter")
+
+**Højreklik → ⚡ Add hour counter ({2}{U})**
+
+Betalte abilities vises i kontekstmenuen. Mana betales automatisk, og effekten udføres. Abilities der kræver {T} virker kun når kortet er utappet.
+
+### Upkeep-triggers (Midnight Clock: "At the beginning of each upkeep...")
+
+Permanents med upkeep-triggers (f.eks. Midnight Clock's automatiske hour counter) håndteres automatisk ved tur-start. Midnight Clock's 12. hour counter trigger udføres også automatisk: shuffle hånd+graveyard ind i library, træk 7 kort, exil Midnight Clock.
+
+---
+
+## 11. Specielle mekanikker
 
 ### Scry
 
@@ -298,7 +338,7 @@ Når du caster en board wipe (f.eks. Wrath of God):
 
 ---
 
-## 11. Zoner — graveyard, exile, library
+## 12. Zoner — graveyard, exile, library
 
 ### Se graveyard
 
@@ -317,7 +357,7 @@ Dit library vises som en stak. Du kan **ikke** se kortene (undtagen ved scry-eff
 
 ---
 
-## 12. Liv og poison
+## 13. Liv og poison
 
 - **▲ / ▼ knapperne** ved dit livs-tal → justér op/ned med 1
 - Samme for poison counters
@@ -332,7 +372,7 @@ Spillet registrerer automatisk:
 
 ---
 
-## 13. Tur-flow
+## 14. Tur-flow
 
 1. **Untap** — dine kort untappes automatisk
 2. **Draw** — du trækker automatisk ét kort
@@ -345,7 +385,7 @@ Modstanderen får en "respond"-mulighed inden turen faktisk skifter.
 
 ---
 
-## 14. Chat
+## 15. Chat
 
 I online-tilstand er der en chat-funktion:
 
@@ -355,7 +395,7 @@ I online-tilstand er der en chat-funktion:
 
 ---
 
-## 15. Disconnect og reconnect
+## 16. Disconnect og reconnect
 
 Hvis en spiller mister forbindelsen:
 
@@ -377,6 +417,10 @@ Hvis en spiller mister forbindelsen:
 | Angrib | ⚔ Combat → klik creatures → Confirm |
 | Bloker | Klik din creature → klik angriber |
 | Cast instant | Klik i respond-vinduet |
+| Counter et spell | Respond → cast counterspell → modstander klikker Resolve |
+| Tap mana rock | Klik artefaktet (som et land) |
+| Sacrifice ability | Højreklik → 💀 Sacrifice: [effekt] |
+| Betalt ability | Højreklik → ⚡ [effekt] |
 | Planeswalker ability | Højreklik → vælg ability |
 | Counters | Højreklik → +1/+1 eller -1/-1 |
 | Se graveyard | Klik 👁 Graveyard |
