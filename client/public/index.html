@@ -3663,7 +3663,20 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     }
 
     // Update game-level state (RAW setters — no broadcast trigger)
-    if (onlineState.activePlayer !== undefined) _setActivePlayer(onlineState.activePlayer);
+    if (onlineState.activePlayer !== undefined) {
+      _setActivePlayer(onlineState.activePlayer);
+      // DEFENSIVE: When it becomes MY turn, force-reset turn-start flags.
+      // The onlineTurnDrawEffect should also do this, but this ensures it
+      // happens synchronously in the same batch as the activePlayer change.
+      if (onlineState.activePlayer === onlinePlayerIndex) {
+        const setMyState = onlinePlayerIndex === 0 ? setP1 : setP2;
+        setMyState(prev => prev.landPlayedThisTurn || prev.dealtDamageThisTurn ? {
+          ...prev,
+          landPlayedThisTurn: false,
+          dealtDamageThisTurn: false,
+        } : prev);
+      }
+    }
     if (onlineState.currentPhase) _setCurrentPhase(onlineState.currentPhase);
     if (onlineState.turnNumber) _setTurnCount(onlineState.turnNumber);
     if (onlineState.combatState !== undefined) _setCombatState(onlineState.combatState);
