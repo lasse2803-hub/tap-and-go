@@ -1925,6 +1925,18 @@ const getCyclingCost = (card) => {
   return null;
 };
 
+// Foretell: detect foretell keyword and parse the foretell cost
+const getForetellCost = (card) => {
+  const kws = (card.keywords || []).map(k => k.toLowerCase());
+  if (!kws.includes('foretell')) return null;
+  const oracle = (card.oracle_text || '').toLowerCase();
+  const faces = card.card_faces || [];
+  const allText = [oracle, ...faces.map(f => (f.oracle_text || '').toLowerCase())].filter(Boolean).join('\n');
+  // Foretell cost pattern: "Foretell {W}{W}" or "Foretell {2}{U}"
+  const ftMatch = allText.match(/foretell\s+((?:\{[^}]+\})+)/);
+  return ftMatch ? ftMatch[1] : '{2}'; // default {2} if can't parse
+};
+
 // ============ DYNAMIC HAND CARD VALUE ============
 // Calculates dynamic values for cards in hand based on game state (e.g. Zenith Flare)
 const getHandCardDynamicValue = (card, playerState) => {
@@ -2531,6 +2543,11 @@ function ZoneViewer({ title, cards, onClose, onCardAction }) {
                 {card.exilePlayable && (
                   <div style={{ position: 'absolute', top: 4, right: 4, background: 'rgba(220,80,20,0.9)', color: '#fff', borderRadius: 6, padding: '1px 6px', fontSize: 9, fontWeight: 700 }}>
                     🔥 Playable
+                  </div>
+                )}
+                {card.isForetold && (
+                  <div style={{ position: 'absolute', top: 4, right: 4, background: 'rgba(100,60,200,0.9)', color: '#fff', borderRadius: 6, padding: '1px 6px', fontSize: 9, fontWeight: 700 }}>
+                    🔮 Foretold
                   </div>
                 )}
               </div>
@@ -4812,6 +4829,89 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     createToken(pIdx, { ...token, id: uid() });
   };
 
+  // Create a token copy of a card (e.g. The Scarab God, God-Pharaoh's Gift, Mimic Vat)
+  // sourceCard: the card to copy; fromZone: where it currently is; sourcePIdx: who owns the source
+  // The source card is exiled as part of the ability. Token goes to active player's battlefield.
+  const createTokenCopy = (sourcePIdx, card, fromZone) => {
+    const ptOverride = prompt(
+      `Create token copy of ${card.name}.\n\nOverride P/T? (e.g. "4/4" for Scarab God/God-Pharaoh's Gift)\nLeave blank to keep original ${card.power || '?'}/${card.toughness || '?'}:`
+    );
+    let tokenPower = card.power;
+    let tokenToughness = card.toughness;
+    if (ptOverride && ptOverride.includes('/')) {
+      const [p, t] = ptOverride.split('/').map(s => s.trim());
+      if (p && t) { tokenPower = p; tokenToughness = t; }
+    }
+    // Build the token — copy key properties from the source card
+    const tokenCopy = {
+      name: card.name,
+      type_line: card.type_line || 'Creature',
+      oracle_text: card.oracle_text || '',
+      keywords: [...(card.keywords || [])],
+      power: tokenPower,
+      toughness: tokenToughness,
+      image_uris: card.image_uris || null,
+      card_faces: card.card_faces || null,
+      colors: card.colors || [],
+      mana_cost: card.mana_cost || '',
+      isToken: true,
+      isTokenCopy: true,
+      copiedFrom: card.name,
+    };
+    // Exile the source card from its zone
+    if (fromZone === 'graveyard' || fromZone === 'exile') {
+      setState(sourcePIdx, prev => ({
+        ...prev,
+        [fromZone]: prev[fromZone].filter(c => c.id !== card.id),
+        exile: fromZone === 'exile' ? prev.exile.filter(c => c.id !== card.id) : [...prev.exile, card],
+      }));
+    }
+    // Create the token on the active player's battlefield
+    createToken(activePlayer, tokenCopy);
+    addGameLog(activePlayer, '👻', `${getState(activePlayer).name} created a token copy of ${card.name}${ptOverride ? ` (${tokenPower}/${tokenToughness})` : ''}`);
+  };
+
+  // Foretell: exile a card face-down from hand for {2}
+  const foretellCard = (pIdx, card) => {
+    const foretoldCard = {
+      ...card,
+      isForetold: true,
+      foretoldBy: pIdx,
+      foretellCost: getForetellCost(card),
+      // In online mode, opponent sees face-down card — we store the real card data
+      // but visually it shows as face-down
+    };
+    setState(pIdx, prev => ({
+      ...prev,
+      hand: prev.hand.filter(c => c.id !== card.id),
+      exile: [...prev.exile, foretoldCard],
+    }));
+    addGameLog(pIdx, '🔮', `${getState(pIdx).name} foretold a card (exiled face-down)`);
+    try { SFX.draw(); } catch(e) {}
+  };
+
+  // Cast a foretold card from exile for its foretell cost
+  const castForetold = (pIdx, card) => {
+    const isSpell = isSpellCard(card);
+    setState(pIdx, prev => ({
+      ...prev,
+      exile: prev.exile.filter(c => c.id !== card.id),
+    }));
+    const cleanCard = { ...card };
+    delete cleanCard.isForetold;
+    delete cleanCard.foretoldBy;
+    delete cleanCard.foretellCost;
+    if (isSpell) {
+      // Instant/Sorcery → graveyard
+      setState(pIdx, prev => ({ ...prev, graveyard: [...prev.graveyard, cleanCard] }));
+    } else {
+      // Permanent → battlefield
+      setState(pIdx, prev => ({ ...prev, battlefield: [...prev.battlefield, { ...cleanCard, tapped: false, counters: {}, enteredThisTurn: true }] }));
+    }
+    addGameLog(pIdx, '🔮', `${getState(pIdx).name} cast ${card.name} from foretell (${card.foretellCost})`);
+    try { SFX.play(); } catch(e) {}
+  };
+
   const millCards = (pIdx, count) => {
     if (onlineMode && pIdx !== onlinePlayerIndex) return;
     try { SFX.mill(); } catch(e) {}
@@ -4871,6 +4971,11 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       const cyclingCost = getCyclingCost(card);
       if (cyclingCost) {
         actions.push({ label: `🔄 Cycle (${cyclingCost})`, fn: () => cycleCard(pIdx, card) });
+      }
+      // Foretell option — exile face-down for {2}, cast later for foretell cost
+      const foretellCost = getForetellCost(card);
+      if (foretellCost) {
+        actions.push({ label: `🔮 Foretell (pay {2}, exile face-down)`, fn: () => foretellCard(pIdx, card) });
       }
       actions.push({ sep: true });
       actions.push({ label: '💀 To Graveyard', fn: () => moveCard(pIdx, card, 'hand', 'graveyard') });
@@ -5148,12 +5253,25 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         actions.push({ label: '▶ To Battlefield', fn: () => moveCard(pIdx, card, 'graveyard', 'battlefield') });
       }
       actions.push({ label: '🚫 To Exile', fn: () => moveCard(pIdx, card, 'graveyard', 'exile') });
+      // Create Token Copy — for creature cards in graveyard (Scarab God, God-Pharaoh's Gift, etc.)
+      if (isCreature(card)) {
+        actions.push({ label: '👻 Create Token Copy (exile this)', fn: () => createTokenCopy(pIdx, card, 'graveyard') });
+      }
       if (isOwner) {
         actions.push({ label: '📚 To Top of Library', fn: () => returnToLibrary(pIdx, card, 'graveyard', 'top') });
       }
     }
 
     if (zone === 'exile') {
+      // Foretold cards — cast for foretell cost
+      if (isOwner && card.isForetold) {
+        actions.push({ label: `🔮 Cast from Foretell (${card.foretellCost || '?'})`, fn: () => castForetold(pIdx, card) });
+        actions.push({ label: `📋 ${card.name} — ${card.mana_cost || ''}`, disabled: true });
+        actions.push({ sep: true });
+        actions.push({ label: '🤚 To Hand', fn: () => moveCard(pIdx, card, 'exile', 'hand') });
+        actions.push({ label: '💀 To Graveyard', fn: () => moveCard(pIdx, card, 'exile', 'graveyard') });
+        return actions; // Foretold cards have their own menu — no need for other exile options
+      }
       if (isOwner && card.adventureCast && isAdventure(card)) {
         const cFace = getCreatureFace(card);
         actions.push({ label: `▶ Cast ${cFace.name} (${cFace.mana_cost})`, fn: () => castAdventureFromExile(pIdx, card) });
@@ -5188,6 +5306,10 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         actions.push({ label: '🤚 To Hand', fn: () => moveCard(pIdx, card, 'exile', 'hand') });
         actions.push({ label: '▶ To Battlefield', fn: () => moveCard(pIdx, card, 'exile', 'battlefield') });
         actions.push({ label: '💀 To Graveyard', fn: () => moveCard(pIdx, card, 'exile', 'graveyard') });
+      }
+      // Create Token Copy — for creature cards in exile (Mimic Vat, Imprint effects, etc.)
+      if (isCreature(card) && !card.isForetold) {
+        actions.push({ label: '👻 Create Token Copy', fn: () => createTokenCopy(pIdx, card, 'exile') });
       }
     }
 
@@ -5377,6 +5499,14 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       } else {
         effects.push({ icon: '♻️', text: 'Persist (already has -1/-1 counter — stays dead)' });
       }
+    }
+    // "Return to hand at end step" — e.g. The Scarab God, Reassembling Skeleton variants
+    if (allText.includes('return') && allText.includes('hand') && (allText.includes('end step') || allText.includes('next end'))) {
+      effects.push({ icon: '🤚', text: '⚠️ REMINDER: Return this card to its owner\'s hand at the beginning of the next end step!' });
+    }
+    // "Return to the battlefield" at end step — e.g. Norin the Wary, Restoration Angel targets
+    if (allText.includes('return') && allText.includes('battlefield') && (allText.includes('end step') || allText.includes('next end')) && !allText.includes('hand')) {
+      effects.push({ icon: '▶', text: '⚠️ REMINDER: Return this card to the battlefield at the beginning of the next end step!' });
     }
     return effects;
   };
@@ -8188,13 +8318,16 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
             </button>
             {(() => {
               const adventureInExile = p.exile.some(c => c.adventureCast);
+              const foretoldInExile = p.exile.some(c => c.isForetold);
               const hasCards = p.exile.length > 0;
               return (
                 <button className="btn text-xs" style={adventureInExile
                   ? { borderColor: 'rgba(60,160,220,0.5)', color: '#60b8e0', background: 'rgba(60,160,220,0.1)', boxShadow: '0 0 8px rgba(60,160,220,0.15)' }
+                  : foretoldInExile
+                  ? { borderColor: 'rgba(130,80,220,0.5)', color: '#b090e0', background: 'rgba(130,80,220,0.1)', boxShadow: '0 0 8px rgba(130,80,220,0.15)' }
                   : hasCards ? { borderColor: 'rgba(180,180,60,0.3)', color: '#c0c060' } : {}}
                   onClick={() => setViewingZone({ pIdx, zone: 'exile', title: `${p.name}'s Exile`, cards: p.exile })}>
-                  Exile ({p.exile.length}){adventureInExile ? ' ✦' : ''}
+                  Exile ({p.exile.length}){adventureInExile ? ' ✦' : ''}{foretoldInExile ? ' 🔮' : ''}
                 </button>
               );
             })()}

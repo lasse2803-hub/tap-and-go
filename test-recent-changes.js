@@ -606,6 +606,81 @@ test('Creature_Enters.wav integrated', () => {
 });
 
 // ============================================================
+console.log('\n▸ Create Token Copy');
+// ============================================================
+
+test('createTokenCopy function exists', () => {
+  assert(code.includes('const createTokenCopy'), 'createTokenCopy function missing');
+  assert(code.includes('isTokenCopy: true'), 'isTokenCopy flag missing in token copy');
+  assert(code.includes('copiedFrom:'), 'copiedFrom property missing');
+});
+
+test('Token copy prompts for P/T override', () => {
+  assert(code.includes('Override P/T?'), 'P/T override prompt missing');
+});
+
+test('Token copy available in graveyard context menu for creatures', () => {
+  assert(code.includes("Create Token Copy (exile this)"), 'Token copy option missing from graveyard menu');
+});
+
+test('Token copy available in exile context menu for creatures', () => {
+  const exileSection = code.match(/zone === 'exile'[\s\S]*?(?=zone === 'library')/);
+  assert(exileSection, 'Exile zone section not found');
+  assert(exileSection[0].includes('Create Token Copy'), 'Token copy option missing from exile menu');
+});
+
+// ============================================================
+console.log('\n▸ Return-to-Hand Reminder (parseLTBEffects)');
+// ============================================================
+
+test('parseLTBEffects detects return-to-hand at end step', () => {
+  const ltbSection = code.match(/const parseLTBEffects[\s\S]*?return effects;\s*\};/);
+  assert(ltbSection, 'parseLTBEffects function not found');
+  assert(ltbSection[0].includes('return') && ltbSection[0].includes('hand') && ltbSection[0].includes('end step'), 'Return-to-hand pattern not detected');
+  assert(ltbSection[0].includes('REMINDER'), 'Missing REMINDER label for return-to-hand');
+});
+
+test('parseLTBEffects detects return-to-battlefield at end step', () => {
+  const ltbSection = code.match(/const parseLTBEffects[\s\S]*?return effects;\s*\};/);
+  assert(ltbSection, 'parseLTBEffects function not found');
+  assert(ltbSection[0].includes('Return this card to the battlefield'), 'Return-to-battlefield pattern not detected');
+});
+
+// ============================================================
+console.log('\n▸ Foretell Mechanic');
+// ============================================================
+
+test('getForetellCost parser exists', () => {
+  assert(code.includes('const getForetellCost'), 'getForetellCost function missing');
+  assert(code.includes("foretell"), 'foretell keyword check missing');
+});
+
+test('Foretell option appears in hand context menu', () => {
+  assert(code.includes('Foretell (pay {2}, exile face-down)'), 'Foretell option missing from hand menu');
+});
+
+test('foretellCard function exists', () => {
+  assert(code.includes('const foretellCard'), 'foretellCard function missing');
+  assert(code.includes('isForetold: true'), 'isForetold flag missing');
+  assert(code.includes('foretoldBy:'), 'foretoldBy property missing');
+});
+
+test('castForetold function exists', () => {
+  assert(code.includes('const castForetold'), 'castForetold function missing');
+  assert(code.includes('from foretell'), 'Foretell cast log missing');
+});
+
+test('Foretold cards have special context menu in exile', () => {
+  assert(code.includes('Cast from Foretell'), 'Cast from Foretell option missing');
+  assert(code.includes('card.isForetold'), 'Foretold card detection in exile missing');
+});
+
+test('Exile button shows foretell indicator', () => {
+  assert(code.includes('foretoldInExile'), 'foretoldInExile detection missing');
+  assert(code.includes("Foretold"), 'Foretold badge missing in ZoneViewer');
+});
+
+// ============================================================
 // RESULTS
 // ============================================================
 console.log(`\n${'═'.repeat(55)}`);
