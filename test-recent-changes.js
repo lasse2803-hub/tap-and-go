@@ -492,6 +492,120 @@ test('Bracket balance sanity check on key sections', () => {
 });
 
 // ============================================================
+console.log('\n▸ Online Mode — Turn Start State Reset');
+// ============================================================
+
+test('onlineTurnDrawEffect resets landPlayedThisTurn', () => {
+  // The online turn draw effect must reset landPlayedThisTurn: false
+  // because setMe doesn't accept it from the server sync
+  const turnDrawBlock = code.match(/onlineTurnDrawnRef\.current = turnKey;([\s\S]*?)try \{ SFX\.draw/);
+  assert(turnDrawBlock, 'Could not find onlineTurnDraw block');
+  assert(turnDrawBlock[1].includes('landPlayedThisTurn: false'), 'landPlayedThisTurn not reset in onlineTurnDraw');
+});
+
+test('onlineTurnDrawEffect resets dealtDamageThisTurn', () => {
+  const turnDrawBlock = code.match(/onlineTurnDrawnRef\.current = turnKey;([\s\S]*?)try \{ SFX\.draw/);
+  assert(turnDrawBlock, 'Could not find onlineTurnDraw block');
+  assert(turnDrawBlock[1].includes('dealtDamageThisTurn: false'), 'dealtDamageThisTurn not reset in onlineTurnDraw');
+});
+
+test('onlineTurnDrawEffect resets manaPool', () => {
+  const turnDrawBlock = code.match(/onlineTurnDrawnRef\.current = turnKey;([\s\S]*?)try \{ SFX\.draw/);
+  assert(turnDrawBlock, 'Could not find onlineTurnDraw block');
+  assert(turnDrawBlock[1].includes("manaPool: { W: 0, U: 0, B: 0, R: 0, G: 0, C: 0 }"), 'manaPool not reset in onlineTurnDraw');
+});
+
+test('onlineTurnDrawEffect untaps battlefield', () => {
+  const turnDrawBlock = code.match(/onlineTurnDrawnRef\.current = turnKey;([\s\S]*?)try \{ SFX\.draw/);
+  assert(turnDrawBlock, 'Could not find onlineTurnDraw block');
+  assert(turnDrawBlock[1].includes('tapped: false'), 'Battlefield not untapped in onlineTurnDraw');
+  assert(turnDrawBlock[1].includes('enteredThisTurn: false'), 'enteredThisTurn not reset in onlineTurnDraw');
+});
+
+test('onlineTurnDrawEffect clears untilNextTurnEffects', () => {
+  const turnDrawBlock = code.match(/onlineTurnDrawnRef\.current = turnKey;([\s\S]*?)try \{ SFX\.draw/);
+  assert(turnDrawBlock, 'Could not find onlineTurnDraw block');
+  assert(turnDrawBlock[1].includes('untilNextTurnEffects: []'), 'untilNextTurnEffects not cleared in onlineTurnDraw');
+});
+
+test('onlineTurnDrawEffect plays untapAll SFX', () => {
+  // Should play untapAll before draw
+  const afterTurnDraw = code.match(/onlineTurnDrawnRef\.current = turnKey;([\s\S]*?)SFX\.draw/);
+  assert(afterTurnDraw, 'Could not find post-turnDraw block');
+  assert(afterTurnDraw[1].includes('SFX.untapAll()'), 'untapAll SFX not played in onlineTurnDraw');
+});
+
+test('setMe does NOT include landPlayedThisTurn (by design)', () => {
+  // Verify that the "my state" receiver does NOT blindly accept landPlayedThisTurn
+  // from the server. The onlineTurnDrawEffect handles this locally instead.
+  const setMeBlock = code.match(/const next = \{\s*\.\.\.prev,\s*life: serverMe\.life([\s\S]*?)return next;/);
+  assert(setMeBlock, 'setMe block not found');
+  assert(!setMeBlock[1].includes('landPlayedThisTurn'), 'setMe should NOT include landPlayedThisTurn (would cause issues)');
+});
+
+// ============================================================
+console.log('\n▸ Game Log & Token Art');
+// ============================================================
+
+test('createToken includes game log with skipLog parameter', () => {
+  assert(code.includes('const createToken = (pIdx, token, playSound = true, skipLog = false)'), 'createToken signature missing skipLog');
+  assert(code.includes("if (!skipLog)"), 'skipLog check missing in createToken');
+});
+
+test('addGameLog syncs to opponent via onStateChange', () => {
+  assert(code.includes("onStateChange({ __logEntry: entry })"), 'addGameLog not syncing to opponent');
+});
+
+test('moveCard logs zone transitions', () => {
+  // Should log battlefield→graveyard, battlefield→exile, etc.
+  const moveCardBlock = code.match(/const moveCard = \(pIdx[\s\S]*?(?=\n  const \w+ = )/);
+  assert(moveCardBlock, 'moveCard function not found');
+  assert(moveCardBlock[0].includes("addGameLog(pIdx, '💀'"), 'Missing graveyard transition log');
+  assert(moveCardBlock[0].includes("addGameLog(pIdx, '🚫'"), 'Missing exile transition log');
+});
+
+test('PW token auto-creation detects create token pattern', () => {
+  // The code uses multiple patterns for parsing token creation from PW abilities
+  assert(code.includes("create\\s+(\\w[\\w\\s]*?),\\s+a"), 'Named token creation regex missing');
+  assert(code.includes("creature\\s+token"), 'creature token pattern missing');
+});
+
+test('Scryfall token art fetch after createToken', () => {
+  // After creating tokens, should fetch art from Scryfall
+  assert(code.includes("api.scryfall.com/cards/search?q="), 'Scryfall token art fetch missing');
+});
+
+test('Chandra exile-cast-or-damage detection', () => {
+  assert(code.includes("exile the top card of your library.*you may cast"), 'Chandra +1 pattern missing');
+  assert(code.includes("exiledCard"), 'exiledCard property missing for two-phase flow');
+});
+
+test('Shark Typhoon cycling token auto-creation', () => {
+  assert(code.includes("Enter X value for the"), 'Shark Typhoon X prompt missing');
+});
+
+// ============================================================
+console.log('\n▸ Opponent SFX in Online Mode');
+// ============================================================
+
+test('Opponent SFX: detect new creatures on opponent battlefield', () => {
+  const setOppBlock = code.match(/setOpp\(prev => \{([\s\S]*?)\}\);/);
+  assert(setOppBlock, 'setOpp block not found');
+  assert(setOppBlock[1].includes('SFX.playCreature()'), 'Missing creature enter SFX for opponent');
+  assert(setOppBlock[1].includes('SFX.playLand()'), 'Missing land enter SFX for opponent');
+  assert(setOppBlock[1].includes('SFX.playSpell()'), 'Missing spell cast SFX for opponent');
+});
+
+test('Opponent SFX: detect tapping without new cards', () => {
+  assert(code.includes('tappedNew.length > 0 && entered.length === 0'), 'Tap SFX condition missing (should exclude new card entries)');
+});
+
+test('Creature_Enters.wav integrated', () => {
+  assert(code.includes("playCreature: '/sounds/Creature_Enters.wav'"), 'Creature_Enters.wav not in wavFiles');
+  assert(code.includes("playCreature() { playWav('playCreature'"), 'playCreature not using playWav');
+});
+
+// ============================================================
 // RESULTS
 // ============================================================
 console.log(`\n${'═'.repeat(55)}`);

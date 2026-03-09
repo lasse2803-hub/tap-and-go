@@ -1149,8 +1149,8 @@ const PRESET_DECKS = [
 4 Inspiring Vantage (KLD)
 2 Battlefield Forge (BRO)
 2 Den of the Bugbear (AFR)
-7 Mountain (ZNR) 275
-3 Plains (ZNR) 268`,
+7 Mountain (THB) 253
+3 Plains (THB) 250`,
   },
 ];
 
@@ -3616,16 +3616,30 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
 
     onlineTurnDrawnRef.current = turnKey;
 
-    // Draw a card from my own library
+    // Reset turn-start state and draw a card from my own library.
+    // CRITICAL: We must reset landPlayedThisTurn, dealtDamageThisTurn, manaPool,
+    // and untap here because when the OPPONENT passes the turn, their machine
+    // resets our state and syncs it — but setMe doesn't accept those fields
+    // from the server (to avoid overwriting local state during normal play).
+    // This effect is the canonical "my turn starts" handler for online mode.
     const myIdx = onlinePlayerIndex;
     setState(myIdx, p => {
-      if (p.library.length === 0) return p;
-      return {
+      const base = {
         ...p,
+        landPlayedThisTurn: false,
+        dealtDamageThisTurn: false,
+        manaPool: { W: 0, U: 0, B: 0, R: 0, G: 0, C: 0 },
+        battlefield: p.battlefield.map(c => ({ ...c, tapped: false, enteredThisTurn: false })),
+        untilNextTurnEffects: [],
+      };
+      if (p.library.length === 0) return base;
+      return {
+        ...base,
         library: p.library.slice(1),
         hand: [...p.hand, p.library[0]],
       };
     });
+    try { SFX.untapAll(); } catch(e) {}
     try { SFX.draw(); } catch(e) {}
   });
 
