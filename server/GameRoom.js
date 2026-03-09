@@ -357,6 +357,17 @@ class GameRoom {
       if (update.mulliganPlayer !== undefined) this.gameState.mulliganPlayer = update.mulliganPlayer;
       if (update.mulliganCounts) this.gameState.mulliganCounts = update.mulliganCounts;
 
+      // Spell stack, overlays, and shared game state
+      // These must be forwarded so the opponent sees spells on the stack,
+      // counter-choice overlays, library search state, instant casting, etc.
+      if (update.spellStack !== undefined) this.gameState.spellStack = update.spellStack;
+      if (update.sacCounterChoice !== undefined) this.gameState.sacCounterChoice = update.sacCounterChoice;
+      if (update.librarySearch !== undefined) this.gameState.librarySearch = update.librarySearch;
+      if (update.instantCasting !== undefined) this.gameState.instantCasting = update.instantCasting;
+      if (update.endOfTurnRespond !== undefined) this.gameState.endOfTurnRespond = update.endOfTurnRespond;
+      if (update.pwAbilityOnStack !== undefined) this.gameState.pwAbilityOnStack = update.pwAbilityOnStack;
+      if (update.preventCombatDamage !== undefined) this.gameState.preventCombatDamage = update.preventCombatDamage;
+
       // Forward game log entries from one player to the other
       if (update.__logEntry) this.gameState.__logEntry = update.__logEntry;
 

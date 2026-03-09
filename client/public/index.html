@@ -3674,7 +3674,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     if (onlineState.mulliganCounts) _setMulliganCounts(onlineState.mulliganCounts);
 
     // Sync sacrifice counter choice (Cursecatcher etc.)
-    if (onlineState.sacCounterChoice !== undefined) setSacCounterChoice(onlineState.sacCounterChoice);
+    if (onlineState.sacCounterChoice !== undefined) _setSacCounterChoice(onlineState.sacCounterChoice);
 
     // Sync library search state (Solemn Simulacrum etc.)
     if (onlineState.librarySearch !== undefined) _setLibrarySearch(onlineState.librarySearch);
