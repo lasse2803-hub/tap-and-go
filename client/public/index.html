@@ -3451,6 +3451,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       mulliganCounts,
       sacCounterChoice,
       librarySearch,
+      spellStack,
     });
   }); // run on every render when sync is needed
 
@@ -3605,6 +3606,9 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
 
     // Sync library search state (Solemn Simulacrum etc.)
     if (onlineState.librarySearch !== undefined) _setLibrarySearch(onlineState.librarySearch);
+
+    // Sync spell stack (so opponent sees spells being cast)
+    if (onlineState.spellStack !== undefined) _setSpellStack(onlineState.spellStack);
 
     // Receive game log entries from opponent
     if (onlineState.__logEntry) {
@@ -5595,7 +5599,8 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
   const [gameOver, setGameOver] = useState(null); // { winner, loser, reason }
   const [concedeConfirm, setConcedeConfirm] = useState(false); // show confirmation dialog
   const [spellTargeting, setSpellTargeting] = useState(null); // { pIdx, card, effects, targetMode }
-  const [spellStack, setSpellStack] = useState([]); // LIFO stack: [{ pIdx, card, asAdventure, fromExile, displayName }, ...]
+  const [spellStack, _setSpellStack] = useState([]); // LIFO stack: [{ pIdx, card, asAdventure, fromExile, displayName }, ...]
+  const setSpellStack = (fn) => { _setSpellStack(fn); if (onlineMode) onlineSyncNeededRef.current = true; };
   const stackTop = spellStack.length > 0 ? spellStack[spellStack.length - 1] : null;
   const [sacCounterChoice, _setSacCounterChoice] = useState(null); // { sacPIdx, sacCard, targetEntry, payAmount } — "counter unless pays" choice
   const setSacCounterChoice = (v) => { _setSacCounterChoice(v); if (onlineMode) onlineSyncNeededRef.current = true; };

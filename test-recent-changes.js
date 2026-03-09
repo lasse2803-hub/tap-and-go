@@ -119,7 +119,7 @@ test('librarySearch state variable exists with online sync', () => {
 });
 
 test('librarySearch in sync payload', () => {
-  assert(code.includes('librarySearch,\n    });'), 'librarySearch not in sync payload');
+  assert(code.includes('librarySearch,'), 'librarySearch not in sync payload');
 });
 
 test('librarySearch received from opponent', () => {
@@ -435,7 +435,7 @@ console.log('\n▸ State Sync Completeness');
 
 test('All new state variables in sync payload', () => {
   // The sync payload is multi-line, search for the variables near the emit call
-  assert(code.includes('sacCounterChoice,\n      librarySearch,\n    })'), 'sacCounterChoice and librarySearch should be adjacent in sync payload');
+  assert(code.includes('sacCounterChoice,') && code.includes('librarySearch,') && code.includes('spellStack,'), 'sacCounterChoice, librarySearch and spellStack should all be in sync payload');
 });
 
 test('All new state variables received from opponent', () => {
