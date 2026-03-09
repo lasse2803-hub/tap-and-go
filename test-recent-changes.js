@@ -115,7 +115,7 @@ test('ETB auto-triggers library search overlay', () => {
 
 test('librarySearch state variable exists with online sync', () => {
   assert(code.includes('const [librarySearch, _setLibrarySearch] = useState(null)'), 'librarySearch state missing');
-  assert(code.includes("const setLibrarySearch = (v) => { _setLibrarySearch(v); if (onlineMode) onlineSyncNeededRef"), 'librarySearch online sync missing');
+  assert(code.includes("const setLibrarySearch = syncSetter(_setLibrarySearch)"), 'librarySearch online sync missing');
 });
 
 test('librarySearch in sync payload', () => {
@@ -310,20 +310,20 @@ test('WAV file definitions exist', () => {
   }
 });
 
-test('WAV-based SFX methods call playWav', () => {
+test('WAV-based SFX methods call playWav via safe wrapper', () => {
   const wavMethods = ['tap', 'playLand', 'combatDamage', 'lifeLoss', 'playerDamage',
     'counterspell', 'planeswalkerEnters', 'playerWins', 'massReturn', 'playCreature'];
   for (const m of wavMethods) {
-    assert(code.includes(`${m}() { playWav(`), `${m} does not call playWav`);
+    assert(code.includes(`${m}: safe(() => playWav(`), `${m} does not call playWav`);
   }
 });
 
-test('Removed synthesized sounds are no-op stubs', () => {
+test('Removed synthesized sounds are safe no-op stubs', () => {
   const removedMethods = ['draw', 'untap', 'untapAll', 'playSpell',
     'lifeGain', 'damage', 'toGraveyard', 'toExile', 'shuffle',
     'tokenCreate', 'mill', 'attack', 'block', 'creatureDeath', 'commanderCast', 'passTurn'];
   for (const m of removedMethods) {
-    assert(code.includes(`${m}() {}`), `${m} should be a no-op stub but isn't`);
+    assert(code.includes(`${m}: safe(`), `${m} should be a safe no-op stub but isn't`);
   }
 });
 
@@ -339,9 +339,11 @@ test('reverbBuf and hallBuf removed', () => {
   assert(!code.includes('let hallBuf'), 'hallBuf should be removed');
 });
 
-test('SFX calls wrapped in try-catch throughout code', () => {
-  const sfxCalls = code.match(/try \{ SFX\.\w+\(\); \} catch\(e\) \{\}/g);
-  assert(sfxCalls && sfxCalls.length > 20, `Expected >20 wrapped SFX calls, found ${sfxCalls ? sfxCalls.length : 0}`);
+test('SFX calls are direct (no try-catch needed, safe wrapper handles errors)', () => {
+  const tryCatchSfx = code.match(/try \{ SFX\.\w+\(\); \} catch\(e\) \{\}/g);
+  assert(!tryCatchSfx || tryCatchSfx.length === 0, `Expected 0 try-catch SFX wrappers, found ${tryCatchSfx ? tryCatchSfx.length : 0}`);
+  // Verify safe wrapper exists inside SFX
+  assert(code.includes('const safe = (fn) => (...args) => { try { fn(...args); } catch(e) {} };'), 'SFX safe wrapper missing');
 });
 
 test('All WAV files exist on disk', () => {
@@ -498,32 +500,32 @@ console.log('\n▸ Online Mode — Turn Start State Reset');
 test('onlineTurnDrawEffect resets landPlayedThisTurn', () => {
   // The online turn draw effect must reset landPlayedThisTurn: false
   // because setMe doesn't accept it from the server sync
-  const turnDrawBlock = code.match(/onlineTurnDrawnRef\.current = turnKey;([\s\S]*?)try \{ SFX\.draw/);
+  const turnDrawBlock = code.match(/onlineTurnDrawnRef\.current = turnKey;([\s\S]*?)SFX\.draw/);
   assert(turnDrawBlock, 'Could not find onlineTurnDraw block');
   assert(turnDrawBlock[1].includes('landPlayedThisTurn: false'), 'landPlayedThisTurn not reset in onlineTurnDraw');
 });
 
 test('onlineTurnDrawEffect resets dealtDamageThisTurn', () => {
-  const turnDrawBlock = code.match(/onlineTurnDrawnRef\.current = turnKey;([\s\S]*?)try \{ SFX\.draw/);
+  const turnDrawBlock = code.match(/onlineTurnDrawnRef\.current = turnKey;([\s\S]*?)SFX\.draw/);
   assert(turnDrawBlock, 'Could not find onlineTurnDraw block');
   assert(turnDrawBlock[1].includes('dealtDamageThisTurn: false'), 'dealtDamageThisTurn not reset in onlineTurnDraw');
 });
 
 test('onlineTurnDrawEffect resets manaPool', () => {
-  const turnDrawBlock = code.match(/onlineTurnDrawnRef\.current = turnKey;([\s\S]*?)try \{ SFX\.draw/);
+  const turnDrawBlock = code.match(/onlineTurnDrawnRef\.current = turnKey;([\s\S]*?)SFX\.draw/);
   assert(turnDrawBlock, 'Could not find onlineTurnDraw block');
   assert(turnDrawBlock[1].includes("manaPool: { W: 0, U: 0, B: 0, R: 0, G: 0, C: 0 }"), 'manaPool not reset in onlineTurnDraw');
 });
 
 test('onlineTurnDrawEffect untaps battlefield', () => {
-  const turnDrawBlock = code.match(/onlineTurnDrawnRef\.current = turnKey;([\s\S]*?)try \{ SFX\.draw/);
+  const turnDrawBlock = code.match(/onlineTurnDrawnRef\.current = turnKey;([\s\S]*?)SFX\.draw/);
   assert(turnDrawBlock, 'Could not find onlineTurnDraw block');
   assert(turnDrawBlock[1].includes('tapped: false'), 'Battlefield not untapped in onlineTurnDraw');
   assert(turnDrawBlock[1].includes('enteredThisTurn: false'), 'enteredThisTurn not reset in onlineTurnDraw');
 });
 
 test('onlineTurnDrawEffect clears untilNextTurnEffects', () => {
-  const turnDrawBlock = code.match(/onlineTurnDrawnRef\.current = turnKey;([\s\S]*?)try \{ SFX\.draw/);
+  const turnDrawBlock = code.match(/onlineTurnDrawnRef\.current = turnKey;([\s\S]*?)SFX\.draw/);
   assert(turnDrawBlock, 'Could not find onlineTurnDraw block');
   assert(turnDrawBlock[1].includes('untilNextTurnEffects: []'), 'untilNextTurnEffects not cleared in onlineTurnDraw');
 });
@@ -602,7 +604,7 @@ test('Opponent SFX: detect tapping without new cards', () => {
 
 test('Creature_Enters.wav integrated', () => {
   assert(code.includes("playCreature: '/sounds/Creature_Enters.wav'"), 'Creature_Enters.wav not in wavFiles');
-  assert(code.includes("playCreature() { playWav('playCreature'"), 'playCreature not using playWav');
+  assert(code.includes("playCreature: safe(() => playWav('playCreature'"), 'playCreature not using playWav');
 });
 
 // ============================================================

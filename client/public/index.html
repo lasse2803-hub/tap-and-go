@@ -881,38 +881,56 @@ const SFX = (() => {
     return ctx;
   };
 
+  // Wrap all methods to be error-safe — callers no longer need try/catch
+  const safe = (fn) => (...args) => { try { fn(...args); } catch(e) {} };
+
   return {
     // WAV-based sounds (user-requested)
-    tap() { playWav('tap', 0.6); },
-    playLand() { playWav('playLand', 0.5); },
-    combatDamage() { playWav('combatDamage', 0.5); },
-    lifeLoss() { playWav('lifeLoss', 0.5); },
-    playerDamage() { playWav('playerDamage', 0.5); },
-    counterspell() { playWav('counterspell', 0.6); },
-    planeswalkerEnters() { playWav('planeswalkerEnters', 0.5); },
-    playerWins() { playWav('playerWins', 0.5); },
-    massReturn() { playWav('massReturn', 0.5); },
+    tap: safe(() => playWav('tap', 0.6)),
+    playLand: safe(() => playWav('playLand', 0.5)),
+    combatDamage: safe(() => playWav('combatDamage', 0.5)),
+    lifeLoss: safe(() => playWav('lifeLoss', 0.5)),
+    playerDamage: safe(() => playWav('playerDamage', 0.5)),
+    counterspell: safe(() => playWav('counterspell', 0.6)),
+    planeswalkerEnters: safe(() => playWav('planeswalkerEnters', 0.5)),
+    playerWins: safe(() => playWav('playerWins', 0.5)),
+    massReturn: safe(() => playWav('massReturn', 0.5)),
 
     // No-op stubs for removed synthesized sounds (prevents runtime errors)
-    draw() {},
-    untap() {},
-    untapAll() {},
-    playCreature() { playWav('playCreature', 0.5); },
-    playSpell() {},
-    lifeGain() {},
-    damage() {},
-    toGraveyard() {},
-    toExile() {},
-    shuffle() {},
-    tokenCreate() {},
-    mill() {},
-    attack() {},
-    block() {},
-    creatureDeath() {},
-    commanderCast() {},
-    passTurn() {},
+    draw: safe(() => {}),
+    untap: safe(() => {}),
+    untapAll: safe(() => {}),
+    playCreature: safe(() => playWav('playCreature', 0.5)),
+    playSpell: safe(() => {}),
+    lifeGain: safe(() => {}),
+    damage: safe(() => {}),
+    toGraveyard: safe(() => {}),
+    toExile: safe(() => {}),
+    shuffle: safe(() => {}),
+    tokenCreate: safe(() => {}),
+    mill: safe(() => {}),
+    attack: safe(() => {}),
+    block: safe(() => {}),
+    creatureDeath: safe(() => {}),
+    commanderCast: safe(() => {}),
+    passTurn: safe(() => {}),
   };
 })();
+
+// ============ GAME CONSTANTS ============
+const GAME_CONSTANTS = {
+  STARTING_LIFE: 20,
+  COMMANDER_LIFE: 40,
+  HAND_SIZE: 7,
+  POISON_LETHAL: 10,
+  LOG_MAX: 50,
+  TIMEOUT: {
+    CAST_ERROR: 1500,
+    REMINDER: 2000,
+    PHASE_ADVANCE: 300,
+    TRIGGER_POPUP: 3000,
+  },
+};
 
 // ============ SCRYFALL API ============
 const scryfallSearch = async (query) => {
@@ -1701,6 +1719,12 @@ const getSpellTargetMode = (effects) => {
 // ============ HELPERS ============
 const uid = () => Math.random().toString(36).substr(2, 9);
 
+const getOracleText = (card) => {
+  const main = card.oracle_text || '';
+  const faces = (card.card_faces || []).map(f => f.oracle_text || '');
+  return [main, ...faces].filter(Boolean).join('\n').toLowerCase();
+};
+
 const isCreature = (card) => card.type_line && card.type_line.toLowerCase().includes('creature');
 const isLand = (card) => card.type_line && card.type_line.toLowerCase().includes('land');
 const isEnchantment = (card) => card.type_line && card.type_line.toLowerCase().includes('enchantment');
@@ -1759,9 +1783,7 @@ const isInstant = (card) => card.type_line && card.type_line.toLowerCase().inclu
 const isSorcery = (card) => card.type_line && card.type_line.toLowerCase().includes('sorcery');
 const isSpellCard = (card) => isInstant(card) || isSorcery(card);
 const hasFlash = (card) => {
-  const oracle = (card.oracle_text || '').toLowerCase();
-  const faces = card.card_faces || [];
-  const allText = [oracle, ...faces.map(f => (f.oracle_text || '').toLowerCase())].join(' ');
+  const allText = getOracleText(card);
   return card.keywords?.includes('Flash') || card.keywords?.includes('flash') || allText.includes('flash') || (card.tempBuffs?.keywords || []).includes('flash');
 };
 const isAdventureCard = (card) => card.layout === 'adventure' && card.card_faces && card.card_faces.length >= 2;
@@ -1775,18 +1797,14 @@ const canCastAtInstantSpeed = (card) => {
   return false;
 };
 const hasHexproof = (card) => {
-  const oracle = (card.oracle_text || '').toLowerCase();
-  const faces = card.card_faces || [];
-  const allText = [oracle, ...faces.map(f => (f.oracle_text || '').toLowerCase())].join(' ');
+  const allText = getOracleText(card);
   return card.keywords?.includes('Hexproof') || card.keywords?.includes('hexproof') || allText.includes('hexproof') || (card.tempBuffs?.keywords || []).includes('hexproof');
 };
 const hasShroud = (card) => {
   return card.keywords?.includes('Shroud') || card.keywords?.includes('shroud') || (card.tempBuffs?.keywords || []).includes('shroud');
 };
 const hasProtectionFrom = (card, spellCard) => {
-  const oracle = (card.oracle_text || '').toLowerCase();
-  const faces = card.card_faces || [];
-  const allText = [oracle, ...faces.map(f => (f.oracle_text || '').toLowerCase())].join(' ');
+  const allText = getOracleText(card);
   const spellColors = spellCard.colors || spellCard.card_faces?.[0]?.colors || [];
   const colorNames = { W: 'white', U: 'blue', B: 'black', R: 'red', G: 'green' };
   for (const c of spellColors) {
@@ -1796,9 +1814,7 @@ const hasProtectionFrom = (card, spellCard) => {
 };
 const isAura = (card) => {
   const tl = (card.type_line || '').toLowerCase();
-  const oracle = (card.oracle_text || '').toLowerCase();
-  const faces = card.card_faces || [];
-  const allOracle = [oracle, ...faces.map(f => (f.oracle_text || '').toLowerCase())].join(' ');
+  const allOracle = getOracleText(card);
   return tl.includes('enchantment') && (tl.includes('aura') || allOracle.includes('enchant creature') || allOracle.includes('enchant permanent'));
 };
 const isEquipment = (card) => {
@@ -1809,9 +1825,7 @@ const isEquipment = (card) => {
 // Parse stat bonuses and keywords granted by an Aura or Equipment
 // Returns { power: number, toughness: number, keywords: string[] }
 const parseAttachmentBonuses = (card) => {
-  const oracle = (card.oracle_text || '').toLowerCase();
-  const faces = card.card_faces || [];
-  const allText = [oracle, ...faces.map(f => (f.oracle_text || '').toLowerCase())].join(' ');
+  const allText = getOracleText(card);
   const result = { power: 0, toughness: 0, keywords: [] };
 
   // Skip dynamic/conditional bonuses that we can't auto-calculate
@@ -1916,9 +1930,7 @@ const getCyclingCost = (card) => {
   // Check keywords first
   if (card.keywords?.some(k => k.toLowerCase().startsWith('cycling'))) {
     // Try to extract cost from oracle text
-    const oracle = (card.oracle_text || '').toLowerCase();
-    const faces = card.card_faces || [];
-    const allText = [oracle, ...faces.map(f => (f.oracle_text || '').toLowerCase())].filter(Boolean).join('\n');
+    const allText = getOracleText(card);
     const cycleMatch = allText.match(/cycling\s*(\{[^}]+\}(?:\{[^}]+\})*)/);
     return cycleMatch ? cycleMatch[1] : '{2}'; // default to {2} if can't parse
   }
@@ -1929,9 +1941,7 @@ const getCyclingCost = (card) => {
 const getForetellCost = (card) => {
   const kws = (card.keywords || []).map(k => k.toLowerCase());
   if (!kws.includes('foretell')) return null;
-  const oracle = (card.oracle_text || '').toLowerCase();
-  const faces = card.card_faces || [];
-  const allText = [oracle, ...faces.map(f => (f.oracle_text || '').toLowerCase())].filter(Boolean).join('\n');
+  const allText = getOracleText(card);
   // Foretell cost pattern: "Foretell {W}{W}" or "Foretell {2}{U}"
   const ftMatch = allText.match(/foretell\s+((?:\{[^}]+\})+)/);
   return ftMatch ? ftMatch[1] : '{2}'; // default {2} if can't parse
@@ -1940,9 +1950,7 @@ const getForetellCost = (card) => {
 // ============ DYNAMIC HAND CARD VALUE ============
 // Calculates dynamic values for cards in hand based on game state (e.g. Zenith Flare)
 const getHandCardDynamicValue = (card, playerState) => {
-  const oracle = (card.oracle_text || '').toLowerCase();
-  const faces = card.card_faces || [];
-  const allText = [oracle, ...faces.map(f => (f.oracle_text || '').toLowerCase())].join(' ');
+  const allText = getOracleText(card);
 
   // Zenith Flare pattern: "X damage ... where X is the number of cards with a cycling ability in your graveyard"
   if (allText.includes('cycling ability') && allText.includes('graveyard')) {
@@ -1983,9 +1991,7 @@ const getCostModifiers = (yourBattlefield, opponentBattlefield) => {
   const modifiers = []; // { source, text, affectsWho: 'you'|'opponent'|'both', icon }
 
   const scanCard = (card, isYours) => {
-    const oracle = (card.oracle_text || '').toLowerCase();
-    const faces = card.card_faces || [];
-    const allText = [oracle, ...faces.map(f => (f.oracle_text || '').toLowerCase())].join(' ');
+    const allText = getOracleText(card);
     const name = card.name || '';
 
     // "Noncreature spells cost {N} more" (Thalia, Guardian of Thraben)
@@ -3259,8 +3265,24 @@ class GameErrorBoundary extends React.Component {
 function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: initCommanders,
                      onlineMode, onlinePlayerIndex, onlineState, onlineLastAction, onStateChange,
                      matchInfo, onGameWon, onConcede, concession, serverGameAction }) {
+  // ═══════════════════════════════════════════════════════════════
+  // GAMEBOARD SECTION INDEX
+  // ═══════════════════════════════════════════════════════════════
+  // 1. State Declarations & Sync Registry ........... ~line 3268
+  // 2. Online Sync: Broadcast & Receive ............. ~line 3482
+  // 3. Mulligan System .............................. ~line 3412
+  // 4. Card Movement & Zone Transfers ............... ~line 3761
+  // 5. Mana System & Costs .......................... ~line 6280
+  // 6. Spell Casting & Stack ........................ ~line 6326
+  // 7. Combat System ................................ ~line 7003
+  // 8. Turn & Phase Management ...................... ~line 6918
+  // 9. Context Menu Actions ......................... ~line 5023
+  // 10. Trigger System (ETB/LTB) .................... ~line 5479
+  // 11. Render (JSX) ................................ ~line 8584
+  // ═══════════════════════════════════════════════════════════════
+
   const isCommander = gameFormat === 'commander';
-  const startingLife = isCommander ? 40 : 20;
+  const startingLife = isCommander ? GAME_CONSTANTS.COMMANDER_LIFE : GAME_CONSTANTS.STARTING_LIFE;
 
   const initPlayerState = (deckEntries, name, commanderCard) => {
     const allCards = [];
@@ -3345,8 +3367,46 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     if (onlineMode && onlineState?.activePlayer !== undefined) return onlineState.activePlayer;
     return Math.random() < 0.5 ? 0 : 1;
   });
-  const [activePlayer, _setActivePlayer] = useState(startingPlayer);
-  const setActivePlayer = (v) => { _setActivePlayer(v); if (onlineMode && onlineSyncNeededRef) onlineSyncNeededRef.current = true; };
+  // ═══════════════════════════════════════════════════════════════════
+  // ONLINE STATE SYNC REGISTRY
+  // ═══════════════════════════════════════════════════════════════════
+  // All game state that must sync in online multiplayer uses this pattern:
+  //   const [state, _setState] = useState(initial);     // raw setter
+  //   const setState = syncSetter(_setState);            // wrapped setter
+  //
+  // The syncSetter wrapper triggers a broadcast to the opponent whenever
+  // state changes in online mode. Receivers use raw _setState to avoid
+  // re-broadcasting (echo prevention).
+  //
+  // ── SYNCED STATE (15 variables): ──────────────────────────────────
+  //   activePlayer, instantCasting, librarySearch, endOfTurnRespond,
+  //   mulliganPhase, mulliganCounts, mulliganPlayer,
+  //   turnCount, currentPhase, combatState, preventCombatDamage,
+  //   spellStack, sacCounterChoice, pwAbilityOnStack,
+  //   p1/p2 (via setState wrapper)
+  //
+  // ── BROADCAST PAYLOAD: onStateChange({...}) ───────────────────────
+  //   All synced variables + players array. See ~50 lines below.
+  //
+  // ── RECEIVER: useEffect on onlineState ────────────────────────────
+  //   Uses raw _setXxx to update without triggering rebroadcast.
+  //
+  // ── ADDING NEW SYNCED STATE: ──────────────────────────────────────
+  //   1. Declare with raw setter: const [x, _setX] = useState(init)
+  //   2. Wrap: const setX = syncSetter(_setX)
+  //   3. Add to broadcast payload (onStateChange block below)
+  //   4. Add receiver: if (onlineState.x !== undefined) _setX(onlineState.x)
+  //   5. Add "// SYNCED" comment on the useState line
+  // ═══════════════════════════════════════════════════════════════
+  // §1. STATE DECLARATIONS & SYNC REGISTRY
+  // ═══════════════════════════════════════════════════════════════
+  const syncSetter = (rawSetter) => (v) => {
+    rawSetter(v);
+    if (onlineMode && onlineSyncNeededRef) onlineSyncNeededRef.current = true;
+  };
+
+  const [activePlayer, _setActivePlayer] = useState(startingPlayer); // SYNCED
+  const setActivePlayer = syncSetter(_setActivePlayer);
 
   // Online mode: perspective mapping — you always see yourself at bottom
   const bottomPlayerIdx = onlineMode ? onlinePlayerIndex : 0;
@@ -3357,23 +3417,26 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
   const [showLibrarySearch, setShowLibrarySearch] = useState(null);
   const [commanderDeathChoice, setCommanderDeathChoice] = useState(null); // { pIdx, card, destination }
   const [peekingHand, setPeekingHand] = useState(null); // { targetPIdx, allowDiscard } — view opponent's hand
-  const [instantCasting, _setInstantCasting] = useState(null); // { pIdx } — non-active player casting an instant
-  const setInstantCasting = (v) => { _setInstantCasting(v); if (onlineMode) onlineSyncNeededRef.current = true; };
+  const [instantCasting, _setInstantCasting] = useState(null); // SYNCED — non-active player casting an instant
+  const setInstantCasting = syncSetter(_setInstantCasting);
   const [scryView, setScryView] = useState(null); // { pIdx, count, mode: 'scry'|'surveil' }
   const [lookTopView, setLookTopView] = useState(null); // { pIdx, cards: [], toHand: N, selected: Set }
-  const [librarySearch, _setLibrarySearch] = useState(null); // { pIdx, filter: 'basicLand'|'land', tapped: bool, source: cardName }
-  const setLibrarySearch = (v) => { _setLibrarySearch(v); if (onlineMode) onlineSyncNeededRef.current = true; };
-  const [endOfTurnRespond, _setEndOfTurnRespond] = useState(false); // true = waiting for opponent to respond before turn passes
-  const setEndOfTurnRespond = (v) => { _setEndOfTurnRespond(v); if (onlineMode) onlineSyncNeededRef.current = true; };
+  const [librarySearch, _setLibrarySearch] = useState(null); // SYNCED — { pIdx, filter, tapped, source }
+  const setLibrarySearch = syncSetter(_setLibrarySearch);
+  const [endOfTurnRespond, _setEndOfTurnRespond] = useState(false); // SYNCED — waiting for opponent to respond
+  const setEndOfTurnRespond = syncSetter(_setEndOfTurnRespond);
 
   // Mulligan state — London Mulligan: draw 7, then put back cards equal to mulligans taken
-  const [mulliganPhase, _setMulliganPhase] = useState(true); // true at game start
-  const [mulliganCounts, _setMulliganCounts] = useState([0, 0]); // times each player mulliganed
-  const [mulliganPlayer, _setMulliganPlayer] = useState(startingPlayer); // which player is deciding (starting player goes first)
-  const setMulliganPhase = (v) => { _setMulliganPhase(v); if (onlineMode && onlineSyncNeededRef) onlineSyncNeededRef.current = true; };
-  const setMulliganCounts = (v) => { _setMulliganCounts(v); if (onlineMode && onlineSyncNeededRef) onlineSyncNeededRef.current = true; };
-  const setMulliganPlayer = (v) => { _setMulliganPlayer(v); if (onlineMode && onlineSyncNeededRef) onlineSyncNeededRef.current = true; };
+  const [mulliganPhase, _setMulliganPhase] = useState(true); // SYNCED
+  const [mulliganCounts, _setMulliganCounts] = useState([0, 0]); // SYNCED
+  const [mulliganPlayer, _setMulliganPlayer] = useState(startingPlayer); // SYNCED
+  const setMulliganPhase = syncSetter(_setMulliganPhase);
+  const setMulliganCounts = syncSetter(_setMulliganCounts);
+  const setMulliganPlayer = syncSetter(_setMulliganPlayer);
 
+  // ═══════════════════════════════════════════════════════════════
+  // §3. MULLIGAN SYSTEM
+  // ═══════════════════════════════════════════════════════════════
   const doMulligan = (pIdx) => {
     const newCount = mulliganCounts[pIdx] + 1;
     const drawSize = 7 - newCount;
@@ -3403,8 +3466,8 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         library: allCards.slice(drawSize),
       };
     });
-    try { SFX.shuffle(); } catch(e) {}
-    try { SFX.draw(); } catch(e) {}
+    SFX.shuffle();
+    SFX.draw();
   };
 
   const keepHand = (pIdx) => {
@@ -3435,6 +3498,9 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     }
   };
 
+  // ═══════════════════════════════════════════════════════════════
+  // §2. ONLINE SYNC: BROADCAST & RECEIVE
+  // ═══════════════════════════════════════════════════════════════
   // Online mode: broadcast state to server when local state changes
   // Uses a debounced approach — schedule sync, then fire in next effect cycle
   useEffect(() => {
@@ -3695,8 +3761,8 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         hand: [...p.hand, p.library[0]],
       };
     });
-    try { SFX.untapAll(); } catch(e) {}
-    try { SFX.draw(); } catch(e) {}
+    SFX.untapAll();
+    SFX.draw();
   });
 
   // Wire up star P/T resolution to access game state
@@ -3716,6 +3782,9 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     setState(pIdx, prev => ({ ...prev, ...updates }));
   };
 
+  // ═══════════════════════════════════════════════════════════════
+  // §4. CARD MOVEMENT & ZONE TRANSFERS
+  // ═══════════════════════════════════════════════════════════════
   const moveCard = (pIdx, card, from, to) => {
     // ── Online mode: route cross-visibility moves through server ──
     // When moving a card TO an opponent's hand (bounce) or FROM their hand (discard),
@@ -3732,7 +3801,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         }
         serverGameAction({ type: 'bounce', targetPlayerIndex: pIdx, cardId: card.id });
         addGameLog(pIdx, '↩️', `${card.name} returned to hand`);
-        try { SFX.draw(); } catch(e) {}
+        SFX.draw();
         return;
       }
 
@@ -3744,7 +3813,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         if (cardIndex >= 0) {
           serverGameAction({ type: 'discardFromHand', targetPlayerIndex: pIdx, cardIndex });
           addGameLog(pIdx, '💀', `${card.name || 'a card'} discarded`);
-          try { SFX.toGraveyard(); } catch(e) {}
+          SFX.toGraveyard();
         }
         return;
       }
@@ -3811,7 +3880,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
             });
             setCastError({ pIdx, message: `♻️ ${card.name} returns with Undying (+1/+1 counter)!` });
             setTimeout(() => setCastError(null), 2500);
-            try { SFX.playCreature(); } catch(e) {}
+            SFX.playCreature();
           }, 600);
         }
 
@@ -3838,7 +3907,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
             });
             setCastError({ pIdx, message: `♻️ ${card.name} returns with Persist (-1/-1 counter)!` });
             setTimeout(() => setCastError(null), 2500);
-            try { SFX.playCreature(); } catch(e) {}
+            SFX.playCreature();
           }, 600);
         }
       }
@@ -3868,7 +3937,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
 
     // Tokens cease to exist when they leave the battlefield (MTG rule)
     if (card.isToken && from === 'battlefield' && to !== 'battlefield') {
-      try { SFX.toGraveyard(); } catch(e) {}
+      SFX.toGraveyard();
       setState(pIdx, prev => {
         const fromCards = prev[from].filter(c => c.id !== card.id);
         return { ...prev, [from]: fromCards };
@@ -3915,7 +3984,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         battlefield: [...prev.battlefield, entryCard],
         commanderCastCount: prev.commanderCastCount + 1,
       }));
-      try { SFX.playCreature(); } catch(e) {}
+      SFX.playCreature();
       if (entryCard.tapped) {
         setCastError({ pIdx, message: `🔄 ${card.name} enters the battlefield tapped` });
         setTimeout(() => setCastError(null), 2000);
@@ -4135,7 +4204,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       }
       return;
     }
-    try { SFX.draw(); } catch(e) {}
+    SFX.draw();
     setState(pIdx, prev => {
       if (prev.library.length === 0) return prev;
       const card = prev.library[0];
@@ -4145,7 +4214,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
 
   const shuffleLibrary = (pIdx) => {
     if (onlineMode && pIdx !== onlinePlayerIndex) return;
-    try { SFX.shuffle(); } catch(e) {}
+    SFX.shuffle();
     setState(pIdx, prev => ({ ...prev, library: shuffle(prev.library) }));
   };
 
@@ -4205,6 +4274,9 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     });
   };
 
+  // ═══════════════════════════════════════════════════════════════
+  // §5. MANA SYSTEM & COSTS
+  // ═══════════════════════════════════════════════════════════════
   const [manaChoice, setManaChoice] = useState(null); // { pIdx, colors, cardId }
 
   const addManaToPool = (pIdx, color) => {
@@ -4217,9 +4289,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
   // Detect mana-producing creatures: "{T}: Add {G}" etc.
   const getManaDorkColors = (card) => {
     if (isLand(card)) return null; // Lands handled separately
-    const oracle = (card.oracle_text || '').toLowerCase();
-    const faces = card.card_faces || [];
-    const allText = [oracle, ...faces.map(f => (f.oracle_text || '').toLowerCase())].filter(Boolean).join('\n');
+    const allText = getOracleText(card);
     // Match "{T}: Add {G}" or "{T}: Add {G}{G}" or "{T}: Add {W} or {U}" etc.
     // "one mana of any color" (Birds of Paradise, Noble Hierarch etc.)
     if (/\{t\}:\s*add\s+one mana of any color/.test(allText)) {
@@ -4247,7 +4317,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     if (!card.tapped && isLand(card)) {
       // Tapping a land: produce mana
       const colors = getLandManaColors(card);
-      try { SFX.tap(); } catch(e) {}
+      SFX.tap();
       setState(pIdx, prev => ({
         ...prev,
         battlefield: prev.battlefield.map(c => c.id === cardId ? { ...c, tapped: true } : c),
@@ -4263,12 +4333,10 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
 
     // Tapping a Treasure/Gold/similar sacrifice-for-mana token
     if (!card.tapped) {
-      const oracle = (card.oracle_text || '').toLowerCase();
-      const faces = card.card_faces || [];
-      const allText = [oracle, ...faces.map(f => (f.oracle_text || '').toLowerCase())].filter(Boolean).join('\n');
+      const allText = getOracleText(card);
       const isSacForMana = /\{t\},\s*sacrifice\s+(this|~)[^:]*:\s*add\s+(one mana of any color|(?:\{[wubrgc]\}[\s,]*(?:or\s*)?)+)/.test(allText);
       if (isSacForMana) {
-        try { SFX.tap(); } catch(e) {}
+        SFX.tap();
         // Determine colors
         const anyColor = /add one mana of any color/.test(allText);
         let sacColors;
@@ -4300,7 +4368,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     if (!card.tapped) {
       const dorkColors = getManaDorkColors(card);
       if (dorkColors && dorkColors.length > 0) {
-        try { SFX.tap(); } catch(e) {}
+        SFX.tap();
         setState(pIdx, prev => ({
           ...prev,
           battlefield: prev.battlefield.map(c => c.id === cardId ? { ...c, tapped: true } : c),
@@ -4330,9 +4398,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
   // ===== SACRIFICE ABILITIES (Mind Stone, Chromatic Sphere, etc.) =====
   const getSacrificeAbilities = (card) => {
     if (isLand(card)) return [];
-    const oracle = (card.oracle_text || '').toLowerCase();
-    const faces = card.card_faces || [];
-    const allText = [oracle, ...faces.map(f => (f.oracle_text || '').toLowerCase())].filter(Boolean).join('\n');
+    const allText = getOracleText(card);
     const abilities = [];
     // Match patterns like "{1}, {T}, Sacrifice ~: Draw a card" or "Sacrifice ~: effect"
     // Also "{1}, Sacrifice ~: effect" (no tap required)
@@ -4415,7 +4481,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       newPool = deductManaCost(p.manaPool, ability.manaCost);
     }
     // Sacrifice: remove from battlefield, add to graveyard
-    try { SFX.toGraveyard(); } catch(e) {}
+    SFX.toGraveyard();
     setState(pIdx, prev => ({
       ...prev,
       manaPool: newPool,
@@ -4455,9 +4521,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
   // ===== PAID ACTIVATED ABILITIES (Midnight Clock, etc.) =====
   const getPaidAbilities = (card) => {
     if (isLand(card)) return [];
-    const oracle = (card.oracle_text || '').toLowerCase();
-    const faces = card.card_faces || [];
-    const allText = [oracle, ...faces.map(f => (f.oracle_text || '').toLowerCase())].filter(Boolean).join('\n');
+    const allText = getOracleText(card);
     const abilities = [];
     // Match "{cost}: effect" but NOT "{T}: Add mana" (handled by toggleTap)
     // and NOT "Sacrifice" abilities (handled above)
@@ -4522,7 +4586,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       newPool = deductManaCost(p.manaPool, ability.manaCost);
     }
     // Tap if required
-    try { SFX.tap(); } catch(e) {}
+    SFX.tap();
     setState(pIdx, prev => ({
       ...prev,
       manaPool: newPool,
@@ -4554,7 +4618,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
 
   // Midnight Clock special trigger: 12th hour counter
   const triggerMidnightClock = (pIdx, card) => {
-    try { SFX.playSpell(); } catch(e) {}
+    SFX.playSpell();
     setState(pIdx, prev => {
       const clockCard = prev.battlefield.find(c => c.id === card.id);
       if (!clockCard) return prev;
@@ -4585,9 +4649,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
   const processUpkeepTriggers = (pIdx) => {
     const p = getState(pIdx);
     for (const card of p.battlefield) {
-      const oracle = (card.oracle_text || '').toLowerCase();
-      const faces = card.card_faces || [];
-      const allText = [oracle, ...faces.map(f => (f.oracle_text || '').toLowerCase())].filter(Boolean).join('\n');
+      const allText = getOracleText(card);
       // "At the beginning of each upkeep, put a [type] counter on ~"
       const upkeepCounterMatch = allText.match(/at the beginning of (?:each|your) upkeep,?\s*put\s+(?:a|an|one)\s+(\w+)\s+counter\s+on/i);
       if (upkeepCounterMatch) {
@@ -4607,14 +4669,14 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         const dmg = parseInt(upkeepDmgMatch[1]);
         setState(pIdx, prev => ({ ...prev, life: prev.life - dmg }));
         markDealtDamage(pIdx);
-        try { SFX.lifeLoss(); } catch(e) {}
+        SFX.lifeLoss();
         addGameLog(pIdx, '🔥', `${card.name}: upkeep — deals ${dmg} damage to ${getState(pIdx).name}`);
       }
     }
   };
 
   const untapAll = (pIdx) => {
-    try { SFX.untapAll(); } catch(e) {}
+    SFX.untapAll();
     setState(pIdx, prev => ({
       ...prev,
       battlefield: prev.battlefield.map(c => ({ ...c, tapped: false }))
@@ -4766,7 +4828,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
 
     // Show ability on "stack" for opponent to see and optionally respond
     setPwAbilityOnStack({ pIdx, card, ability });
-    try { SFX.playSpell(); } catch(e) {}
+    SFX.playSpell();
     addGameLog(pIdx, '⚡', `${getState(pIdx).name} activates ${card.name} [${ability.cost}]${vorinclexNote}: ${ability.text.substring(0, 60)}${ability.text.length > 60 ? '…' : ''}`, [card.id]);
   };
 
@@ -4775,7 +4837,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
 
   const exileLinkedTo = (targetPIdx, cardToExile, sourcePIdx, sourcePermanent) => {
     // Move the card to exile with exiledBy tag
-    try { SFX.toExile(); } catch(e) {}
+    SFX.toExile();
     setState(targetPIdx, prev => ({
       ...prev,
       battlefield: prev.battlefield.filter(c => c.id !== cardToExile.id),
@@ -4926,7 +4988,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       exile: [...prev.exile, foretoldCard],
     }));
     addGameLog(pIdx, '🔮', `${getState(pIdx).name} foretold a card (exiled face-down)`);
-    try { SFX.draw(); } catch(e) {}
+    SFX.draw();
   };
 
   // Cast a foretold card from exile for its foretell cost
@@ -4948,12 +5010,12 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       setState(pIdx, prev => ({ ...prev, battlefield: [...prev.battlefield, { ...cleanCard, tapped: false, counters: {}, enteredThisTurn: true }] }));
     }
     addGameLog(pIdx, '🔮', `${getState(pIdx).name} cast ${card.name} from foretell (${card.foretellCost})`);
-    try { SFX.play(); } catch(e) {}
+    SFX.play();
   };
 
   const millCards = (pIdx, count) => {
     if (onlineMode && pIdx !== onlinePlayerIndex) return;
-    try { SFX.mill(); } catch(e) {}
+    SFX.mill();
     setState(pIdx, prev => {
       const milled = prev.library.slice(0, count);
       return {
@@ -4973,6 +5035,24 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     });
   };
 
+  // Helper: add standard zone transfer actions to a context menu
+  const addZoneTransferActions = (actions, pIdx, card, fromZone, excludeZones = []) => {
+    const transfers = [
+      { zone: 'hand', label: '🤚 To Hand' },
+      { zone: 'battlefield', label: '▶ To Battlefield' },
+      { zone: 'graveyard', label: '💀 To Graveyard' },
+      { zone: 'exile', label: '🚫 To Exile' },
+    ];
+    transfers.forEach(({ zone, label }) => {
+      if (zone !== fromZone && !excludeZones.includes(zone)) {
+        actions.push({ label, fn: () => moveCard(pIdx, card, fromZone, zone) });
+      }
+    });
+  };
+
+  // ═══════════════════════════════════════════════════════════════
+  // §9. CONTEXT MENU ACTIONS
+  // ═══════════════════════════════════════════════════════════════
   const getCardActions = (pIdx, card, zone) => {
     const actions = [];
     // Ownership is determined by which player THIS client is
@@ -5017,8 +5097,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         actions.push({ label: `🔮 Foretell (pay {2}, exile face-down)`, fn: () => foretellCard(pIdx, card) });
       }
       actions.push({ sep: true });
-      actions.push({ label: '💀 To Graveyard', fn: () => moveCard(pIdx, card, 'hand', 'graveyard') });
-      actions.push({ label: '🚫 To Exile', fn: () => moveCard(pIdx, card, 'hand', 'exile') });
+      addZoneTransferActions(actions, pIdx, card, 'hand', ['hand', 'battlefield']);
       actions.push({ label: '📚 To Top of Library', fn: () => returnToLibrary(pIdx, card, 'hand', 'top') });
       actions.push({ label: '📚 To Bottom of Library', fn: () => returnToLibrary(pIdx, card, 'hand', 'bottom') });
     }
@@ -5215,9 +5294,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
           actions.push({ label: '🗑️ Destroy Token (dies)', fn: () => moveCard(pIdx, card, 'battlefield', 'graveyard') });
           actions.push({ label: '🚫 Exile Token', fn: () => moveCard(pIdx, card, 'battlefield', 'exile') });
         } else {
-          actions.push({ label: '🤚 To Hand', fn: () => moveCard(pIdx, card, 'battlefield', 'hand') });
-          actions.push({ label: '💀 To Graveyard', fn: () => moveCard(pIdx, card, 'battlefield', 'graveyard') });
-          actions.push({ label: '🚫 To Exile', fn: () => moveCard(pIdx, card, 'battlefield', 'exile') });
+          addZoneTransferActions(actions, pIdx, card, 'battlefield');
           actions.push({ label: '📎 Exile (linked to...)', fn: () => setExileLinkChoice({ targetPIdx: pIdx, card, sourcePIdx: pIdx }) });
           actions.push({ label: '📚 To Top of Library', fn: () => returnToLibrary(pIdx, card, 'battlefield', 'top') });
         }
@@ -5342,9 +5419,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         }
       }
       if (isOwner) {
-        actions.push({ label: '🤚 To Hand', fn: () => moveCard(pIdx, card, 'exile', 'hand') });
-        actions.push({ label: '▶ To Battlefield', fn: () => moveCard(pIdx, card, 'exile', 'battlefield') });
-        actions.push({ label: '💀 To Graveyard', fn: () => moveCard(pIdx, card, 'exile', 'graveyard') });
+        addZoneTransferActions(actions, pIdx, card, 'exile');
       }
       // Create Token Copy — for creature cards in exile (Mimic Vat, Imprint effects, etc.)
       if (isCreature(card) && !card.isForetold) {
@@ -5433,11 +5508,12 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     return triggers;
   };
 
+  // ═══════════════════════════════════════════════════════════════
+  // §10. TRIGGER SYSTEM (ETB/LTB)
+  // ═══════════════════════════════════════════════════════════════
   // Parse ETB (enters the battlefield) effects from a creature's oracle text
   const parseETBEffects = (card) => {
-    const oracle = (card.oracle_text || '').toLowerCase();
-    const faces = card.card_faces || [];
-    const allText = [oracle, ...faces.map(f => (f.oracle_text || '').toLowerCase())].filter(Boolean).join('\n');
+    const allText = getOracleText(card);
     if (!allText.includes('enters the battlefield') && !allText.includes('enters, ')) return [];
     const effects = [];
     // Damage to target player or planeswalker (Viashino Pyromancer)
@@ -5497,9 +5573,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
 
   // Parse LTB (Leave the Battlefield) / dies triggers from oracle text
   const parseLTBEffects = (card) => {
-    const oracle = (card.oracle_text || '').toLowerCase();
-    const faces = card.card_faces || [];
-    const allText = [oracle, ...faces.map(f => (f.oracle_text || '').toLowerCase())].filter(Boolean).join('\n');
+    const allText = getOracleText(card);
     const effects = [];
     const cardName = (card.name || '').toLowerCase();
 
@@ -5559,9 +5633,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
 
     for (const perm of p.battlefield) {
       if (perm.id === castCard.id) continue; // Don't trigger on itself
-      const oracle = (perm.oracle_text || '').toLowerCase();
-      const faces = perm.card_faces || [];
-      const allText = [oracle, ...faces.map(f => (f.oracle_text || '').toLowerCase())].filter(Boolean).join('\n');
+      const allText = getOracleText(perm);
 
       // "Whenever you cast a noncreature spell" (Shark Typhoon, Monastery Mentor, Sedgemoor Witch)
       if (allText.includes('whenever you cast a noncreature spell') && !castType.includes('creature')) {
@@ -5611,13 +5683,13 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
   const [gameOver, setGameOver] = useState(null); // { winner, loser, reason }
   const [concedeConfirm, setConcedeConfirm] = useState(false); // show confirmation dialog
   const [spellTargeting, setSpellTargeting] = useState(null); // { pIdx, card, effects, targetMode }
-  const [spellStack, _setSpellStack] = useState([]); // LIFO stack: [{ pIdx, card, asAdventure, fromExile, displayName }, ...]
-  const setSpellStack = (fn) => { _setSpellStack(fn); if (onlineMode) onlineSyncNeededRef.current = true; };
+  const [spellStack, _setSpellStack] = useState([]); // SYNCED — LIFO stack: [{ pIdx, card, asAdventure, fromExile, displayName }, ...]
+  const setSpellStack = syncSetter(_setSpellStack);
   const stackTop = spellStack.length > 0 ? spellStack[spellStack.length - 1] : null;
-  const [sacCounterChoice, _setSacCounterChoice] = useState(null); // { sacPIdx, sacCard, targetEntry, payAmount } — "counter unless pays" choice
-  const setSacCounterChoice = (v) => { _setSacCounterChoice(v); if (onlineMode) onlineSyncNeededRef.current = true; };
-  const [pwAbilityOnStack, _setPwAbilityOnStack] = useState(null); // { pIdx, card, ability: { cost, text } }
-  const setPwAbilityOnStack = (v) => { _setPwAbilityOnStack(v); if (onlineMode) onlineSyncNeededRef.current = true; };
+  const [sacCounterChoice, _setSacCounterChoice] = useState(null); // SYNCED — { sacPIdx, sacCard, targetEntry, payAmount } — "counter unless pays" choice
+  const setSacCounterChoice = syncSetter(_setSacCounterChoice);
+  const [pwAbilityOnStack, _setPwAbilityOnStack] = useState(null); // SYNCED — { pIdx, card, ability: { cost, text } }
+  const setPwAbilityOnStack = syncSetter(_setPwAbilityOnStack);
   const [pwReminder, setPwReminder] = useState(null); // { pIdx, card, ability }
   const [ltbReminder, setLtbReminder] = useState(null); // { pIdx, card, effects[] }
 
@@ -5772,7 +5844,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         }
         case 'gain_life':
           setState(pIdx, prev => ({ ...prev, life: prev.life + (effect.amount || 0) }));
-          try { SFX.lifeGain(); } catch(e) {}
+          SFX.lifeGain();
           break;
         case 'each_opponent_loses_life': {
           // For Gray Merchant-style: devotion-based damage
@@ -5784,7 +5856,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
               setState(opponentIdx, prev => ({ ...prev, life: prev.life - dmg }));
               markDealtDamage(opponentIdx);
               setState(pIdx, prev => ({ ...prev, life: prev.life + dmg }));
-              try { SFX.playerDamage(); } catch(e) {}
+              SFX.playerDamage();
               setCastError({ pIdx, message: `${card.name}: opponent loses ${dmg} life, you gain ${dmg} life` });
               setTimeout(() => setCastError(null), 2500);
             }
@@ -5801,7 +5873,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                 return { ...prev, battlefield: rest, graveyard: [...prev.graveyard, ...creatures.map(c => ({ ...c, tapped: false }))] };
               });
             });
-            try { SFX.creatureDeath(); } catch(e) {}
+            SFX.creatureDeath();
             setCastError({ pIdx, message: 'All creatures destroyed' });
             setTimeout(() => setCastError(null), 2000);
             setTimeout(() => cleanupAttachments([0, 1]), 50);
@@ -5813,7 +5885,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                 return { ...prev, battlefield: rest, exile: [...prev.exile, ...creatures.map(c => ({ ...c, tapped: false }))] };
               });
             });
-            try { SFX.toExile(); } catch(e) {}
+            SFX.toExile();
             setCastError({ pIdx, message: 'All creatures exiled' });
             setTimeout(() => setCastError(null), 2000);
             setTimeout(() => cleanupAttachments([0, 1]), 50);
@@ -5839,7 +5911,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                   return { ...prev, battlefield: surviving, graveyard: [...prev.graveyard, ...dying] };
                 });
               });
-              try { SFX.creatureDeath(); } catch(e) {}
+              SFX.creatureDeath();
               setCastError({ pIdx, message: `All creatures get ${effect.amount}` });
               setTimeout(() => setCastError(null), 2000);
               setTimeout(() => cleanupAttachments([0, 1]), 50);
@@ -5855,7 +5927,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                 return { ...prev, battlefield: rest, graveyard: [...prev.graveyard, ...dying.map(c => ({ ...c, tapped: false }))] };
               });
             });
-            try { SFX.creatureDeath(); } catch(e) {}
+            SFX.creatureDeath();
             setCastError({ pIdx, message: `Destroyed ${killed} creature(s) with power ${effect.threshold}+` });
             setTimeout(() => setCastError(null), 2000);
             setTimeout(() => cleanupAttachments([0, 1]), 50);
@@ -5869,7 +5941,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                 return { ...prev, battlefield: rest, graveyard: [...prev.graveyard, ...dying.map(c => ({ ...c, tapped: false }))] };
               });
             });
-            try { SFX.creatureDeath(); } catch(e) {}
+            SFX.creatureDeath();
             setCastError({ pIdx, message: `Destroyed ${killed} creature(s) with toughness ${effect.threshold}+` });
             setTimeout(() => setCastError(null), 2000);
             setTimeout(() => cleanupAttachments([0, 1]), 50);
@@ -5881,7 +5953,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                 return { ...prev, battlefield: rest, graveyard: [...prev.graveyard, ...dying.map(c => ({ ...c, tapped: false }))] };
               });
             });
-            try { SFX.creatureDeath(); } catch(e) {}
+            SFX.creatureDeath();
             setCastError({ pIdx, message: 'All nonland permanents destroyed' });
             setTimeout(() => setCastError(null), 2000);
             setTimeout(() => cleanupAttachments([0, 1]), 50);
@@ -5895,7 +5967,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                 return { ...prev, battlefield: rest, exile: [...prev.exile, ...toExile.map(c => ({ ...c, tapped: false, counters: {} }))] };
               });
             });
-            try { SFX.toExile(); } catch(e) {}
+            SFX.toExile();
             setCastError({ pIdx, message: `Exiled ${exiled} creature(s) with power ${effect.threshold}+` });
             setTimeout(() => setCastError(null), 2000);
             setTimeout(() => cleanupAttachments([0, 1]), 50);
@@ -5914,7 +5986,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                 return { ...prev, battlefield: rest, exile: [...prev.exile, ...toExile.map(c => ({ ...c, tapped: false, counters: {} }))] };
               });
             });
-            try { SFX.toExile(); } catch(e) {}
+            SFX.toExile();
             setCastError({ pIdx, message: `Exiled ${exiled} permanent(s) with MV ≤ ${effect.threshold}` });
             setTimeout(() => setCastError(null), 2000);
             setTimeout(() => cleanupAttachments([0, 1]), 50);
@@ -5940,7 +6012,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                   return { ...prev, battlefield: rest, exile: [...prev.exile, ...toExile.map(c => ({ ...c, tapped: false, counters: {} }))] };
                 });
               });
-              try { SFX.toExile(); } catch(e) {}
+              SFX.toExile();
               setCastError({ pIdx, message: `Exiled ${exiled} ${colorOnly ? 'colored ' : ''}permanent(s) with MV ≤ ${threshold}` });
               setTimeout(() => setCastError(null), 2000);
               setTimeout(() => cleanupAttachments([0, 1]), 50);
@@ -5972,17 +6044,17 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                 return { ...prev, battlefield: surviving, graveyard: [...prev.graveyard, ...dying] };
               });
             });
-            try { SFX.creatureDeath(); } catch(e) {}
+            SFX.creatureDeath();
             setCastError({ pIdx, message: `${dmg} damage to each creature — ${killed} killed${survived > 0 ? `, ${survived} survived` : ''}` });
             setTimeout(() => setCastError(null), 2500);
             setTimeout(() => cleanupAttachments([0, 1]), 50);
           } else if (effect.subtype === 'exile_opponent_artifacts_creatures') {
             // Ajani-style: exile opponent's artifacts + creatures, with optional life condition
-            const startingLife = 20;
+            const baseLife = GAME_CONSTANTS.STARTING_LIFE;
             const myLife = getState(pIdx).life;
             const threshold = effect.lifeThreshold || 0;
-            if (threshold > 0 && myLife < startingLife + threshold) {
-              setCastError({ pIdx, message: `⚠️ Need ${startingLife + threshold} life (currently ${myLife}) — condition not met!` });
+            if (threshold > 0 && myLife < baseLife + threshold) {
+              setCastError({ pIdx, message: `⚠️ Need ${baseLife + threshold} life (currently ${myLife}) — condition not met!` });
               setTimeout(() => setCastError(null), 2500);
               break;
             }
@@ -6004,7 +6076,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                 return prev;
               });
             }
-            try { SFX.toExile(); } catch(e) {}
+            SFX.toExile();
             setCastError({ pIdx, message: `Exiled ${exiled} of opponent's artifacts & creatures${effect.exileSelf ? ' (+ self)' : ''}` });
             setTimeout(() => setCastError(null), 2500);
             setTimeout(() => cleanupAttachments([oppIdx]), 50);
@@ -6018,7 +6090,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                 return { ...prev, battlefield: rest, exile: [...prev.exile, ...toExile.map(c => ({ ...c, tapped: false }))] };
               });
             });
-            try { SFX.toExile(); } catch(e) {}
+            SFX.toExile();
             setCastError({ pIdx, message: `Exiled ${exiled} artifact(s)` });
             setTimeout(() => setCastError(null), 2000);
             setTimeout(() => cleanupAttachments([0, 1]), 50);
@@ -6032,7 +6104,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                 return { ...prev, battlefield: rest, exile: [...prev.exile, ...toExile.map(c => ({ ...c, tapped: false }))] };
               });
             });
-            try { SFX.toExile(); } catch(e) {}
+            SFX.toExile();
             setCastError({ pIdx, message: `Exiled ${exiled} enchantment(s)` });
             setTimeout(() => setCastError(null), 2000);
             setTimeout(() => cleanupAttachments([0, 1]), 50);
@@ -6061,7 +6133,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                 return { ...prev, battlefield: rest, hand: [...prev.hand, ...toBounce.map(c => ({ ...c, tapped: false, counters: {}, tempBuffs: null }))] };
               });
             });
-            try { SFX.massReturn(); } catch(e) {}
+            SFX.massReturn();
             const excStr = exceptions.length > 0 ? ` (except ${exceptions.join(', ')})` : '';
             setCastError({ pIdx, message: `Bounced ${bounced} ${effect.target} to hand${excStr}` });
             setTimeout(() => setCastError(null), 2500);
@@ -6096,7 +6168,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
               };
             });
           });
-          try { SFX.toExile(); } catch(e) {}
+          SFX.toExile();
           setCastError({ pIdx, message: `Shadow's Verdict: Exiled ${svExiled} creature(s)/PW(s) with MV ≤ ${svThreshold} from battlefield + graveyards` });
           setTimeout(() => setCastError(null), 3000);
           setTimeout(() => cleanupAttachments([0, 1]), 50);
@@ -6148,7 +6220,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
               });
             }
 
-            try { SFX.toExile(); } catch(e) {}
+            SFX.toExile();
             setCastError({ pIdx, message: `Farewell: Exiled ${totalExiled} card(s)` });
             setTimeout(() => setCastError(null), 2500);
             setTimeout(() => cleanupAttachments([0, 1]), 50);
@@ -6167,7 +6239,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         case 'lose_life':
           setState(pIdx, prev => ({ ...prev, life: prev.life - (effect.amount || 0) }));
           markDealtDamage(pIdx);
-          try { SFX.lifeLoss(); } catch(e) {}
+          SFX.lifeLoss();
           setCastError({ pIdx, message: `You lose ${effect.amount} life (${card.name})` });
           setTimeout(() => setCastError(null), 2000);
           break;
@@ -6252,7 +6324,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
           for (const [color, amount] of Object.entries(mana)) {
             if (amount > 0) parts.push(`${amount}x {${color}}`);
           }
-          try { SFX.manaAdd?.() || SFX.tapLand?.(); } catch(e) {}
+          SFX.manaAdd?.() || SFX.tapLand?.();
           setCastError({ pIdx, message: `🔮 Added ${parts.join(', ')} to mana pool`, background: '#1a1a2a' });
           setTimeout(() => setCastError(null), 2500);
           break;
@@ -6267,7 +6339,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                 newPool[color] = (newPool[color] || 0) + effect.amount;
                 return { ...prev, manaPool: newPool };
               });
-              try { SFX.manaAdd?.() || SFX.tapLand?.(); } catch(e) {}
+              SFX.manaAdd?.() || SFX.tapLand?.();
               setCastError({ pIdx, message: `🔮 Added ${effect.amount}x {${color}} to mana pool`, background: '#1a1a2a' });
               setTimeout(() => setCastError(null), 2500);
             }
@@ -6287,13 +6359,16 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
 
   // Cast a specific face of an adventure card, or cast a normal card
   // Resolve a spell that was on the stack (called after opponent clicks "Resolve")
+  // ═══════════════════════════════════════════════════════════════
+  // §6. SPELL CASTING & STACK
+  // ═══════════════════════════════════════════════════════════════
   const resolveSpellFromStack = (stackEntry) => {
     const { pIdx, card, asAdventure, fromExile } = stackEntry;
     const sourceZone = fromExile ? 'exile' : 'hand';
 
     if (asAdventure && isAdventure(card)) {
       // Adventure: move to exile
-      try { SFX.playSpell(); } catch(e) {}
+      SFX.playSpell();
       setState(pIdx, prev => {
         const source = prev[sourceZone].filter(c => c.id !== card.id);
         return { ...prev, [sourceZone]: source, exile: [...prev.exile, { ...card, tapped: false, adventureCast: true }] };
@@ -6318,7 +6393,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     }
 
     if (isSpellCard(card)) {
-      try { SFX.playSpell(); } catch(e) {}
+      SFX.playSpell();
       // Move spell to graveyard
       setState(pIdx, prev => {
         const source = prev[sourceZone].filter(c => c.id !== card.id);
@@ -6350,7 +6425,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     moveCard(pIdx, card, fromZone, 'battlefield');
     // Play planeswalker entrance sound
     if (isPlaneswalker(card)) {
-      try { SFX.planeswalkerEnters(); } catch(e) {}
+      SFX.planeswalkerEnters();
     }
     const etbEffects = parseETBEffects(card);
 
@@ -6378,7 +6453,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
   // Counter a spell on the stack
   const counterSpellOnStack = (stackEntry) => {
     const { pIdx, card, fromExile } = stackEntry;
-    try { SFX.counterspell(); } catch(e) {}
+    SFX.counterspell();
     // Countered spell goes to graveyard, card removed from source zone (mana already paid)
     const sourceZone = fromExile ? 'exile' : 'hand';
     setState(pIdx, prev => {
@@ -6422,7 +6497,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
           const source = prev[sourceZone].filter(c => c.id !== counterEntry.card.id);
           return { ...prev, [sourceZone]: source, graveyard: [...prev.graveyard, { ...counterEntry.card, tapped: false }] };
         });
-        try { SFX.playSpell(); } catch(e) {}
+        SFX.playSpell();
         const opponentPIdx = topSpell.pIdx === 0 ? 1 : 0;
         setCastError({ pIdx: opponentPIdx, message: `⚠️ ${spellBelow.displayName} can't be countered! ${topSpell.displayName} fizzles.` });
         setTimeout(() => setCastError(null), 3000);
@@ -6437,7 +6512,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
           const source = prev[counterSourceZone].filter(c => c.id !== counterEntry.card.id);
           return { ...prev, [counterSourceZone]: source, graveyard: [...prev.graveyard, { ...counterEntry.card, tapped: false }] };
         });
-        try { SFX.playSpell(); } catch(e) {}
+        SFX.playSpell();
         // Counter the target spell
         counterSpellOnStack(spellBelow);
         const opponentPIdx = topSpell.pIdx === 0 ? 1 : 0;
@@ -6552,7 +6627,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
           return { ...c, tapped: shouldTap ? true : c.tapped, counters };
         }),
       }));
-      try { SFX.playSpell(); } catch(e) {}
+      SFX.playSpell();
       const modAmt = applyVorinclexModifier(pIdx, data.addCounters.amount);
       setCastError({ pIdx, message: `${card.name}: +${modAmt} ${data.addCounters.type} counters (stays land)`, background: '#1a3320' });
       setTimeout(() => setCastError(null), 1500);
@@ -6596,7 +6671,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       }),
     }));
 
-    try { SFX.playSpell(); } catch(e) {}
+    SFX.playSpell();
     const modCounterAmt = data.addCounters ? applyVorinclexModifier(pIdx, data.addCounters.amount) : 0;
     const counterMsg = data.addCounters ? ` (+${modCounterAmt} ${data.addCounters.type} counters)` : '';
     setCastError({ pIdx, message: `${card.name} becomes a ${power}/${toughness} creature${counterMsg}`, background: '#1a3320' });
@@ -6653,14 +6728,12 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     }));
     // Draw a card
     drawCard(pIdx);
-    try { SFX.playSpell(); } catch(e) {}
+    SFX.playSpell();
     setCastError({ pIdx, message: `Cycled ${getDisplayName(card)} — drew a card`, background: '#1a2a33' });
     setTimeout(() => setCastError(null), 1500);
 
     // Check for cycling triggers (e.g. Shark Typhoon: "When you cycle ~, create an X/X blue Shark creature token with flying")
-    const oracle = (card.oracle_text || '').toLowerCase();
-    const faces = card.card_faces || [];
-    const allText = [oracle, ...faces.map(f => (f.oracle_text || '').toLowerCase())].filter(Boolean).join('\n');
+    const allText = getOracleText(card);
     if (allText.includes('when you cycle') || allText.includes('cycling this card')) {
       // Auto-detect "create an X/X [color] [type] creature token [with keywords]"
       const cycleTokenMatch = allText.match(/create an? x\/x\s+([\w\s]+?)\s+creature token\s*(?:with\s+([\w\s,]+))?/);
@@ -6829,7 +6902,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         applySpellEffect(spellTargeting.pIdx, pIdx, card, spellTargeting.effects);
         setCastError(prev => prev ? { ...prev, message: `${getDisplayName(spellTargeting.card)} → ${card.name}`, background: '#1a3320' } : null);
         setTimeout(() => setCastError(null), 1500);
-        try { SFX.playSpell(); } catch(e) {}
+        SFX.playSpell();
         return;
       }
       // Combat mode: declare attackers
@@ -6868,7 +6941,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       if (dmg > 0) {
         setState(targetPIdx, prev => ({ ...prev, life: prev.life - dmg }));
         markDealtDamage(targetPIdx);
-        try { SFX.playerDamage(); } catch(e) {}
+        SFX.playerDamage();
         setCastError({ pIdx: spellTargeting.pIdx, message: `${getDisplayName(spellTargeting.card)}: ${dmg} damage to ${getState(targetPIdx).name}`, background: '#1a3320' });
         setTimeout(() => setCastError(null), 1500);
       }
@@ -6881,19 +6954,22 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     setCastError(null);
   };
 
-  const [turnCount, _setTurnCount] = useState(1);
-  const [currentPhase, _setCurrentPhase] = useState('main1');
-  const setTurnCount = (v) => { _setTurnCount(v); if (onlineMode) onlineSyncNeededRef.current = true; };
-  const setCurrentPhase = (v) => { _setCurrentPhase(v); if (onlineMode) onlineSyncNeededRef.current = true; };
+  // ═══════════════════════════════════════════════════════════════
+  // §8. TURN & PHASE MANAGEMENT
+  // ═══════════════════════════════════════════════════════════════
+  const [turnCount, _setTurnCount] = useState(1); // SYNCED
+  const [currentPhase, _setCurrentPhase] = useState('main1'); // SYNCED
+  const setTurnCount = syncSetter(_setTurnCount);
+  const setCurrentPhase = syncSetter(_setCurrentPhase);
 
   // Combat system state
-  const [combatState, _setCombatState] = useState(null);
-  const setCombatState = (v) => { _setCombatState(v); if (onlineMode) onlineSyncNeededRef.current = true; };
+  const [combatState, _setCombatState] = useState(null); // SYNCED
+  const setCombatState = syncSetter(_setCombatState);
   const combatStateRef = useRef(combatState);
   combatStateRef.current = combatState;
   const [combatLog, setCombatLog] = useState(null);
-  const [preventCombatDamage, _setPreventCombatDamage] = useState(false);
-  const setPreventCombatDamage = (v) => { _setPreventCombatDamage(v); if (onlineMode) onlineSyncNeededRef.current = true; };
+  const [preventCombatDamage, _setPreventCombatDamage] = useState(false); // SYNCED
+  const setPreventCombatDamage = syncSetter(_setPreventCombatDamage);
   // { phase: 'attackers'|'pw-targets'|'combat-respond'|'blockers'|'damage', attackers: [cardId], attackTargets: { attackerId: 'player'|pwCardId }, blocks: { attackerId: [blockerId] }, selectedBlocker: cardId|null }
 
   // Auto-log ETB/LTB reminders to the game log
@@ -6930,7 +7006,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         const timer = setTimeout(() => setGameOver({ winner, loser, reason }), 2000);
         return () => clearTimeout(timer);
       }
-      if (p.poison >= 10) {
+      if (p.poison >= GAME_CONSTANTS.POISON_LETHAL) {
         const winner = opponent.name, loser = p.name, reason = `${p.name} reached ${p.poison} poison counters`;
         const timer = setTimeout(() => setGameOver({ winner, loser, reason }), 2000);
         return () => clearTimeout(timer);
@@ -6966,6 +7042,9 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     concessionHandledRef.current = concession;
   }, [concession, matchInfo]);
 
+  // ═══════════════════════════════════════════════════════════════
+  // §7. COMBAT SYSTEM
+  // ═══════════════════════════════════════════════════════════════
   const enterCombat = () => {
     setCurrentPhase('combat');
     setCombatState({ phase: 'attackers', attackers: [], attackTargets: {}, blocks: {}, selectedBlocker: null });
@@ -7035,7 +7114,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         return hasVigilance ? c : { ...c, tapped: true };
       }),
     }));
-    try { SFX.tap(); } catch(e) {}
+    SFX.tap();
 
     // Apply "until next turn" attacker debuffs (e.g. Jace's +1: attackers get -1/-0)
     const defender = getState(defendingPlayer);
@@ -7316,7 +7395,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
 
   const executePassTurn = () => {
     setEndOfTurnRespond(false);
-    try { SFX.passTurn(); } catch(e) {}
+    SFX.passTurn();
     revertCreatureLands(0);
     revertCreatureLands(1);
     // Return temporarily controlled cards (Claim the Firstborn, Act of Treason, etc.)
@@ -7366,9 +7445,9 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     });
     setCurrentPhase('main1');
     setPreventCombatDamage(false);
-    try { SFX.untapAll(); } catch(e) {}
+    SFX.untapAll();
     // In online mode the receiving player plays the draw SFX when they auto-draw
-    if (!onlineMode) { try { SFX.draw(); } catch(e) {} }
+    if (!onlineMode) { SFX.draw(); }
     // Process upkeep triggers for BOTH players (Midnight Clock triggers at beginning of EACH upkeep)
     // In online mode, only process our own permanents' triggers
     setTimeout(() => {
@@ -7571,7 +7650,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       }
     }
 
-    try { SFX.tap(); } catch(e) {}
+    SFX.tap();
     setCombatState(prev => ({ ...prev, phase: 'damage' }));
     // Resolve damage after a short delay for visual feedback
     setTimeout(() => {
@@ -7770,7 +7849,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
 
     // Apply damage to defending player
     if (damageToDefender > 0) {
-      try { SFX.playerDamage(); } catch(e) {}
+      SFX.playerDamage();
       setState(defendingPlayer, prev => ({ ...prev, life: prev.life - damageToDefender }));
       markDealtDamage(defendingPlayer);
     }
@@ -7900,15 +7979,15 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
           const label = ret.type === 'undying' ? 'Undying (+1/+1 counter)' : 'Persist (-1/-1 counter)';
           setCastError({ pIdx: ret.pIdx, message: `♻️ ${ret.card.name} returns with ${label}!` });
           setTimeout(() => setCastError(null), 2500);
-          try { SFX.playCreature(); } catch(e) {}
+          SFX.playCreature();
         }
       }, 800);
     }
 
     if (killAttacker.length > 0 || killDefender.length > 0) {
-      try { SFX.creatureDeath(); } catch(e) {}
+      SFX.creatureDeath();
     } else if (damageToDefender > 0) {
-      try { SFX.combatDamage(); } catch(e) {}
+      SFX.combatDamage();
     }
 
     // Build detailed combat log
@@ -8259,14 +8338,14 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
           <div className="flex items-center gap-2">
             <div className="life-counter">
               <button onClick={() => {
-                try { SFX.lifeLoss(); } catch(e) {}
+                SFX.lifeLoss();
                 updatePlayer(pIdx, { life: p.life - 1 });
                 markDealtDamage(pIdx);
                 if (pIdx !== activePlayer) { setCastError({ pIdx: activePlayer, message: `−1 life to ${p.name}` }); setTimeout(() => setCastError(null), 1200); }
               }}>−</button>
               <span className="life-value">{p.life}</span>
               <button onClick={() => {
-                try { SFX.lifeGain(); } catch(e) {}
+                SFX.lifeGain();
                 updatePlayer(pIdx, { life: p.life + 1 });
                 if (pIdx !== activePlayer) { setCastError({ pIdx: activePlayer, message: `+1 life to ${p.name}` }); setTimeout(() => setCastError(null), 1200); }
               }}>+</button>
@@ -8274,7 +8353,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
             <div style={{ display: 'flex', alignItems: 'center', gap: 3, fontSize: 11, color: p.poison > 0 ? '#a0e060' : 'rgba(255,255,255,0.3)' }}>
               <span style={{ fontSize: 13 }}>☠</span>
               <span style={{ fontWeight: 700, minWidth: 14, textAlign: 'center' }}>{p.poison}</span>
-              <span style={{ cursor: 'pointer', opacity: 0.5, fontSize: 10 }} onClick={() => { try { SFX.damage(); } catch(e) {} updatePlayer(pIdx, { poison: p.poison + 1 }); }}>▲</span>
+              <span style={{ cursor: 'pointer', opacity: 0.5, fontSize: 10 }} onClick={() => { SFX.damage(); updatePlayer(pIdx, { poison: p.poison + 1 }); }}>▲</span>
               <span style={{ cursor: 'pointer', opacity: 0.5, fontSize: 10 }} onClick={() => { updatePlayer(pIdx, { poison: Math.max(0, p.poison - 1) }); }}>▼</span>
             </div>
           {isCommander && (
@@ -8554,6 +8633,9 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     );
   };
 
+  // ═══════════════════════════════════════════════════════════════
+  // §11. RENDER (JSX)
+  // ═══════════════════════════════════════════════════════════════
   return (
     <div style={{ height: '100vh', display: 'flex', flexDirection: 'column' }}>
 
@@ -8733,7 +8815,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
               {combatState.phase === 'attackers' && (!onlineMode || activePlayer === onlinePlayerIndex) && (
                 <>
                   <button className="btn btn-gold" onClick={() => {
-                    try { SFX.attack(); } catch(e) {}
+                    SFX.attack();
                     confirmAttackers();
                   }}>Confirm Attackers ({combatState.attackers.length})</button>
                   <button className="btn" onClick={cancelCombat}>Cancel</button>
@@ -8823,11 +8905,11 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                     {canBlock && (
                       <>
                         <button className="btn btn-primary" onClick={() => {
-                          try { SFX.block(); } catch(e) {}
+                          SFX.block();
                           confirmBlockers();
                         }}>Confirm Blockers</button>
                         <button className="btn" style={{ fontSize: 10 }} onClick={() => {
-                          try { SFX.block(); } catch(e) {}
+                          SFX.block();
                           confirmBlockers();
                         }}>No Blocks</button>
                       </>
@@ -8936,7 +9018,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
             <div style={{ display: 'flex', gap: 8, justifyContent: 'center' }}>
               <button className="btn btn-gold" onClick={() => {
                 const { pIdx, card, from } = commanderDeathChoice;
-                try { SFX.toGraveyard(); } catch(e) {}
+                SFX.toGraveyard();
                 setState(pIdx, prev => ({
                   ...prev,
                   [from]: prev[from].filter(c => c.id !== card.id),
@@ -9540,7 +9622,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                         return { ...prev, manaPool: newPool };
                       });
                       // Spell stays on the stack — counter fizzles
-                      try { SFX.playSpell(); } catch(e) {}
+                      SFX.playSpell();
                       setCastError({ pIdx: targetPIdx, message: `💰 Paid {${payAmount}} — ${targetEntry.displayName} was NOT countered!` });
                       setTimeout(() => setCastError(null), 2500);
                       addGameLog(targetPIdx, '💰', `Paid {${payAmount}} to prevent ${sacCard.name} from countering ${targetEntry.displayName}`);
@@ -9551,7 +9633,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                   <button className="btn" style={{ padding: '10px 24px', fontSize: 13, borderColor: 'rgba(220,80,60,0.4)', color: '#e06050' }}
                     onClick={() => {
                       // Don't pay — spell is countered
-                      try { SFX.counterspell(); } catch(e) {}
+                      SFX.counterspell();
                       // Remove the targeted spell from stack
                       setSpellStack(prev => prev.filter(e => e !== targetEntry));
                       // Counter the spell (move to graveyard)
@@ -9951,7 +10033,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                             const oppIdx = pIdx === 0 ? 1 : 0;
                             setState(oppIdx, prev => ({ ...prev, life: prev.life - pwReminder.exileCastDmg }));
                             markDealtDamage(oppIdx);
-                            try { SFX.lifeLoss(); } catch(e) {}
+                            SFX.lifeLoss();
                             addGameLog(pIdx, '🔥', `${pwReminder.card.name}: Didn't cast ${pwReminder.exiledCard.name} — deals ${pwReminder.exileCastDmg} damage to ${getState(oppIdx).name}`);
                             setPwReminder(null);
                           }}>
@@ -10238,7 +10320,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         const iAmWinner = onlineMode ? (winnerIdx === onlinePlayerIndex) : true;
         if (iAmWinner && !gameOver._soundPlayed) {
           gameOver._soundPlayed = true;
-          try { SFX.playerWins(); } catch(e) {}
+          SFX.playerWins();
         }
 
         return (
