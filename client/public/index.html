@@ -630,7 +630,7 @@
 
   /* ===== GAME ACTION LOG ===== */
   .game-log-toggle {
-    position: fixed; bottom: 8px; right: 8px; z-index: 950;
+    position: fixed; top: 8px; left: 8px; z-index: 950;
     background: rgba(20,18,30,0.85); border: 1px solid rgba(200,170,60,0.3);
     color: rgba(200,170,60,0.8); padding: 4px 10px; border-radius: 12px;
     font-size: 11px; font-weight: 700; cursor: pointer;
@@ -644,7 +644,7 @@
     min-width: 14px; text-align: center;
   }
   .game-log-panel {
-    position: fixed; bottom: 36px; right: 8px; z-index: 940;
+    position: fixed; top: 36px; left: 8px; z-index: 940;
     width: 300px; max-height: 340px; overflow-y: auto;
     background: rgba(12,10,20,0.92); border: 1px solid rgba(200,170,60,0.2);
     border-radius: 10px; backdrop-filter: blur(12px);
@@ -815,8 +815,6 @@ const { useState, useEffect, useRef, useCallback, useMemo } = React;
 // ============ SOUND ENGINE (Web Audio API) — Arena-Inspired ============
 const SFX = (() => {
   let ctx = null;
-  let reverbBuf = null;
-  let hallBuf = null;
 
   // === WAV file playback system ===
   const wavCache = {}; // url -> AudioBuffer
@@ -830,6 +828,7 @@ const SFX = (() => {
     planeswalkerEnters: '/sounds/Planeswalker_Enters.wav',
     playerWins: '/sounds/Player_Wins.wav',
     massReturn: '/sounds/Return_All_Creatures.wav',
+    playCreature: '/sounds/Creature_Enters.wav',
   };
 
   const playWav = (key, volume = 0.5) => {
@@ -878,365 +877,40 @@ const SFX = (() => {
   const getCtx = () => {
     if (!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)();
     if (ctx.state === 'suspended') ctx.resume();
-    if (!reverbBuf) createReverbs();
     preloadWavs();
     return ctx;
   };
 
-  // Two reverb impulse responses: tight room + large hall
-  const createReverbs = () => {
-    const c = ctx;
-    // Tight room reverb (short, punchy reflections)
-    const rLen = c.sampleRate * 0.8;
-    reverbBuf = c.createBuffer(2, rLen, c.sampleRate);
-    for (let ch = 0; ch < 2; ch++) {
-      const d = reverbBuf.getChannelData(ch);
-      for (let i = 0; i < rLen; i++) {
-        const t = i / rLen;
-        d[i] = (Math.random() * 2 - 1) * Math.pow(1 - t, 3) * 0.25;
-      }
-    }
-    // Large hall reverb (long, atmospheric tail — Arena style)
-    const hLen = c.sampleRate * 2.5;
-    hallBuf = c.createBuffer(2, hLen, c.sampleRate);
-    for (let ch = 0; ch < 2; ch++) {
-      const d = hallBuf.getChannelData(ch);
-      for (let i = 0; i < hLen; i++) {
-        const t = i / hLen;
-        // Early reflections + smooth exponential decay
-        const early = t < 0.05 ? Math.sin(t * 200) * 0.3 : 0;
-        d[i] = ((Math.random() * 2 - 1) * Math.pow(1 - t, 2) * 0.2) + early;
-      }
-    }
-  };
-
-  // Master output with selectable reverb type
-  const getMaster = (dryLevel = 0.7, wetLevel = 0.2, useHall = false) => {
-    const c = getCtx();
-    const dry = c.createGain();
-    const wet = c.createGain();
-    const conv = c.createConvolver();
-    dry.gain.value = dryLevel;
-    wet.gain.value = wetLevel;
-    const buf = useHall ? hallBuf : reverbBuf;
-    if (buf) conv.buffer = buf;
-    const input = c.createGain();
-    input.connect(dry);
-    input.connect(conv);
-    conv.connect(wet);
-    dry.connect(c.destination);
-    wet.connect(c.destination);
-    return input;
-  };
-
-  // Tone with ADSR envelope — tighter, punchier transients
-  const tone = (freq, opts = {}) => {
-    const c = getCtx();
-    const {
-      type = 'sine', vol = 0.08, attack = 0.003, decay = 0.08,
-      sustain = 0.3, release = 0.2, duration = 0.4,
-      freqEnd = null, detune = 0, delay = 0,
-      reverb = 0.2, hall = false,
-      filterFreq = 0, filterQ = 1
-    } = opts;
-
-    const t = c.currentTime + delay;
-    const master = getMaster(0.75, reverb, hall);
-
-    const osc = c.createOscillator();
-    const gain = c.createGain();
-    osc.type = type;
-    osc.frequency.setValueAtTime(freq, t);
-    osc.detune.value = detune;
-    if (freqEnd) {
-      osc.frequency.setValueAtTime(freq, t + attack);
-      osc.frequency.exponentialRampToValueAtTime(Math.max(freqEnd, 20), t + duration);
-    }
-
-    // ADSR — fast attack for punch
-    gain.gain.setValueAtTime(0.001, t);
-    gain.gain.linearRampToValueAtTime(vol, t + attack);
-    gain.gain.linearRampToValueAtTime(vol * sustain, t + attack + decay);
-    gain.gain.setValueAtTime(vol * sustain, t + duration - release);
-    gain.gain.exponentialRampToValueAtTime(0.001, t + duration);
-
-    if (filterFreq > 0) {
-      const filt = c.createBiquadFilter();
-      filt.type = 'lowpass';
-      filt.frequency.setValueAtTime(filterFreq, t);
-      filt.Q.value = filterQ;
-      osc.connect(filt);
-      filt.connect(gain);
-    } else {
-      osc.connect(gain);
-    }
-    gain.connect(master);
-    osc.start(t);
-    osc.stop(t + duration + 0.05);
-  };
-
-  // Filtered noise burst — sharper transient
-  const noise = (opts = {}) => {
-    const c = getCtx();
-    const {
-      vol = 0.04, attack = 0.002, duration = 0.15, release = 0.1,
-      freq = 2000, freqEnd = null, Q = 0.8, type = 'lowpass',
-      delay = 0, reverb = 0.1, hall = false
-    } = opts;
-
-    const t = c.currentTime + delay;
-    const master = getMaster(0.75, reverb, hall);
-
-    const len = c.sampleRate * (duration + 0.1);
-    const buf = c.createBuffer(1, len, c.sampleRate);
-    const data = buf.getChannelData(0);
-    for (let i = 0; i < len; i++) data[i] = Math.random() * 2 - 1;
-
-    const src = c.createBufferSource();
-    src.buffer = buf;
-    const gain = c.createGain();
-    const filter = c.createBiquadFilter();
-    filter.type = type;
-    filter.frequency.setValueAtTime(freq, t);
-    filter.Q.value = Q;
-    if (freqEnd) filter.frequency.exponentialRampToValueAtTime(freqEnd, t + duration);
-
-    gain.gain.setValueAtTime(0.001, t);
-    gain.gain.linearRampToValueAtTime(vol, t + attack);
-    gain.gain.setValueAtTime(vol, t + duration - release);
-    gain.gain.exponentialRampToValueAtTime(0.001, t + duration);
-
-    src.connect(filter);
-    filter.connect(gain);
-    gain.connect(master);
-    src.start(t);
-    src.stop(t + duration + 0.05);
-  };
-
   return {
-    // Card draw — quick snap with airy whoosh, Arena-style crisp
-    draw() {
-      noise({ vol: 0.06, duration: 0.12, freq: 5000, freqEnd: 8000, attack: 0.002, release: 0.08, reverb: 0.15 });
-      noise({ vol: 0.04, duration: 0.07, freq: 10000, freqEnd: 3000, delay: 0.04, release: 0.05, reverb: 0.1 });
-      tone(1800, { vol: 0.02, duration: 0.06, attack: 0.002, release: 0.04, delay: 0.01, reverb: 0.2, hall: true });
-    },
+    // WAV-based sounds (user-requested)
+    tap() { playWav('tap', 0.6); },
+    playLand() { playWav('playLand', 0.5); },
+    combatDamage() { playWav('combatDamage', 0.5); },
+    lifeLoss() { playWav('lifeLoss', 0.5); },
+    playerDamage() { playWav('playerDamage', 0.5); },
+    counterspell() { playWav('counterspell', 0.6); },
+    planeswalkerEnters() { playWav('planeswalkerEnters', 0.5); },
+    playerWins() { playWav('playerWins', 0.5); },
+    massReturn() { playWav('massReturn', 0.5); },
 
-    // Tap — WAV file
-    tap() {
-      playWav('tap', 0.6);
-    },
-
-    // Untap — lighter reverse click
-    untap() {
-      tone(700, { vol: 0.04, duration: 0.05, attack: 0.001, decay: 0.015, sustain: 0.05, release: 0.03, reverb: 0.2, hall: true });
-      tone(400, { vol: 0.03, duration: 0.04, attack: 0.002, release: 0.03 });
-      noise({ vol: 0.02, duration: 0.025, freq: 5000, release: 0.02, attack: 0.001 });
-    },
-
-    // Untap all — cascading crystalline ripple through hall
-    untapAll() {
-      for (let i = 0; i < 6; i++) {
-        tone(500 + i * 80, { vol: 0.03, duration: 0.12, attack: 0.002, decay: 0.03, sustain: 0.2, release: 0.08, delay: i * 0.03, reverb: 0.3, hall: true });
-      }
-      noise({ vol: 0.02, duration: 0.25, freq: 4000, freqEnd: 7000, release: 0.2, reverb: 0.35, hall: true });
-      // Magical shimmer on top
-      tone(2000, { vol: 0.01, duration: 0.3, attack: 0.05, release: 0.2, delay: 0.08, reverb: 0.4, hall: true, type: 'triangle' });
-    },
-
-    // Creature — heavy slam with magical resonance and hall reverb
-    playCreature() {
-      // Punchy impact transient
-      noise({ vol: 0.1, duration: 0.08, freq: 800, freqEnd: 150, attack: 0.001, release: 0.06, Q: 2, reverb: 0.3, hall: true });
-      // Deep body slam
-      tone(65, { vol: 0.16, duration: 0.5, attack: 0.003, decay: 0.08, sustain: 0.25, release: 0.35, freqEnd: 35, reverb: 0.35, hall: true });
-      // Mid-range presence
-      tone(130, { vol: 0.07, duration: 0.25, attack: 0.005, decay: 0.06, sustain: 0.15, release: 0.15, type: 'triangle', delay: 0.005, reverb: 0.25, hall: true });
-      // Sub rumble
-      tone(35, { vol: 0.08, duration: 0.4, attack: 0.01, release: 0.3, delay: 0.01, reverb: 0.4, hall: true });
-      // Magical overtone (Arena-like shimmer after impact)
-      tone(520, { vol: 0.015, duration: 0.3, attack: 0.04, release: 0.2, delay: 0.08, reverb: 0.5, hall: true, detune: 5 });
-    },
-
-    // Land — WAV file (mana enters)
-    playLand() {
-      playWav('playLand', 0.5);
-    },
-
-    // Spell — ethereal arcane burst with sweeping resonance
-    playSpell() {
-      // Fast rising attack
-      tone(400, { vol: 0.06, duration: 0.35, attack: 0.005, sustain: 0.4, release: 0.2, freqEnd: 1200, reverb: 0.4, hall: true });
-      // Layered magical harmonics
-      tone(600, { vol: 0.035, duration: 0.3, attack: 0.01, sustain: 0.35, release: 0.2, type: 'triangle', delay: 0.03, freqEnd: 1500, detune: 8, reverb: 0.45, hall: true });
-      tone(900, { vol: 0.02, duration: 0.25, attack: 0.03, release: 0.18, delay: 0.06, freqEnd: 1800, reverb: 0.5, hall: true });
-      // Sparkle noise
-      noise({ vol: 0.025, duration: 0.25, freq: 6000, freqEnd: 12000, delay: 0.02, release: 0.2, reverb: 0.4, hall: true });
-      // Airy tail
-      noise({ vol: 0.01, duration: 0.35, freq: 3000, freqEnd: 1000, delay: 0.15, release: 0.25, reverb: 0.5, hall: true });
-    },
-
-    // Life gain — bright ascending chime triad with sparkle
-    lifeGain() {
-      // C major triad ascending
-      tone(523, { vol: 0.06, duration: 0.3, attack: 0.003, decay: 0.06, sustain: 0.4, release: 0.2, reverb: 0.35, hall: true });
-      tone(659, { vol: 0.055, duration: 0.3, attack: 0.003, sustain: 0.38, release: 0.2, delay: 0.06, reverb: 0.35, hall: true });
-      tone(784, { vol: 0.05, duration: 0.35, attack: 0.003, sustain: 0.35, release: 0.25, delay: 0.12, reverb: 0.4, hall: true });
-      // High sparkle
-      tone(1568, { vol: 0.018, duration: 0.25, attack: 0.005, release: 0.18, delay: 0.18, type: 'triangle', reverb: 0.5, hall: true });
-      // Shimmer noise
-      noise({ vol: 0.01, duration: 0.2, freq: 8000, freqEnd: 12000, delay: 0.1, release: 0.15, reverb: 0.4, hall: true });
-    },
-
-    // Life loss — WAV file
-    lifeLoss() {
-      playWav('lifeLoss', 0.5);
-    },
-
-    // Damage — sharp punchy hit with arena-style impact
-    damage() {
-      // Sharp transient
-      noise({ vol: 0.12, duration: 0.06, freq: 2000, freqEnd: 300, attack: 0.001, release: 0.05, Q: 2.5, reverb: 0.25, hall: true });
-      // Body thud
-      tone(120, { vol: 0.14, duration: 0.18, attack: 0.002, decay: 0.04, sustain: 0.1, release: 0.12, freqEnd: 40, reverb: 0.25, hall: true });
-      // Sub impact
-      tone(50, { vol: 0.09, duration: 0.2, attack: 0.005, release: 0.18, delay: 0.01, reverb: 0.3, hall: true });
-    },
-
-    // To graveyard — hollow, somber descent into darkness
-    toGraveyard() {
-      // Hollow body
-      tone(100, { vol: 0.09, duration: 0.45, attack: 0.005, sustain: 0.25, release: 0.35, freqEnd: 45, reverb: 0.35, hall: true });
-      // Eerie overtone
-      tone(150, { vol: 0.035, duration: 0.35, attack: 0.01, sustain: 0.2, release: 0.25, type: 'triangle', delay: 0.02, freqEnd: 70, reverb: 0.4, hall: true });
-      // Dark noise wash
-      noise({ vol: 0.03, duration: 0.2, freq: 400, freqEnd: 100, attack: 0.005, release: 0.15, reverb: 0.3, hall: true });
-      // Sub
-      tone(40, { vol: 0.04, duration: 0.3, attack: 0.02, release: 0.25, delay: 0.05, reverb: 0.4, hall: true });
-    },
-
-    // Exile — ethereal dissolve ascending into void
-    toExile() {
-      // Rising sweep
-      tone(300, { vol: 0.045, duration: 0.55, attack: 0.01, sustain: 0.35, release: 0.4, freqEnd: 2000, reverb: 0.5, hall: true });
-      // Parallel harmonic
-      tone(450, { vol: 0.03, duration: 0.45, attack: 0.02, release: 0.35, freqEnd: 2800, delay: 0.03, type: 'triangle', reverb: 0.55, hall: true, detune: 12 });
-      // Sparkle dissolve
-      noise({ vol: 0.03, duration: 0.5, freq: 3000, freqEnd: 12000, attack: 0.02, release: 0.35, reverb: 0.5, hall: true });
-      // Ghost whisper tail
-      noise({ vol: 0.01, duration: 0.4, freq: 1500, freqEnd: 6000, delay: 0.15, release: 0.3, reverb: 0.6, hall: true, type: 'bandpass', Q: 2 });
-    },
-
-    // Shuffle — rapid card riffle with room ambience
-    shuffle() {
-      for (let i = 0; i < 10; i++) {
-        const d = i * 0.028;
-        noise({ vol: 0.025 + Math.random() * 0.02, duration: 0.04, freq: 3500 + Math.random() * 4000, delay: d, release: 0.03, attack: 0.001, reverb: 0.15 });
-      }
-      noise({ vol: 0.018, duration: 0.3, freq: 2500, freqEnd: 5000, release: 0.25, reverb: 0.2, hall: true });
-      // Subtle card-in-hand settle
-      tone(300, { vol: 0.01, duration: 0.15, attack: 0.03, release: 0.1, delay: 0.2, reverb: 0.25, hall: true });
-    },
-
-    // Token creation — magical crystalline materialization
-    tokenCreate() {
-      // Rising crystal tones
-      tone(600, { vol: 0.045, duration: 0.2, attack: 0.002, decay: 0.04, sustain: 0.3, release: 0.15, reverb: 0.4, hall: true });
-      tone(900, { vol: 0.04, duration: 0.2, attack: 0.002, release: 0.15, delay: 0.05, type: 'triangle', reverb: 0.4, hall: true });
-      tone(1200, { vol: 0.035, duration: 0.22, attack: 0.002, release: 0.18, delay: 0.1, reverb: 0.45, hall: true });
-      tone(1800, { vol: 0.02, duration: 0.2, attack: 0.003, release: 0.15, delay: 0.15, reverb: 0.5, hall: true });
-      // Sparkle burst
-      noise({ vol: 0.02, duration: 0.2, freq: 8000, freqEnd: 14000, release: 0.15, delay: 0.03, reverb: 0.4, hall: true });
-      // Materialization whoosh
-      noise({ vol: 0.015, duration: 0.15, freq: 1000, freqEnd: 5000, delay: 0.02, release: 0.12, reverb: 0.3 });
-    },
-
-    // Mill — pages fluttering into graveyard
-    mill() {
-      noise({ vol: 0.045, duration: 0.1, freq: 4000, freqEnd: 1500, attack: 0.002, release: 0.08, reverb: 0.15 });
-      tone(180, { vol: 0.03, duration: 0.12, attack: 0.005, release: 0.1, type: 'triangle', freqEnd: 100, reverb: 0.2, hall: true });
-      // Paper flutter
-      noise({ vol: 0.02, duration: 0.08, freq: 6000, freqEnd: 2000, delay: 0.04, release: 0.06, reverb: 0.15 });
-    },
-
-    // Combat — sword swing, metallic
-    attack() {
-      // Metallic slash
-      noise({ vol: 0.08, duration: 0.15, freq: 3000, freqEnd: 800, release: 0.1, reverb: 0.3 });
-      // Impact ring
-      tone(220, { vol: 0.06, duration: 0.2, attack: 0.002, release: 0.15, type: 'sawtooth', freqEnd: 110, reverb: 0.25, hall: true });
-      // High metallic ping
-      tone(2200, { vol: 0.02, duration: 0.12, attack: 0.001, release: 0.08, delay: 0.03, reverb: 0.2 });
-    },
-
-    // Block — shield impact
-    block() {
-      // Heavy thud
-      tone(80, { vol: 0.08, duration: 0.2, attack: 0.002, release: 0.15, type: 'sine', reverb: 0.3, hall: true });
-      // Metal clank
-      noise({ vol: 0.06, duration: 0.1, freq: 1500, freqEnd: 500, release: 0.08, reverb: 0.2 });
-      tone(440, { vol: 0.03, duration: 0.08, attack: 0.001, release: 0.06, delay: 0.02 });
-    },
-
-    // Combat damage — WAV file (creatures hit)
-    combatDamage() {
-      playWav('combatDamage', 0.5);
-    },
-
-    // Player damage — WAV file (life loss spells)
-    playerDamage() {
-      playWav('playerDamage', 0.5);
-    },
-
-    // Creature death — dramatic
-    creatureDeath() {
-      // Descending wail
-      tone(400, { vol: 0.06, duration: 0.5, attack: 0.005, release: 0.4, type: 'sawtooth', freqEnd: 80, reverb: 0.5, hall: true });
-      // Dark rumble
-      tone(55, { vol: 0.05, duration: 0.4, attack: 0.01, release: 0.35, delay: 0.1, type: 'sine', reverb: 0.4, hall: true });
-      noise({ vol: 0.03, duration: 0.25, freq: 2000, freqEnd: 300, delay: 0.05, release: 0.2, reverb: 0.35 });
-    },
-
-    // Commander cast — epic, powerful
-    commanderCast() {
-      // Power chord
-      tone(220, { vol: 0.07, duration: 0.8, attack: 0.005, sustain: 0.5, release: 0.6, reverb: 0.5, hall: true });
-      tone(330, { vol: 0.05, duration: 0.7, attack: 0.008, sustain: 0.4, release: 0.5, delay: 0.05, reverb: 0.5, hall: true });
-      tone(440, { vol: 0.04, duration: 0.6, attack: 0.01, sustain: 0.3, release: 0.4, delay: 0.1, reverb: 0.5, hall: true, type: 'triangle' });
-      // Shimmer
-      noise({ vol: 0.015, duration: 0.5, freq: 6000, freqEnd: 12000, delay: 0.15, release: 0.4, reverb: 0.5, hall: true });
-    },
-
-    // Pass turn — clear bell chime echoing through arena hall
-    passTurn() {
-      // Primary bell
-      tone(587, { vol: 0.07, duration: 0.6, attack: 0.002, decay: 0.08, sustain: 0.3, release: 0.45, reverb: 0.45, hall: true });
-      // Harmonic fifth
-      tone(880, { vol: 0.035, duration: 0.5, attack: 0.003, sustain: 0.25, release: 0.4, delay: 0.06, reverb: 0.5, hall: true, type: 'triangle' });
-      // High overtone
-      tone(1174, { vol: 0.015, duration: 0.4, attack: 0.005, release: 0.3, delay: 0.03, reverb: 0.55, hall: true });
-      // Subtle shimmer
-      noise({ vol: 0.008, duration: 0.3, freq: 6000, freqEnd: 10000, delay: 0.08, release: 0.25, reverb: 0.4, hall: true });
-    },
-
-    // Counterspell — WAV file
-    counterspell() {
-      playWav('counterspell', 0.6);
-    },
-
-    // Planeswalker enters battlefield — WAV file
-    planeswalkerEnters() {
-      playWav('planeswalkerEnters', 0.5);
-    },
-
-    // Player wins — WAV file (only for the winner)
-    playerWins() {
-      playWav('playerWins', 0.5);
-    },
-
-    // Mass return/bounce — WAV file
-    massReturn() {
-      playWav('massReturn', 0.5);
-    }
+    // No-op stubs for removed synthesized sounds (prevents runtime errors)
+    draw() {},
+    untap() {},
+    untapAll() {},
+    playCreature() { playWav('playCreature', 0.5); },
+    playSpell() {},
+    lifeGain() {},
+    damage() {},
+    toGraveyard() {},
+    toExile() {},
+    shuffle() {},
+    tokenCreate() {},
+    mill() {},
+    attack() {},
+    block() {},
+    creatureDeath() {},
+    commanderCast() {},
+    passTurn() {},
   };
 })();
 
@@ -1456,6 +1130,27 @@ const PRESET_DECKS = [
 2 Adarkar Wastes (DMU)
 7 Island (THB) 251
 6 Plains (THB) 250`,
+  },
+  {
+    name: 'Boros Burn',
+    level: 2,
+    description: 'Red-white aggro — relentless burn spells, spectacle synergy, and Roiling Vortex pressure',
+    list: `4 Relic Robber (ZNR) 351
+4 Bonecrusher Giant (PELD) 115p
+4 Lightning Helix (STA) 62
+4 Skewer the Critics (OTJ) 42
+4 Play with Fire (MID) 390
+4 Boros Charm (CMR) 687
+4 Light Up the Stage (PRNA) 107
+4 Lava Spike (CHK)
+3 Chandra, Torch of Defiance (KLD)
+3 Roiling Vortex (ZNR) 352
+4 Sacred Foundry (GRN)
+4 Inspiring Vantage (KLD)
+2 Battlefield Forge (BRO)
+2 Den of the Bugbear (AFR)
+7 Mountain (ZNR) 275
+3 Plains (ZNR) 268`,
   },
 ];
 
@@ -1884,6 +1579,12 @@ const parseSpellEffects = (card) => {
     const isColorRestricted = /color/.test(allText);
     effects.push({ type: 'board_wipe', subtype: 'exile_mv_lte_prompt', colorOnly: isColorRestricted, description: `Exile ${isColorRestricted ? 'colored ' : ''}permanents with MV ≤ X (choose X)` });
   }
+  // Shadow's Verdict style: "exile all creatures and planeswalkers with mana value X or less from the battlefield and from all graveyards"
+  const shadowsVerdictMatch = allText.match(/exile all creatures and planeswalkers with (?:mana value|converted mana cost) (\d+) or less.*(?:from the battlefield and from all graveyards|from all graveyards)/);
+  if (shadowsVerdictMatch) {
+    effects.push({ type: 'shadows_verdict', threshold: parseInt(shadowsVerdictMatch[1]), description: `Exile creatures & PWs with MV ≤ ${shadowsVerdictMatch[1]} from battlefield + graveyards` });
+  }
+
   // Farewell-style: "choose one or more" with exile categories (artifacts, creatures, enchantments, graveyards)
   if (/choose one or more/i.test(allText) && /exile all/i.test(allText)) {
     const categories = [];
@@ -2394,6 +2095,16 @@ const CREATURE_LAND_DATA = {
     type_line: 'Creature Land — Changeling',
     keywords: [],
     attackTrigger: null,
+  },
+  'crawling barrens': {
+    cost: { generic: 4 }, // {4}
+    power: 0, toughness: 0, // base 0/0, +1/+1 counters make it survive
+    type_line: 'Creature Land — Elemental',
+    keywords: [],
+    attackTrigger: null,
+    permanent: true, // Does NOT revert at end of turn
+    addCounters: { type: '+1/+1', amount: 2 }, // Also adds two +1/+1 counters
+    noTap: true, // Activation does NOT tap the land
   },
   'castle locthwain': null, // Not a creature land
 };
@@ -3622,6 +3333,8 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
   const [instantCasting, setInstantCasting] = useState(null); // { pIdx } — non-active player casting an instant
   const [scryView, setScryView] = useState(null); // { pIdx, count, mode: 'scry'|'surveil' }
   const [lookTopView, setLookTopView] = useState(null); // { pIdx, cards: [], toHand: N, selected: Set }
+  const [librarySearch, _setLibrarySearch] = useState(null); // { pIdx, filter: 'basicLand'|'land', tapped: bool, source: cardName }
+  const setLibrarySearch = (v) => { _setLibrarySearch(v); if (onlineMode) onlineSyncNeededRef.current = true; };
   const [endOfTurnRespond, setEndOfTurnRespond] = useState(false); // true = waiting for opponent to respond before turn passes
 
   // Mulligan state — London Mulligan: draw 7, then put back cards equal to mulligans taken
@@ -3709,6 +3422,8 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       mulliganPhase,
       mulliganPlayer,
       mulliganCounts,
+      sacCounterChoice,
+      librarySearch,
     });
   }); // run on every render when sync is needed
 
@@ -3733,24 +3448,61 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     const serverOpp = onlineState.players?.[oppIdx];
     if (serverOpp) {
       const setOpp = oppIdx === 0 ? setP1 : setP2;
-      setOpp(prev => ({
-        ...prev,
-        life: serverOpp.life ?? prev.life,
-        poison: serverOpp.poison ?? prev.poison,
-        battlefield: serverOpp.battlefield || prev.battlefield,
-        graveyard: serverOpp.graveyard || prev.graveyard,
-        exile: serverOpp.exile || prev.exile,
-        manaPool: serverOpp.manaPool || prev.manaPool,
-        emblems: serverOpp.emblems || prev.emblems,
-        commandZone: serverOpp.commandZone || prev.commandZone,
-        hand: serverOpp.hand || prev.hand,
-        handCount: serverOpp.handCount ?? (serverOpp.hand || prev.hand).length,
-        libraryCount: serverOpp.libraryCount ?? prev.libraryCount,
-        landPlayedThisTurn: serverOpp.landPlayedThisTurn ?? prev.landPlayedThisTurn,
-        dealtDamageThisTurn: serverOpp.dealtDamageThisTurn ?? prev.dealtDamageThisTurn,
-        commanderCastCount: serverOpp.commanderCastCount ?? prev.commanderCastCount,
-        commanderDamageReceived: serverOpp.commanderDamageReceived || prev.commanderDamageReceived,
-      }));
+      setOpp(prev => {
+        // === Detect opponent's actions and play appropriate SFX ===
+        try {
+          const prevBF = prev.battlefield || [];
+          const newBF = serverOpp.battlefield || prevBF;
+          const prevGY = prev.graveyard || [];
+          const newGY = serverOpp.graveyard || prevGY;
+          const prevLife = prev.life;
+          const newLife = serverOpp.life ?? prevLife;
+          const prevBFIds = new Set(prevBF.map(c => c.id));
+          const newBFIds = new Set(newBF.map(c => c.id));
+          // New cards on battlefield
+          const entered = newBF.filter(c => !prevBFIds.has(c.id));
+          const left = prevBF.filter(c => !newBFIds.has(c.id));
+          if (entered.length > 0) {
+            const firstNew = entered[0];
+            const tl = (firstNew.type_line || '').toLowerCase();
+            if (tl.includes('planeswalker')) { SFX.planeswalkerEnters(); }
+            else if (tl.includes('creature') || firstNew.isToken) { SFX.playCreature(); }
+            else if (tl.includes('land')) { SFX.playLand(); }
+            else { SFX.playSpell(); }
+          }
+          // Cards left battlefield → graveyard
+          if (left.length > 0 && newGY.length > prevGY.length) { SFX.toGraveyard(); }
+          // Cards left battlefield → exile
+          else if (left.length > 0 && (serverOpp.exile || []).length > (prev.exile || []).length) { SFX.toExile(); }
+          // Note: No life loss SFX here — combat damage already plays SFX on the attacker's side.
+          // Self-inflicted life loss (fetch lands, upkeep triggers) plays SFX locally.
+          // Opponent tapped something (detect newly tapped cards)
+          const tappedNew = newBF.filter(c => {
+            const old = prevBF.find(o => o.id === c.id);
+            return old && !old.tapped && c.tapped;
+          });
+          if (tappedNew.length > 0 && entered.length === 0) { SFX.tap(); }
+        } catch(e) { /* SFX detection failed silently */ }
+
+        return {
+          ...prev,
+          life: serverOpp.life ?? prev.life,
+          poison: serverOpp.poison ?? prev.poison,
+          battlefield: serverOpp.battlefield || prev.battlefield,
+          graveyard: serverOpp.graveyard || prev.graveyard,
+          exile: serverOpp.exile || prev.exile,
+          manaPool: serverOpp.manaPool || prev.manaPool,
+          emblems: serverOpp.emblems || prev.emblems,
+          commandZone: serverOpp.commandZone || prev.commandZone,
+          hand: serverOpp.hand || prev.hand,
+          handCount: serverOpp.handCount ?? (serverOpp.hand || prev.hand).length,
+          libraryCount: serverOpp.libraryCount ?? prev.libraryCount,
+          landPlayedThisTurn: serverOpp.landPlayedThisTurn ?? prev.landPlayedThisTurn,
+          dealtDamageThisTurn: serverOpp.dealtDamageThisTurn ?? prev.dealtDamageThisTurn,
+          commanderCastCount: serverOpp.commanderCastCount ?? prev.commanderCastCount,
+          commanderDamageReceived: serverOpp.commanderDamageReceived || prev.commanderDamageReceived,
+        };
+      });
     }
 
     // Update our own state from server.
@@ -3762,6 +3514,24 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       const setMe = myIdx === 0 ? setP1 : setP2;
       const opponentCausedUpdate = onlineLastAction && onlineLastAction.by !== myIdx;
       setMe(prev => {
+        // === SFX for opponent-caused changes to OUR state ===
+        if (opponentCausedUpdate) {
+          try {
+            const newLife = serverMe.life ?? prev.life;
+            if (newLife < prev.life) { SFX.lifeLoss(); }
+            const prevBF = prev.battlefield || [];
+            const newBF = serverMe.battlefield || prevBF;
+            const prevBFIds = new Set(prevBF.map(c => c.id));
+            const newBFIds = new Set(newBF.map(c => c.id));
+            const lost = prevBF.filter(c => !newBFIds.has(c.id));
+            if (lost.length > 0) {
+              const newGY = serverMe.graveyard || prev.graveyard || [];
+              if (newGY.length > (prev.graveyard || []).length) { SFX.toGraveyard(); }
+              else if ((serverMe.exile || []).length > (prev.exile || []).length) { SFX.toExile(); }
+            }
+          } catch(e) {}
+        }
+
         const next = {
           ...prev,
           life: serverMe.life ?? prev.life,
@@ -3789,6 +3559,12 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     if (onlineState.mulliganPhase !== undefined) _setMulliganPhase(onlineState.mulliganPhase);
     if (onlineState.mulliganPlayer !== undefined) _setMulliganPlayer(onlineState.mulliganPlayer);
     if (onlineState.mulliganCounts) _setMulliganCounts(onlineState.mulliganCounts);
+
+    // Sync sacrifice counter choice (Cursecatcher etc.)
+    if (onlineState.sacCounterChoice !== undefined) setSacCounterChoice(onlineState.sacCounterChoice);
+
+    // Sync library search state (Solemn Simulacrum etc.)
+    if (onlineState.librarySearch !== undefined) _setLibrarySearch(onlineState.librarySearch);
 
     // Receive game log entries from opponent
     if (onlineState.__logEntry) {
@@ -4098,6 +3874,27 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       }
     } catch(e) {}
 
+    // Log zone moves for opponent visibility (skip bounce/discard which log above)
+    const zoneLabels = { battlefield: 'battlefield', graveyard: 'graveyard', exile: 'exile', hand: 'hand', library: 'library', commandZone: 'command zone' };
+    const fromLabel = zoneLabels[from] || from;
+    const toLabel = zoneLabels[to] || to;
+    const cardName = card.name || 'a card';
+    if (from === 'battlefield' && to === 'graveyard') {
+      addGameLog(pIdx, '💀', `${cardName} → graveyard`);
+    } else if (from === 'battlefield' && to === 'exile') {
+      addGameLog(pIdx, '🚫', `${cardName} → exile`);
+    } else if (from === 'battlefield' && to === 'hand') {
+      // bounce already logged above for online mode — only log if not already handled
+    } else if (from === 'graveyard' && to === 'battlefield') {
+      addGameLog(pIdx, '♻️', `${cardName} returned from graveyard to battlefield`);
+    } else if (from === 'graveyard' && to === 'hand') {
+      addGameLog(pIdx, '♻️', `${cardName} returned from graveyard to hand`);
+    } else if (from === 'exile' && to === 'battlefield') {
+      addGameLog(pIdx, '♻️', `${cardName} returned from exile to battlefield`);
+    } else if (from === 'graveyard' && to === 'exile') {
+      addGameLog(pIdx, '🚫', `${cardName} exiled from graveyard`);
+    }
+
     // Stolen card leaving battlefield → goes to original owner's zone
     if (from === 'battlefield' && to !== 'battlefield' && card.originalOwner !== undefined && card.originalOwner !== pIdx) {
       const owner = card.originalOwner;
@@ -4139,11 +3936,15 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
           delete movedCard.keywords;
         }
       }
-      // Set starting loyalty when a Planeswalker enters the battlefield
+      // Set starting loyalty when a Planeswalker enters the battlefield (Vorinclex doubles this)
       if (to === 'battlefield' && isPlaneswalker(movedCard)) {
         const startingLoyalty = getPlaneswalkerStartingLoyalty(movedCard);
         if (startingLoyalty > 0) {
-          movedCard.counters = { ...(movedCard.counters || {}), loyalty: startingLoyalty };
+          const modifiedLoyalty = applyVorinclexModifier(pIdx, startingLoyalty);
+          movedCard.counters = { ...(movedCard.counters || {}), loyalty: modifiedLoyalty };
+          if (modifiedLoyalty !== startingLoyalty) {
+            addGameLog(pIdx, '⚡', `Vorinclex: ${movedCard.name} enters with ${modifiedLoyalty} loyalty instead of ${startingLoyalty}`);
+          }
         }
       }
       // === Auto-tap: "enters the battlefield tapped" ===
@@ -4501,6 +4302,11 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         } else if (/deal\s+(\d+)\s+damage/i.test(effectText)) {
           const amt = parseInt(effectText.match(/deal\s+(\d+)\s+damage/i)[1]);
           effect = { type: 'damage', amount: amt, label: `Deal ${amt} damage (manual)` };
+        } else if (/counter target.*spell.*unless.*pays\s*\{(\d+)\}/i.test(effectText)) {
+          // Cursecatcher, Judge's Familiar, etc.: "Counter target instant or sorcery spell unless its controller pays {X}"
+          const payMatch = effectText.match(/unless.*pays\s*\{(\d+)\}/i);
+          const payAmount = payMatch ? parseInt(payMatch[1]) : 1;
+          effect = { type: 'sacCounter', payAmount, label: `Counter spell unless opponent pays {${payAmount}}` };
         } else {
           const shortText = effectText.length > 40 ? effectText.slice(0, 37) + '...' : effectText;
           effect = { type: 'manual', text: effectText, label: shortText };
@@ -4547,7 +4353,22 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       graveyard: [...prev.graveyard, { ...card, tapped: false, counters: {} }],
     }));
     // Execute effect
-    if (ability.type === 'draw') {
+    if (ability.type === 'sacCounter') {
+      // Counter-unless-pays: check if there's a spell on the stack to target
+      if (spellStack.length === 0) {
+        setCastError({ pIdx, message: 'No spell on the stack to counter!' });
+        setTimeout(() => setCastError(null), 2000);
+        // Undo sacrifice: move card back (too late — already sacrificed, that's the rule in MTG: you still sacrifice even if no target)
+        addGameLog(pIdx, '💀', `Sacrificed ${card.name} (no spell to counter)`);
+        return;
+      }
+      // Target the top spell on the stack (most recent)
+      const targetEntry = spellStack[spellStack.length - 1];
+      // Show the pay-or-counter choice to the opponent
+      setSacCounterChoice({ sacPIdx: pIdx, sacCard: card, targetEntry, payAmount: ability.payAmount });
+      addGameLog(pIdx, '🚫', `Sacrificed ${card.name}: Counter ${targetEntry.displayName} unless opponent pays {${ability.payAmount}}`);
+      return; // Don't show normal sacrifice message — the choice overlay handles it
+    } else if (ability.type === 'draw') {
       for (let i = 0; i < ability.count; i++) {
         setTimeout(() => drawCard(pIdx), i * 100);
       }
@@ -4709,6 +4530,16 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
           setTimeout(() => triggerMidnightClock(pIdx, card), 500);
         }
       }
+
+      // "At the beginning of your upkeep, this creature deals X damage to you" (Relic Robber tokens, etc.)
+      const upkeepDmgMatch = allText.match(/at the beginning of your upkeep,?\s*(?:this creature|~)\s+deals?\s+(\d+)\s+damage to you/i);
+      if (upkeepDmgMatch) {
+        const dmg = parseInt(upkeepDmgMatch[1]);
+        setState(pIdx, prev => ({ ...prev, life: prev.life - dmg }));
+        markDealtDamage(pIdx);
+        try { SFX.lifeLoss(); } catch(e) {}
+        addGameLog(pIdx, '🔥', `${card.name}: upkeep — deals ${dmg} damage to ${getState(pIdx).name}`);
+      }
     }
   };
 
@@ -4720,13 +4551,43 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     }));
   };
 
-  const addCounter = (pIdx, cardId, type) => {
+  // === Vorinclex, Monstrous Raider: counter modification ===
+  // If pIdx controls Vorinclex → counters they place are DOUBLED
+  // If opponent controls Vorinclex → counters pIdx places are HALVED (rounded down)
+  // sourcePIdx = the player who is CAUSING the counters to be placed
+  const applyVorinclexModifier = (sourcePIdx, amount) => {
+    if (amount <= 0) return amount;
+    const hasVorinclex = (pi) => {
+      const st = getState(pi);
+      return st.battlefield.some(c =>
+        (c.name || '').toLowerCase().includes('vorinclex') &&
+        /double|twice/i.test(c.oracle_text || '')
+      );
+    };
+    // Source player controls Vorinclex → double
+    if (hasVorinclex(sourcePIdx)) return amount * 2;
+    // Opponent controls Vorinclex → halve (rounded down), minimum 0
+    const opponentIdx = sourcePIdx === 0 ? 1 : 0;
+    if (hasVorinclex(opponentIdx)) return Math.floor(amount / 2);
+    return amount;
+  };
+
+  const addCounter = (pIdx, cardId, type, sourcePIdx = null) => {
+    const source = sourcePIdx !== null ? sourcePIdx : pIdx;
+    const finalAmount = applyVorinclexModifier(source, 1);
+    if (finalAmount <= 0) {
+      // Vorinclex halved to 0 — notify player
+      const cardName = (getState(pIdx).battlefield.find(c => c.id === cardId) || {}).name || '?';
+      setCastError({ pIdx: source, message: `⚠️ Vorinclex negated ${type} counter on ${cardName}!` });
+      setTimeout(() => setCastError(null), 2000);
+      return;
+    }
     setState(pIdx, prev => ({
       ...prev,
       battlefield: prev.battlefield.map(c => {
         if (c.id !== cardId) return c;
         const counters = { ...c.counters };
-        counters[type] = (counters[type] || 0) + 1;
+        counters[type] = (counters[type] || 0) + finalAmount;
         return { ...c, counters };
       })
     }));
@@ -4746,13 +4607,21 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     }));
   };
 
-  const addMultipleCounters = (pIdx, cardId, type, amount) => {
+  const addMultipleCounters = (pIdx, cardId, type, amount, sourcePIdx = null) => {
+    const source = sourcePIdx !== null ? sourcePIdx : pIdx;
+    const finalAmount = applyVorinclexModifier(source, amount);
+    if (finalAmount <= 0) {
+      const cardName = (getState(pIdx).battlefield.find(c => c.id === cardId) || {}).name || '?';
+      setCastError({ pIdx: source, message: `⚠️ Vorinclex negated ${amount} ${type} counters on ${cardName}!` });
+      setTimeout(() => setCastError(null), 2000);
+      return;
+    }
     setState(pIdx, prev => ({
       ...prev,
       battlefield: prev.battlefield.map(c => {
         if (c.id !== cardId) return c;
         const counters = { ...c.counters };
-        counters[type] = (counters[type] || 0) + amount;
+        counters[type] = (counters[type] || 0) + finalAmount;
         return { ...c, counters };
       })
     }));
@@ -4809,13 +4678,18 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       return;
     }
 
-    // Adjust loyalty counters
+    // Adjust loyalty counters (Vorinclex doubles + abilities, does NOT affect - costs)
+    const loyaltyChange = costNum > 0 ? applyVorinclexModifier(pIdx, costNum) : costNum;
+    // Vorinclex feedback: show when counters are modified
+    const vorinclexNote = costNum > 0 && loyaltyChange !== costNum
+      ? ` (Vorinclex: ${costNum > 0 ? '+' : ''}${costNum} → ${loyaltyChange > 0 ? '+' : ''}${loyaltyChange})`
+      : '';
     setState(pIdx, prev => ({
       ...prev,
       battlefield: prev.battlefield.map(c => {
         if (c.id !== card.id) return c;
         const counters = { ...c.counters };
-        counters['loyalty'] = (counters['loyalty'] || 0) + costNum;
+        counters['loyalty'] = (counters['loyalty'] || 0) + loyaltyChange;
         return { ...c, counters };
       })
     }));
@@ -4823,7 +4697,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     // Show ability on "stack" for opponent to see and optionally respond
     setPwAbilityOnStack({ pIdx, card, ability });
     try { SFX.playSpell(); } catch(e) {}
-    addGameLog(pIdx, '⚡', `${getState(pIdx).name} activates ${card.name} [${ability.cost}]: ${ability.text.substring(0, 60)}${ability.text.length > 60 ? '…' : ''}`, [card.id]);
+    addGameLog(pIdx, '⚡', `${getState(pIdx).name} activates ${card.name} [${ability.cost}]${vorinclexNote}: ${ability.text.substring(0, 60)}${ability.text.length > 60 ? '…' : ''}`, [card.id]);
   };
 
   // ===== EXILE LINKING SYSTEM =====
@@ -4908,12 +4782,16 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     return getState(pIdx).battlefield.filter(c => c.attachedTo === creatureId);
   };
 
-  const createToken = (pIdx, token, playSound = true) => {
+  const createToken = (pIdx, token, playSound = true, skipLog = false) => {
     try { if (playSound) SFX.tokenCreate(); } catch(e) {}
     setState(pIdx, prev => ({
       ...prev,
       battlefield: [...prev.battlefield, { ...token, id: uid(), tapped: false, counters: {} }]
     }));
+    if (!skipLog) {
+      const kw = (token.keywords || []).filter(Boolean);
+      addGameLog(pIdx, '✦', `${getState(pIdx).name} created ${token.power || '?'}/${token.toughness || '?'} ${token.name || 'Token'}${kw.length > 0 ? ' with ' + kw.join(', ') : ''}`);
+    }
   };
 
   const cloneToken = (pIdx, token) => {
@@ -4993,15 +4871,29 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         actions.push({ label: card.tapped ? '🔄 Untap' : '↩️ Tap', fn: () => toggleTap(pIdx, card.id) });
         // Creature land activation
         const clData = getCreatureLandData(card);
-        if (clData && !card.animatedCreature && !card.tapped) {
-          if (clData.isXCost) {
-            for (let x = 1; x <= 6; x++) {
-              const totalMana = x + Object.values(clData.cost).reduce((s, v) => s + v, 0);
-              actions.push({ label: `⚡ Activate as ${x}/${x} (${totalMana} mana)`, fn: () => activateCreatureLand(pIdx, card, x) });
+        if (clData) {
+          // Regular creature lands: can only activate when untapped and not already animated
+          // Permanent creature lands (Crawling Barrens): can activate multiple times to add counters
+          const canActivate = clData.permanent
+            ? true // Always allow activation for permanent lands (adds counters each time)
+            : (!card.animatedCreature && !card.tapped);
+          if (canActivate) {
+            if (clData.isXCost) {
+              for (let x = 1; x <= 6; x++) {
+                const totalMana = x + Object.values(clData.cost).reduce((s, v) => s + v, 0);
+                actions.push({ label: `⚡ Activate as ${x}/${x} (${totalMana} mana)`, fn: () => activateCreatureLand(pIdx, card, x) });
+              }
+            } else if (clData.addCounters && clData.permanent) {
+              // "You may" lands like Crawling Barrens: two options
+              const costStr = Object.entries(clData.cost).map(([k, v]) => k === 'generic' ? v : `${v}${k}`).join('+');
+              const cLabel = `+${clData.addCounters.amount} ${clData.addCounters.type}`;
+              actions.push({ label: `⚡ ${cLabel} + become creature (${costStr})`, fn: () => activateCreatureLand(pIdx, card) });
+              actions.push({ label: `⚡ ${cLabel} only, stay land (${costStr})`, fn: () => activateCreatureLand(pIdx, card, null, true) });
+            } else {
+              const costStr = Object.entries(clData.cost).map(([k, v]) => k === 'generic' ? v : `${v}${k}`).join('+');
+              const counterLabel = clData.addCounters ? ` (+${clData.addCounters.amount} ${clData.addCounters.type})` : '';
+              actions.push({ label: `⚡ Activate ${clData.power}/${clData.toughness}${counterLabel} (${costStr})`, fn: () => activateCreatureLand(pIdx, card) });
             }
-          } else {
-            const costStr = Object.entries(clData.cost).map(([k, v]) => k === 'generic' ? v : `${v}${k}`).join('+');
-            actions.push({ label: `⚡ Activate ${clData.power}/${clData.toughness} (${costStr})`, fn: () => activateCreatureLand(pIdx, card) });
           }
         }
         if (card.animatedCreature) {
@@ -5407,6 +5299,14 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       if (tokenMatch) effects.push({ icon: '✦', text: `Create ${tokenMatch[1]} ${tokenMatch[3]} token(s)` });
       else effects.push({ icon: '✦', text: 'Create token(s)' });
     }
+    // Search library for land (Solemn Simulacrum, Farhaven Elf, etc.)
+    if (/enters.*search your library for a basic land/i.test(allText)) {
+      const tapped = /tapped/.test(allText);
+      effects.push({ icon: '🔍', text: `Search library for a basic land${tapped ? ' (tapped)' : ''}`, actionType: 'search_basic_land', tapped });
+    } else if (/enters.*search your library for a land/i.test(allText)) {
+      const tapped = /tapped/.test(allText);
+      effects.push({ icon: '🔍', text: `Search library for a land${tapped ? ' (tapped)' : ''}`, actionType: 'search_land', tapped });
+    }
     // Discard
     if (/enters.*discard/.test(allText)) effects.push({ icon: '🗑', text: 'Target discards' });
     // Scry/surveil
@@ -5530,6 +5430,8 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
   const [spellTargeting, setSpellTargeting] = useState(null); // { pIdx, card, effects, targetMode }
   const [spellStack, setSpellStack] = useState([]); // LIFO stack: [{ pIdx, card, asAdventure, fromExile, displayName }, ...]
   const stackTop = spellStack.length > 0 ? spellStack[spellStack.length - 1] : null;
+  const [sacCounterChoice, _setSacCounterChoice] = useState(null); // { sacPIdx, sacCard, targetEntry, payAmount } — "counter unless pays" choice
+  const setSacCounterChoice = (v) => { _setSacCounterChoice(v); if (onlineMode) onlineSyncNeededRef.current = true; };
   const [pwAbilityOnStack, setPwAbilityOnStack] = useState(null); // { pIdx, card, ability: { cost, text } }
   const [pwReminder, setPwReminder] = useState(null); // { pIdx, card, ability }
   const [ltbReminder, setLtbReminder] = useState(null); // { pIdx, card, effects[] }
@@ -5982,6 +5884,39 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
           }
           break;
         }
+        case 'shadows_verdict': {
+          // Shadow's Verdict: exile creatures & PWs with MV ≤ threshold from battlefield AND graveyards
+          const svThreshold = effect.threshold || 3;
+          const isCreatureOrPW = (c) => {
+            const tl = (c.type_line || '').toLowerCase();
+            return tl.includes('creature') || tl.includes('planeswalker');
+          };
+          const mvLte = (c, threshold) => {
+            const cmc = c.cmc !== undefined ? c.cmc : (c.card_faces?.[0]?.cmc || 0);
+            return cmc <= threshold;
+          };
+          let svExiled = 0;
+          [0, 1].forEach(pi => {
+            setState(pi, prev => {
+              // Exile from battlefield: creatures & PWs with MV ≤ threshold
+              const bfToExile = prev.battlefield.filter(c => isCreatureOrPW(c) && mvLte(c, svThreshold));
+              // Exile from graveyard: creatures & PWs with MV ≤ threshold
+              const gyToExile = prev.graveyard.filter(c => isCreatureOrPW(c) && mvLte(c, svThreshold));
+              svExiled += bfToExile.length + gyToExile.length;
+              return {
+                ...prev,
+                battlefield: prev.battlefield.filter(c => !(isCreatureOrPW(c) && mvLte(c, svThreshold))),
+                graveyard: prev.graveyard.filter(c => !(isCreatureOrPW(c) && mvLte(c, svThreshold))),
+                exile: [...prev.exile, ...bfToExile.map(c => ({ ...c, tapped: false, counters: {} })), ...gyToExile.map(c => ({ ...c, tapped: false, counters: {} }))],
+              };
+            });
+          });
+          try { SFX.toExile(); } catch(e) {}
+          setCastError({ pIdx, message: `Shadow's Verdict: Exiled ${svExiled} creature(s)/PW(s) with MV ≤ ${svThreshold} from battlefield + graveyards` });
+          setTimeout(() => setCastError(null), 3000);
+          setTimeout(() => cleanupAttachments([0, 1]), 50);
+          break;
+        }
         case 'farewell': {
           // Farewell-style: show a modal to choose which categories to exile
           const categories = effect.categories || [];
@@ -6240,6 +6175,15 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       etbEffects.push(...otherCreatureETBs);
     }
 
+    // Auto-trigger library search ETB effects (Solemn Simulacrum, Farhaven Elf, etc.)
+    const searchEffect = etbEffects.find(e => e.actionType === 'search_basic_land' || e.actionType === 'search_land');
+    if (searchEffect) {
+      const filter = searchEffect.actionType === 'search_basic_land' ? 'basicLand' : 'land';
+      setTimeout(() => {
+        setLibrarySearch({ pIdx, filter, tapped: searchEffect.tapped || false, source: card.name });
+      }, 300);
+    }
+
     if (etbEffects.length > 0) {
       setEtbReminder({ pIdx, card, effects: etbEffects });
     }
@@ -6264,7 +6208,8 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
   // Helper: detect if a card is a counterspell based on oracle text
   const isCounterSpellCard = (card) => {
     const oracle = [card.oracle_text || '', ...(card.card_faces || []).map(f => f.oracle_text || '')].join(' ').toLowerCase();
-    return oracle.includes('counter target spell') || oracle.includes('counter target nonland') || oracle.includes('counter that spell');
+    return oracle.includes('counter target spell') || oracle.includes('counter target nonland') || oracle.includes('counter that spell')
+      || /counter target.*spell/.test(oracle); // Also matches "counter target instant or sorcery spell"
   };
 
   // Helper: detect if a card has "can't be countered"
@@ -6378,7 +6323,8 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
   };
 
   // ===== CREATURE LAND ACTIVATION =====
-  const activateCreatureLand = (pIdx, card, xValue = null) => {
+  // countersOnly: if true, only add counters without becoming a creature ("You may" choice)
+  const activateCreatureLand = (pIdx, card, xValue = null, countersOnly = false) => {
     const data = getCreatureLandData(card);
     if (!data) return;
 
@@ -6405,35 +6351,72 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     const power = data.isXCost ? (xValue || 0) : data.power;
     const toughness = data.isXCost ? (xValue || 0) : data.toughness;
 
+    const isPermanent = data.permanent || false;
+    const shouldTap = !data.noTap;
+
+    // countersOnly mode: just add counters, don't transform into creature ("You may" clause)
+    if (countersOnly && data.addCounters) {
+      setState(pIdx, prev => ({
+        ...prev,
+        manaPool: newPool,
+        battlefield: prev.battlefield.map(c => {
+          if (c.id !== card.id) return c;
+          const counters = { ...(c.counters || {}) };
+          const modAmt = applyVorinclexModifier(pIdx, data.addCounters.amount);
+          counters[data.addCounters.type] = (counters[data.addCounters.type] || 0) + modAmt;
+          return { ...c, tapped: shouldTap ? true : c.tapped, counters };
+        }),
+      }));
+      try { SFX.playSpell(); } catch(e) {}
+      const modAmt = applyVorinclexModifier(pIdx, data.addCounters.amount);
+      setCastError({ pIdx, message: `${card.name}: +${modAmt} ${data.addCounters.type} counters (stays land)`, background: '#1a3320' });
+      setTimeout(() => setCastError(null), 1500);
+      addGameLog(pIdx, '🏔️', `${getState(pIdx).name} puts ${modAmt} ${data.addCounters.type} counters on ${card.name} (stays land)`, [card.id]);
+      return;
+    }
+
     setState(pIdx, prev => ({
       ...prev,
       manaPool: newPool,
-      battlefield: prev.battlefield.map(c =>
-        c.id === card.id ? {
+      battlefield: prev.battlefield.map(c => {
+        if (c.id !== card.id) return c;
+        const updated = {
           ...c,
-          tapped: true,
-          animatedCreature: true,
-          animatedData: {
+          tapped: shouldTap ? true : c.tapped,
+          animatedCreature: !isPermanent, // Only set animatedCreature for temporary animations
+          permanentCreature: isPermanent || c.permanentCreature, // Permanent transformation flag
+          animatedData: isPermanent ? null : {
             power, toughness,
             type_line: data.type_line,
             keywords: data.keywords,
             attackTrigger: data.attackTrigger,
             originalTypeLine: c.type_line,
           },
-          // Temporarily override creature properties
           power: String(power),
           toughness: String(toughness),
-          type_line: c.type_line + ' ' + data.type_line,
+          type_line: c.permanentCreature || isPermanent
+            ? (c.type_line && c.type_line.includes('Creature') ? c.type_line : c.type_line + ' Creature — Elemental')
+            : c.type_line + ' ' + data.type_line,
           keywords: [...(c.keywords || []), ...data.keywords],
-          enteredThisTurn: false, // Lands already on battlefield, no summoning sickness
-        } : c
-      ),
+          enteredThisTurn: false,
+        };
+        // Add counters if specified (Crawling Barrens: +1/+1 counters) — Vorinclex modifies
+        if (data.addCounters) {
+          const counters = { ...updated.counters };
+          const modAmt = applyVorinclexModifier(pIdx, data.addCounters.amount);
+          counters[data.addCounters.type] = (counters[data.addCounters.type] || 0) + modAmt;
+          updated.counters = counters;
+        }
+        return updated;
+      }),
     }));
 
     try { SFX.playSpell(); } catch(e) {}
-    setCastError({ pIdx, message: `${card.name} becomes a ${power}/${toughness} creature`, background: '#1a3320' });
+    const modCounterAmt = data.addCounters ? applyVorinclexModifier(pIdx, data.addCounters.amount) : 0;
+    const counterMsg = data.addCounters ? ` (+${modCounterAmt} ${data.addCounters.type} counters)` : '';
+    setCastError({ pIdx, message: `${card.name} becomes a ${power}/${toughness} creature${counterMsg}`, background: '#1a3320' });
     setTimeout(() => setCastError(null), 1500);
-    addGameLog(pIdx, '🏔️', `${getState(pIdx).name} animates ${card.name} → ${power}/${toughness}`, [card.id]);
+    addGameLog(pIdx, '🏔️', `${getState(pIdx).name} animates ${card.name} → ${power}/${toughness}${counterMsg}`, [card.id]);
   };
 
   // Revert animated creature lands back to normal lands
@@ -6494,12 +6477,57 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     const faces = card.card_faces || [];
     const allText = [oracle, ...faces.map(f => (f.oracle_text || '').toLowerCase())].filter(Boolean).join('\n');
     if (allText.includes('when you cycle') || allText.includes('cycling this card')) {
-      // Show a reminder with the cycling trigger text
-      const triggerMatch = allText.match(/(when you cycle[^.]*\.)/);
-      if (triggerMatch) {
+      // Auto-detect "create an X/X [color] [type] creature token [with keywords]"
+      const cycleTokenMatch = allText.match(/create an? x\/x\s+([\w\s]+?)\s+creature token\s*(?:with\s+([\w\s,]+))?/);
+      if (cycleTokenMatch) {
+        const colorType = cycleTokenMatch[1].trim();
+        const kwStr = cycleTokenMatch[2] || '';
+        const keywords = kwStr ? kwStr.replace(/\band\b/g, ',').split(',').map(k => k.trim()).filter(Boolean) : [];
+        const colorMap = { white: 'W', blue: 'U', black: 'B', red: 'R', green: 'G' };
+        const colors = Object.keys(colorMap).filter(c => colorType.includes(c)).map(c => colorMap[c]);
+        const creatureType = colorType.split(' ').filter(w => !colorMap[w] && w !== 'colorless').map(w => w[0].toUpperCase() + w.slice(1)).join(' ') || 'Token';
+        // Prompt for X value
         setTimeout(() => {
-          setEtbReminder({ pIdx, card, effects: [{ icon: '🔄', text: triggerMatch[1] }] });
-        }, 300);
+          const xVal = prompt(`${getDisplayName(card)}: Enter X value for the ${creatureType} token:`);
+          const x = parseInt(xVal);
+          if (!isNaN(x) && x > 0) {
+            const token = {
+              name: creatureType, power: String(x), toughness: String(x),
+              type_line: `Creature Token — ${creatureType}`, colors, keywords,
+              isToken: true, oracle_text: keywords.length > 0 ? keywords.join(', ') : '',
+            };
+            createToken(pIdx, token, true, true);
+            addGameLog(pIdx, '🔄', `${getDisplayName(card)}: Cycling — created ${x}/${x} ${creatureType}${keywords.length > 0 ? ' with ' + keywords.join(', ') : ''}`);
+            // Fetch Scryfall token art
+            (async () => {
+              try {
+                const res = await fetch('https://api.scryfall.com/cards/search?q=' + encodeURIComponent('t:token ' + creatureType.toLowerCase()) + '&unique=art&order=released&dir=desc');
+                if (res.ok) {
+                  const data = await res.json();
+                  const match = data.data?.find(c => c.image_uris && (c.name || '').toLowerCase().includes(creatureType.toLowerCase()));
+                  if (match?.image_uris) {
+                    setState(pIdx, prev => ({
+                      ...prev,
+                      battlefield: prev.battlefield.map(c =>
+                        c.isToken && c.name === creatureType && !c.image_uris
+                          ? { ...c, image_uris: match.image_uris }
+                          : c
+                      )
+                    }));
+                  }
+                }
+              } catch(e) {}
+            })();
+          }
+        }, 400);
+      } else {
+        // Generic cycling trigger — show reminder
+        const triggerMatch = allText.match(/(when you cycle[^.]*\.)/);
+        if (triggerMatch) {
+          setTimeout(() => {
+            setEtbReminder({ pIdx, card, effects: [{ icon: '🔄', text: triggerMatch[1] }] });
+          }, 300);
+        }
       }
     }
   };
@@ -6759,6 +6787,8 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
 
   const toggleAttacker = (cardId) => {
     if (!combatState || combatState.phase !== 'attackers') return;
+    // Online mode: only attacker can select attackers
+    if (onlineMode && onlinePlayerIndex !== activePlayer) return;
     const p = getState(activePlayer);
     const card = p.battlefield.find(c => c.id === cardId);
     if (!card || card.tapped) return;
@@ -6996,6 +7026,30 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
           }));
           // Add the token to the attackers list (it enters "tapped and attacking")
           setCombatState(prev => prev ? { ...prev, attackers: [...prev.attackers, tokenCard.id] } : prev);
+          // Fetch Scryfall token art asynchronously (skip if reskin provides custom image)
+          if (!reskin?.customTokenImage) {
+            ((tName, pI) => {
+              (async () => {
+                try {
+                  const res = await fetch('https://api.scryfall.com/cards/search?q=' + encodeURIComponent('t:token ' + tName.toLowerCase()) + '&unique=art&order=released&dir=desc');
+                  if (res.ok) {
+                    const data = await res.json();
+                    const match = data.data?.find(c => c.image_uris && (c.name || '').toLowerCase().includes(tName.toLowerCase()));
+                    if (match?.image_uris) {
+                      setState(pI, prev => ({
+                        ...prev,
+                        battlefield: prev.battlefield.map(c =>
+                          c.isToken && c.name === tName && !c.image_uris
+                            ? { ...c, image_uris: match.image_uris }
+                            : c
+                        )
+                      }));
+                    }
+                  }
+                } catch(e) {}
+              })();
+            })(tokenName, activePlayer);
+          }
         }
       }
       // Etali-style: "exile the top card of each player's library" — auto-exile and show cast-for-free UI
@@ -7056,7 +7110,15 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     if (defenderCreatures.length === 0) {
       // No blockers possible — go straight to damage
       setCombatState(prev => ({ ...prev, phase: 'damage', blocks: {} }));
-      setTimeout(() => resolveCombatDamage(), 500);
+      setTimeout(() => {
+        resolveCombatDamage();
+        // Safety retry: if combat is still in damage phase after 2s, try again
+        setTimeout(() => {
+          if (combatStateRef.current && combatStateRef.current.phase === 'damage') {
+            resolveCombatDamage();
+          }
+        }, 2000);
+      }, 500);
       return;
     }
     setCombatState(prev => ({ ...prev, phase: 'blockers', blocks: {}, selectedBlocker: null }));
@@ -7137,11 +7199,20 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
   const selectBlocker = (blockerId) => {
     if (!combatState || combatState.phase !== 'blockers') return;
     const defendingPlayer = activePlayer === 0 ? 1 : 0;
+    // Online mode: only defender can select blockers
+    if (onlineMode && onlinePlayerIndex !== defendingPlayer) return;
     const blocker = getState(defendingPlayer).battlefield.find(c => c.id === blockerId);
     if (!blocker || !isCreature(blocker) || blocker.tapped) return;
 
-    // Conditional block restriction: "can't attack or block unless you control another creature with power N or greater"
+    // "Can't block" restriction (Relic Robber tokens, Goblin Construct, etc.)
     const blockerOracle2 = [blocker.oracle_text || '', ...(blocker.card_faces || []).map(f => f.oracle_text || '')].join(' ').toLowerCase();
+    if (blocker.cantBlock || /this creature can't block/i.test(blockerOracle2) || /(?:^|\.\s)can't block(?:\.|$)/i.test(blockerOracle2)) {
+      setCastError({ pIdx: defendingPlayer, message: `⚠️ ${blocker.name} can't block!` });
+      setTimeout(() => setCastError(null), 2000);
+      return;
+    }
+
+    // Conditional block restriction: "can't attack or block unless you control another creature with power N or greater"
     const cantBlockUnless = blockerOracle2.match(/can't attack or block unless you control another creature with power (\d+) or greater/);
     if (cantBlockUnless) {
       const requiredPower = parseInt(cantBlockUnless[1]);
@@ -7181,6 +7252,8 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
   const assignBlockerToAttacker = (attackerId) => {
     if (!combatState || !combatState.selectedBlocker) return;
     const defendingPlayer = activePlayer === 0 ? 1 : 0;
+    // Online mode: only defender can assign blockers
+    if (onlineMode && onlinePlayerIndex !== defendingPlayer) return;
     const blocker = getState(defendingPlayer).battlefield.find(c => c.id === combatState.selectedBlocker);
     const attacker = getState(activePlayer).battlefield.find(c => c.id === attackerId);
     if (!blocker || !attacker) return;
@@ -7315,7 +7388,15 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     try { SFX.tap(); } catch(e) {}
     setCombatState(prev => ({ ...prev, phase: 'damage' }));
     // Resolve damage after a short delay for visual feedback
-    setTimeout(() => resolveCombatDamage(), 500);
+    setTimeout(() => {
+      resolveCombatDamage();
+      // Safety retry: if combat is still in damage phase after 2s, try again
+      setTimeout(() => {
+        if (combatStateRef.current && combatStateRef.current.phase === 'damage') {
+          resolveCombatDamage();
+        }
+      }, 2000);
+    }, 500);
   };
 
   const resolveCombatDamage = () => {
@@ -7508,9 +7589,12 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       markDealtDamage(defendingPlayer);
     }
 
-    // Apply poison counters (from infect/toxic)
+    // Apply poison counters (from infect/toxic) — Vorinclex modifies counter amounts on players too
     if (poisonToDefender > 0) {
-      setState(defendingPlayer, prev => ({ ...prev, poison: prev.poison + poisonToDefender }));
+      const modifiedPoison = applyVorinclexModifier(attackingPlayer, poisonToDefender);
+      if (modifiedPoison > 0) {
+        setState(defendingPlayer, prev => ({ ...prev, poison: prev.poison + modifiedPoison }));
+      }
     }
 
     // Infect: damage to creatures = -1/-1 counters instead of regular damage
@@ -7673,10 +7757,54 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         if (trigMatch) combatDamageTriggers.push({ name: pair.attacker.card.name, text: trigMatch[1].slice(0, 100) });
       }
     }
-    if (combatDamageTriggers.length > 0) {
-      const triggerText = combatDamageTriggers.map(t => `⚡ ${t.name}: ${t.text}`).join('\n');
+    // Auto-execute known combat damage triggers
+    const manualTriggers = [];
+    for (const trig of combatDamageTriggers) {
+      const trigOracle = trig.text.toLowerCase();
+
+      // Relic Robber: "that player creates a 0/1 colorless Goblin Construct artifact creature token"
+      if (/that player creates a 0\/1.*goblin construct/i.test(trigOracle)) {
+        const gcToken = {
+          name: 'Goblin Construct',
+          power: '0', toughness: '1',
+          type_line: 'Artifact Creature Token — Goblin Construct',
+          colors: [],
+          isToken: true,
+          cantBlock: true,
+          oracle_text: "This creature can't block.\nAt the beginning of your upkeep, this creature deals 1 damage to you.",
+          keywords: [],
+        };
+        createToken(defendingPlayer, gcToken, true, true);
+        // Fetch official Scryfall token art asynchronously
+        (async () => {
+          try {
+            const res = await fetch('https://api.scryfall.com/cards/search?q=' + encodeURIComponent('t:token goblin construct set:tznr') + '&unique=art&order=released&dir=desc');
+            if (res.ok) {
+              const data = await res.json();
+              const match = data.data?.[0];
+              if (match?.image_uris) {
+                setState(defendingPlayer, prev => ({
+                  ...prev,
+                  battlefield: prev.battlefield.map(c =>
+                    c.name === 'Goblin Construct' && !c.image_uris
+                      ? { ...c, image_uris: match.image_uris }
+                      : c
+                  )
+                }));
+              }
+            }
+          } catch(e) { /* fallback to text rendering */ }
+        })();
+        addGameLog(attackingPlayer, '⚔️', `${trig.name}: Created 0/1 Goblin Construct for ${getState(defendingPlayer).name}`);
+        continue;
+      }
+
+      // Unknown trigger — show as manual reminder
+      manualTriggers.push(trig);
+    }
+    if (manualTriggers.length > 0) {
       setTimeout(() => {
-        setEtbReminder({ pIdx: attackingPlayer, card: combatDamageTriggers[0], effects: combatDamageTriggers.map(t => ({ icon: '⚔️', text: `${t.name}: ${t.text}` })) });
+        setEtbReminder({ pIdx: attackingPlayer, card: manualTriggers[0], effects: manualTriggers.map(t => ({ icon: '⚔️', text: `${t.name}: ${t.text}` })) });
       }, 300);
     }
 
@@ -8296,15 +8424,23 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                 </div>
 
                 <div style={{ display: 'flex', gap: 12, justifyContent: 'center' }}>
-                  <button className="btn btn-gold" style={{ padding: '12px 32px', fontSize: 15, fontWeight: 700 }}
-                    onClick={() => keepHand(pIdx)}>
-                    Keep Hand ({handSize} cards)
-                  </button>
-                  {handSize > 0 && (
-                    <button className="btn" style={{ padding: '12px 24px', fontSize: 14, borderColor: 'rgba(220,80,60,0.3)', color: '#dc8060' }}
-                      onClick={() => doMulligan(pIdx)}>
-                      Mulligan (draw {Math.max(0, 7 - (count + 1))})
-                    </button>
+                  {(!onlineMode || onlinePlayerIndex === pIdx) ? (
+                    <>
+                      <button className="btn btn-gold" style={{ padding: '12px 32px', fontSize: 15, fontWeight: 700 }}
+                        onClick={() => keepHand(pIdx)}>
+                        Keep Hand ({handSize} cards)
+                      </button>
+                      {handSize > 0 && (
+                        <button className="btn" style={{ padding: '12px 24px', fontSize: 14, borderColor: 'rgba(220,80,60,0.3)', color: '#dc8060' }}
+                          onClick={() => doMulligan(pIdx)}>
+                          Mulligan (draw {Math.max(0, 7 - (count + 1))})
+                        </button>
+                      )}
+                    </>
+                  ) : (
+                    <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.4)', fontStyle: 'italic', padding: '12px 0' }}>
+                      Waiting for {p.name} to decide...
+                    </div>
                   )}
                 </div>
 
@@ -8325,7 +8461,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
           <span className="turn-badge">Turn {turnCount}{onlineMode ? ` — ${activePlayer === onlinePlayerIndex ? 'Your turn' : "Opponent's turn"}` : ''}</span>
           <span style={{ fontSize: 9, opacity: 0.25, cursor: 'default' }} title="Press Enter to open chat">💬</span>
           {!combatState && (currentPhase === 'main1' || currentPhase === 'main2') && !(onlineMode && activePlayer !== onlinePlayerIndex) && (
-            <button className="btn text-xs" style={{ borderColor: 'rgba(220,60,40,0.3)', color: '#dc5040' }} onClick={enterCombat}>⚔ Combat</button>
+            <button className="btn text-xs" style={{ borderColor: 'rgba(220,60,40,0.3)', color: '#dc5040', ...((onlineMode && activePlayer !== onlinePlayerIndex) ? { opacity: 0.3, cursor: 'not-allowed' } : {}) }} disabled={onlineMode && activePlayer !== onlinePlayerIndex} onClick={() => { if (onlineMode && activePlayer !== onlinePlayerIndex) return; enterCombat(); }}>⚔ Combat</button>
           )}
           <button className="btn text-xs btn-gold" disabled={!!combatState || endOfTurnRespond || (onlineMode && activePlayer !== onlinePlayerIndex)} style={(combatState || endOfTurnRespond || (onlineMode && activePlayer !== onlinePlayerIndex)) ? { opacity: 0.3, cursor: 'not-allowed' } : {}} onClick={() => {
             if (combatState || endOfTurnRespond) return;
@@ -8379,6 +8515,19 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                  combatState.phase === 'blockers' ? '🛡 Declare Blockers' :
                  combatState.phase === 'damage' ? '💥 Resolving Damage...' : 'Combat'}
               </span>
+              {combatState.phase === 'damage' && (!onlineMode || activePlayer === onlinePlayerIndex) && (
+                <button className="btn" style={{ fontSize: 10, marginLeft: 8, borderColor: 'rgba(220,60,40,0.4)', color: '#dc8060' }}
+                  onClick={() => {
+                    resolveCombatDamage();
+                    // If still stuck, force end combat
+                    setTimeout(() => {
+                      if (combatStateRef.current && combatStateRef.current.phase === 'damage') {
+                        setCombatState(null);
+                        setCurrentPhase('main2');
+                      }
+                    }, 1000);
+                  }}>⚡ Force Resolve</button>
+              )}
               <span className="combat-hint">
                 {combatState.phase === 'attackers'
                   ? `${getState(activePlayer).name}: Click creatures to attack (${combatState.attackers.length} selected)`
@@ -8392,7 +8541,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                     : `${getState(activePlayer === 0 ? 1 : 0).name}: Click your creature to block with, then the attacker`
                   : ''}
               </span>
-              {combatState.phase === 'attackers' && (
+              {combatState.phase === 'attackers' && (!onlineMode || activePlayer === onlinePlayerIndex) && (
                 <>
                   <button className="btn btn-gold" onClick={() => {
                     try { SFX.attack(); } catch(e) {}
@@ -8401,7 +8550,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                   <button className="btn" onClick={cancelCombat}>Cancel</button>
                 </>
               )}
-              {combatState.phase === 'pw-targets' && (() => {
+              {combatState.phase === 'pw-targets' && (!onlineMode || activePlayer === onlinePlayerIndex) && (() => {
                 const defendingPlayer = activePlayer === 0 ? 1 : 0;
                 const defenderPWs = getState(defendingPlayer).battlefield.filter(c => isPlaneswalker(c));
                 const attackerState = getState(activePlayer);
@@ -8449,13 +8598,23 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
               })()}
               {combatState.phase === 'combat-respond' && (() => {
                 const defendingPlayer = activePlayer === 0 ? 1 : 0;
+                const isDefender = onlineMode && onlinePlayerIndex === defendingPlayer;
+                const isAttacker = onlineMode && onlinePlayerIndex === activePlayer;
                 return (
                   <>
-                    <button className="btn" style={{ borderColor: 'rgba(100,200,255,0.4)', color: '#6cf', fontSize: 11 }}
-                      onClick={() => respondInCombat(defendingPlayer)}>⚡ {getState(defendingPlayer).name}: Respond</button>
-                    <button className="btn" style={{ borderColor: 'rgba(200,170,60,0.3)', color: '#e8c96a', fontSize: 11 }}
-                      onClick={() => respondInCombat(activePlayer)}>⚡ {getState(activePlayer).name}: Respond</button>
-                    <button className="btn btn-primary" onClick={proceedToBlockers}>Proceed to Blockers →</button>
+                    {/* In online mode: each player only sees their own respond button */}
+                    {(!onlineMode || isDefender) && (
+                      <button className="btn" style={{ borderColor: 'rgba(100,200,255,0.4)', color: '#6cf', fontSize: 11 }}
+                        onClick={() => respondInCombat(defendingPlayer)}>⚡ {getState(defendingPlayer).name}: Respond</button>
+                    )}
+                    {(!onlineMode || isAttacker) && (
+                      <button className="btn" style={{ borderColor: 'rgba(200,170,60,0.3)', color: '#e8c96a', fontSize: 11 }}
+                        onClick={() => respondInCombat(activePlayer)}>⚡ {getState(activePlayer).name}: Respond</button>
+                    )}
+                    {/* Only defender proceeds to blockers in online mode */}
+                    {(!onlineMode || isDefender) && (
+                      <button className="btn btn-primary" onClick={proceedToBlockers}>Proceed to Blockers →</button>
+                    )}
                   </>
                 );
               })()}
@@ -8463,6 +8622,8 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                 const totalAttackers = combatState.attackers.length;
                 const blockedCount = Object.entries(combatState.blocks).filter(([, ids]) => ids.length > 0).length;
                 const unblockedCount = totalAttackers - blockedCount;
+                const defendingPlayer = activePlayer === 0 ? 1 : 0;
+                const canBlock = !onlineMode || onlinePlayerIndex === defendingPlayer;
                 return (
                   <>
                     <span style={{ fontSize: 10, opacity: 0.5 }}>
@@ -8470,14 +8631,18 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                       {blockedCount > 0 && unblockedCount > 0 && ' · '}
                       {unblockedCount > 0 && <span style={{ color: 'rgba(220,60,40,0.9)' }}>⚔{unblockedCount} unblocked</span>}
                     </span>
-                    <button className="btn btn-primary" onClick={() => {
-                      try { SFX.block(); } catch(e) {}
-                      confirmBlockers();
-                    }}>Confirm Blockers</button>
-                    <button className="btn" style={{ fontSize: 10 }} onClick={() => {
-                      try { SFX.block(); } catch(e) {}
-                      confirmBlockers();
-                    }}>No Blocks</button>
+                    {canBlock && (
+                      <>
+                        <button className="btn btn-primary" onClick={() => {
+                          try { SFX.block(); } catch(e) {}
+                          confirmBlockers();
+                        }}>Confirm Blockers</button>
+                        <button className="btn" style={{ fontSize: 10 }} onClick={() => {
+                          try { SFX.block(); } catch(e) {}
+                          confirmBlockers();
+                        }}>No Blocks</button>
+                      </>
+                    )}
                   </>
                 );
               })()}
@@ -8606,14 +8771,15 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       )}
 
       {/* ETB Reminder Popup */}
-      {/* Scry / Surveil Overlay — separate modes */}
-      {scryView && (() => {
+      {/* Scry / Surveil Overlay — separate modes (only visible to scrying player in online mode) */}
+      {scryView && (!onlineMode || onlinePlayerIndex === scryView.pIdx) && (() => {
         const sp = getState(scryView.pIdx);
         const topCards = sp.library.slice(0, scryView.count);
         const isScry = scryView.mode === 'scry';
         const isSurveil = scryView.mode === 'surveil';
         const accentColor = isScry ? 'rgba(100,180,220,' : 'rgba(140,100,200,';
         const textColor = isScry ? '#70b8d8' : '#b090e0';
+        const canInteract = !onlineMode || onlinePlayerIndex === scryView.pIdx;
         return (
           <div style={{
             position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)',
@@ -8633,6 +8799,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                 <div key={card.id} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
                   <img src={getCardNormal(card)} alt={card.name}
                     style={{ height: 240, borderRadius: 10, boxShadow: '0 4px 16px rgba(0,0,0,0.5)' }} />
+                  {canInteract && (
                   <div style={{ display: 'flex', gap: 4 }}>
                     <button className="btn" style={{ padding: '4px 10px', fontSize: 10, borderColor: accentColor + '0.3)', color: textColor }}
                       onClick={() => {
@@ -8662,12 +8829,14 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                         }} title="To graveyard">💀 Graveyard</button>
                     )}
                   </div>
+                  )}
                 </div>
               ))}
               {topCards.length === 0 && (
                 <div style={{ color: 'rgba(255,255,255,0.3)', fontSize: 14, padding: 40 }}>Library is empty</div>
               )}
             </div>
+            {canInteract ? (
             <div style={{ display: 'flex', gap: 8 }}>
               <button className="btn" style={{ padding: '6px 16px', fontSize: 11, borderColor: accentColor + '0.3)', color: textColor }}
                 onClick={() => setScryView({ ...scryView, count: Math.min(scryView.count + 1, sp.library.length) })}>
@@ -8682,6 +8851,11 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                 Close (Keep All)
               </button>
             </div>
+            ) : (
+            <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.4)', padding: '10px 0', fontStyle: 'italic' }}>
+              Opponent is {isScry ? 'scrying' : 'surveilling'}...
+            </div>
+            )}
           </div>
         );
       })()}
@@ -8704,25 +8878,36 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
               {opponentName}: Cast instants, flash creatures, or cycle before the turn ends.
             </div>
             <div style={{ display: 'flex', gap: 12 }}>
-              <button className="btn" style={{ padding: '10px 28px', fontSize: 13, borderColor: 'rgba(60,180,220,0.4)', color: '#60c8e8', background: 'rgba(60,180,220,0.08)' }}
-                onClick={() => setInstantCasting({ pIdx: opponentIdx, returnToEndStep: true })}>
-                ⚡ Cast Instant / Flash / Cycle
-              </button>
-              <button className="btn" style={{ padding: '10px 28px', fontSize: 13, borderColor: 'rgba(60,180,220,0.4)', color: '#60c8e8', background: 'rgba(60,180,220,0.08)' }}
-                onClick={() => setInstantCasting({ pIdx: activePlayer, returnToEndStep: true })}>
-                ⚡ {activeName} Respond
-              </button>
-              <button className="btn btn-gold" style={{ padding: '10px 28px', fontSize: 13 }}
-                onClick={executePassTurn}>
-                ✓ Proceed — Pass Turn
-              </button>
+              {(!onlineMode || onlinePlayerIndex === opponentIdx) && (
+                <button className="btn" style={{ padding: '10px 28px', fontSize: 13, borderColor: 'rgba(60,180,220,0.4)', color: '#60c8e8', background: 'rgba(60,180,220,0.08)' }}
+                  onClick={() => setInstantCasting({ pIdx: opponentIdx, returnToEndStep: true })}>
+                  ⚡ Cast Instant / Flash / Cycle
+                </button>
+              )}
+              {(!onlineMode || onlinePlayerIndex === activePlayer) && (
+                <button className="btn" style={{ padding: '10px 28px', fontSize: 13, borderColor: 'rgba(60,180,220,0.4)', color: '#60c8e8', background: 'rgba(60,180,220,0.08)' }}
+                  onClick={() => setInstantCasting({ pIdx: activePlayer, returnToEndStep: true })}>
+                  ⚡ {activeName} Respond
+                </button>
+              )}
+              {(!onlineMode || onlinePlayerIndex === opponentIdx) && (
+                <button className="btn btn-gold" style={{ padding: '10px 28px', fontSize: 13 }}
+                  onClick={executePassTurn}>
+                  ✓ Proceed — Pass Turn
+                </button>
+              )}
+              {onlineMode && onlinePlayerIndex === activePlayer && (
+                <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.4)', fontStyle: 'italic', alignSelf: 'center' }}>
+                  Waiting for {opponentName} to respond or pass...
+                </div>
+              )}
             </div>
           </div>
         );
       })()}
 
-      {/* Look at Top X — choose cards for hand (Memory Deluge, Dig Through Time, etc.) */}
-      {lookTopView && (() => {
+      {/* Look at Top X — choose cards for hand (Memory Deluge, Dig Through Time, etc.) — only visible to choosing player */}
+      {lookTopView && (!onlineMode || onlinePlayerIndex === lookTopView.pIdx) && (() => {
         const { pIdx: ltPIdx, cards: ltCards, toHand, selected, toBattlefield, etaliMode, etaliLabel } = lookTopView;
         const selectedSet = selected instanceof Set ? selected : new Set(selected);
         return (
@@ -9079,13 +9264,22 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
             />
             <div className="spell-stack-label">On the Stack{spellStack.length > 1 ? ` (resolving top)` : ''}</div>
             <div className="spell-stack-buttons">
-              <button className="btn-resolve" onClick={() => {
-                resolveTopOfStack();
-              }}>✓ Resolve</button>
-              <button className="btn-respond" onClick={() => {
-                const opponentPIdx = stackTop.pIdx === 0 ? 1 : 0;
-                setInstantCasting({ pIdx: opponentPIdx, returnToStack: true });
-              }}>⚡ Respond</button>
+              {(!onlineMode || onlinePlayerIndex === (stackTop.pIdx === 0 ? 1 : 0)) && (
+                <button className="btn-resolve" onClick={() => {
+                  resolveTopOfStack();
+                }}>✓ Resolve</button>
+              )}
+              {(!onlineMode || onlinePlayerIndex === (stackTop.pIdx === 0 ? 1 : 0)) && (
+                <button className="btn-respond" onClick={() => {
+                  const opponentPIdx = stackTop.pIdx === 0 ? 1 : 0;
+                  setInstantCasting({ pIdx: opponentPIdx, returnToStack: true });
+                }}>⚡ Respond</button>
+              )}
+              {onlineMode && onlinePlayerIndex === stackTop.pIdx && (
+                <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.4)', padding: '6px 0', fontStyle: 'italic' }}>
+                  Waiting for opponent to resolve or respond...
+                </div>
+              )}
             </div>
             {spellStack.length === 1 && (
               <div style={{ fontSize: 10, opacity: 0.4, marginTop: 4, fontStyle: 'italic' }}>
@@ -9100,6 +9294,190 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
           </div>
         </div>
       )}
+
+      {/* Sacrifice Counter: "Counter unless pays {X}" choice overlay */}
+      {sacCounterChoice && (() => {
+        const { sacPIdx, sacCard, targetEntry, payAmount } = sacCounterChoice;
+        const targetPIdx = targetEntry.pIdx;
+        const targetPlayer = getState(targetPIdx);
+        const sacPlayer = getState(sacPIdx);
+        // In online mode: only the spell's owner (targetPIdx) decides whether to pay
+        const canDecide = !onlineMode || onlinePlayerIndex === targetPIdx;
+        const totalMana = Object.values(targetPlayer.manaPool || {}).reduce((a, b) => a + b, 0);
+        const canPay = totalMana >= payAmount;
+        return (
+          <div style={{
+            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.88)',
+            display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+            zIndex: 10001, animation: 'fadeIn 0.2s ease',
+          }}>
+            <div style={{
+              background: 'linear-gradient(160deg, #1a1830, #14122a)', borderRadius: 14, padding: '20px 28px',
+              border: '1px solid rgba(220,80,60,0.4)', boxShadow: '0 8px 40px rgba(0,0,0,0.7), 0 0 30px rgba(220,80,60,0.1)',
+              maxWidth: 450, textAlign: 'center',
+            }}>
+              <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: 2, color: 'rgba(220,80,60,0.8)', marginBottom: 6, fontWeight: 700 }}>
+                🚫 Counter Unless Pays
+              </div>
+              <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.6)', marginBottom: 12, lineHeight: 1.5 }}>
+                <strong style={{ color: '#e0a040' }}>{sacPlayer.name}</strong> sacrificed <strong style={{ color: '#d4b44a' }}>{sacCard.name}</strong> to counter{' '}
+                <strong style={{ color: '#6cf' }}>{targetEntry.displayName}</strong>.
+              </div>
+              <div style={{ fontSize: 13, color: '#e8e4dc', marginBottom: 16, fontWeight: 600 }}>
+                {targetPlayer.name}: Pay {'{' + payAmount + '}'} to keep your spell, or let it be countered?
+              </div>
+              <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.35)', marginBottom: 14, fontStyle: 'italic' }}>
+                Mana pool: {Object.entries(targetPlayer.manaPool || {}).filter(([,v]) => v > 0).map(([k,v]) => `${k}:${v}`).join(' ') || 'empty'} — Tap lands above to add mana first if needed.
+              </div>
+              {canDecide ? (
+                <div style={{ display: 'flex', gap: 12, justifyContent: 'center' }}>
+                  <button className="btn btn-gold" style={{ padding: '10px 24px', fontSize: 13, opacity: canPay ? 1 : 0.35, cursor: canPay ? 'pointer' : 'not-allowed' }}
+                    disabled={!canPay}
+                    onClick={() => {
+                      if (!canPay) return;
+                      // Pay the mana: deduct generic mana from pool
+                      let remaining = payAmount;
+                      setState(targetPIdx, prev => {
+                        const newPool = { ...prev.manaPool };
+                        // Deduct from colorless first, then alphabetical
+                        const order = ['C', 'B', 'G', 'R', 'U', 'W'];
+                        for (const color of order) {
+                          if (remaining <= 0) break;
+                          const available = newPool[color] || 0;
+                          const take = Math.min(available, remaining);
+                          newPool[color] = available - take;
+                          remaining -= take;
+                        }
+                        return { ...prev, manaPool: newPool };
+                      });
+                      // Spell stays on the stack — counter fizzles
+                      try { SFX.playSpell(); } catch(e) {}
+                      setCastError({ pIdx: targetPIdx, message: `💰 Paid {${payAmount}} — ${targetEntry.displayName} was NOT countered!` });
+                      setTimeout(() => setCastError(null), 2500);
+                      addGameLog(targetPIdx, '💰', `Paid {${payAmount}} to prevent ${sacCard.name} from countering ${targetEntry.displayName}`);
+                      setSacCounterChoice(null);
+                    }}>
+                    💰 Pay {'{'}{payAmount}{'}'} — Keep Spell
+                  </button>
+                  <button className="btn" style={{ padding: '10px 24px', fontSize: 13, borderColor: 'rgba(220,80,60,0.4)', color: '#e06050' }}
+                    onClick={() => {
+                      // Don't pay — spell is countered
+                      try { SFX.counterspell(); } catch(e) {}
+                      // Remove the targeted spell from stack
+                      setSpellStack(prev => prev.filter(e => e !== targetEntry));
+                      // Counter the spell (move to graveyard)
+                      counterSpellOnStack(targetEntry);
+                      setCastError({ pIdx: targetPIdx, message: `🚫 ${targetEntry.displayName} was countered by ${sacCard.name}!` });
+                      setTimeout(() => setCastError(null), 2500);
+                      addGameLog(sacPIdx, '🚫', `${sacCard.name} countered ${targetEntry.displayName} (opponent declined to pay)`);
+                      setSacCounterChoice(null);
+                    }}>
+                    🚫 Don't Pay — Countered
+                  </button>
+                </div>
+              ) : (
+                <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.4)', fontStyle: 'italic', padding: '10px 0' }}>
+                  Waiting for {targetPlayer.name} to decide...
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Library Search Overlay (Solemn Simulacrum, Farhaven Elf, etc.) */}
+      {librarySearch && (!onlineMode || onlinePlayerIndex === librarySearch.pIdx) && (() => {
+        const { pIdx: searchPIdx, filter, tapped: enterTapped, source } = librarySearch;
+        const lib = getState(searchPIdx).library || [];
+        const BASIC_LAND_NAMES = ['plains', 'island', 'swamp', 'mountain', 'forest',
+          'snow-covered plains', 'snow-covered island', 'snow-covered swamp', 'snow-covered mountain', 'snow-covered forest'];
+        const matchingCards = filter === 'basicLand'
+          ? lib.filter(c => {
+              const tl = (c.type_line || '').toLowerCase();
+              const name = (c.name || '').toLowerCase();
+              return tl.includes('basic') && tl.includes('land') || BASIC_LAND_NAMES.includes(name);
+            })
+          : lib.filter(c => (c.type_line || '').toLowerCase().includes('land'));
+        return (
+          <div style={{
+            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.9)',
+            display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+            zIndex: 10002, animation: 'fadeIn 0.2s ease',
+          }}>
+            <div style={{
+              background: 'linear-gradient(160deg, #1a2a1a, #122014)', borderRadius: 14, padding: '20px 28px',
+              border: '1px solid rgba(80,200,80,0.4)', boxShadow: '0 8px 40px rgba(0,0,0,0.7), 0 0 30px rgba(80,200,80,0.1)',
+              maxWidth: 600, textAlign: 'center', maxHeight: '80vh', overflow: 'auto',
+            }}>
+              <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: 2, color: 'rgba(80,200,80,0.8)', marginBottom: 6, fontWeight: 700 }}>
+                {source}: Search Library
+              </div>
+              <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.6)', marginBottom: 14 }}>
+                Choose a {filter === 'basicLand' ? 'basic land' : 'land'} card to put onto the battlefield{enterTapped ? ' tapped' : ''}. ({matchingCards.length} found in library)
+              </div>
+              {matchingCards.length > 0 ? (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, justifyContent: 'center', marginBottom: 14 }}>
+                  {[...new Map(matchingCards.map(c => [c.name, c])).values()].map((card, i) => {
+                    const count = matchingCards.filter(c => c.name === card.name).length;
+                    return (
+                      <button key={i} onClick={() => {
+                        // Find first matching card in library
+                        const target = lib.find(c => c.name === card.name);
+                        if (!target) return;
+                        setState(searchPIdx, prev => {
+                          const newLib = [...prev.library];
+                          const idx = newLib.findIndex(c => c.id === target.id);
+                          if (idx === -1) return prev;
+                          const [landCard] = newLib.splice(idx, 1);
+                          // Shuffle remaining library
+                          for (let si = newLib.length - 1; si > 0; si--) { const sj = Math.floor(Math.random() * (si + 1)); [newLib[si], newLib[sj]] = [newLib[sj], newLib[si]]; }
+                          return {
+                            ...prev,
+                            library: newLib,
+                            battlefield: [...prev.battlefield, { ...landCard, tapped: !!enterTapped, counters: {} }],
+                          };
+                        });
+                        addGameLog(searchPIdx, '🔍', `${getState(searchPIdx).name} searched library for ${card.name}${enterTapped ? ' (tapped)' : ''} via ${source}`);
+                        setCastError({ pIdx: searchPIdx, message: `${card.name} enters the battlefield${enterTapped ? ' tapped' : ''}`, background: '#1a3320' });
+                        setTimeout(() => setCastError(null), 1500);
+                        setLibrarySearch(null);
+                      }} style={{
+                        background: 'linear-gradient(180deg, #2a4a2a, #1a3a1a)', border: '1px solid rgba(80,200,80,0.3)',
+                        borderRadius: 8, padding: '8px 16px', color: '#e8e4dc', cursor: 'pointer', fontSize: 12,
+                        transition: 'all 0.15s', minWidth: 100,
+                      }}
+                      onMouseOver={e => e.currentTarget.style.borderColor = 'rgba(80,200,80,0.8)'}
+                      onMouseOut={e => e.currentTarget.style.borderColor = 'rgba(80,200,80,0.3)'}
+                      >
+                        {card.name} {count > 1 ? `(x${count})` : ''}
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.4)', marginBottom: 14, fontStyle: 'italic' }}>
+                  No matching lands found in library.
+                </div>
+              )}
+              <button onClick={() => {
+                // Decline / fail to find — just shuffle and close
+                setState(searchPIdx, prev => {
+                  const newLib = [...prev.library];
+                  for (let si = newLib.length - 1; si > 0; si--) { const sj = Math.floor(Math.random() * (si + 1)); [newLib[si], newLib[sj]] = [newLib[sj], newLib[si]]; }
+                  return { ...prev, library: newLib };
+                });
+                addGameLog(searchPIdx, '🔍', `${getState(searchPIdx).name} searched library but chose not to find a land (${source})`);
+                setLibrarySearch(null);
+              }} style={{
+                background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.2)',
+                borderRadius: 8, padding: '8px 20px', color: 'rgba(255,255,255,0.5)', cursor: 'pointer', fontSize: 11,
+              }}>
+                Decline (shuffle only)
+              </button>
+            </div>
+          </div>
+        );
+      })()}
 
       {pwAbilityOnStack && (
         <div className="pw-ability-overlay">
@@ -9116,27 +9494,38 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
               {pwAbilityOnStack.ability.text}
             </div>
             <div className="pw-ability-buttons">
-              <button className="btn-ok" onClick={() => {
-                const entry = pwAbilityOnStack;
-                setPwAbilityOnStack(null);
-                setPwReminder({ pIdx: entry.pIdx, card: entry.card, ability: entry.ability });
-              }}>✓ OK</button>
-              <button className="btn-respond" onClick={() => {
-                const entry = pwAbilityOnStack;
-                const opponentPIdx = entry.pIdx === 0 ? 1 : 0;
-                setPwAbilityOnStack(null);
-                setPwReminder({ pIdx: entry.pIdx, card: entry.card, ability: entry.ability });
-                setInstantCasting({ pIdx: opponentPIdx });
-              }}>⚡ Respond</button>
+              {(!onlineMode || onlinePlayerIndex === (pwAbilityOnStack.pIdx === 0 ? 1 : 0)) && (
+                <button className="btn-ok" onClick={() => {
+                  const entry = pwAbilityOnStack;
+                  setPwAbilityOnStack(null);
+                  setPwReminder({ pIdx: entry.pIdx, card: entry.card, ability: entry.ability });
+                }}>✓ OK</button>
+              )}
+              {(!onlineMode || onlinePlayerIndex === (pwAbilityOnStack.pIdx === 0 ? 1 : 0)) && (
+                <button className="btn-respond" onClick={() => {
+                  const entry = pwAbilityOnStack;
+                  const opponentPIdx = entry.pIdx === 0 ? 1 : 0;
+                  setPwAbilityOnStack(null);
+                  setPwReminder({ pIdx: entry.pIdx, card: entry.card, ability: entry.ability });
+                  setInstantCasting({ pIdx: opponentPIdx });
+                }}>⚡ Respond</button>
+              )}
+              {onlineMode && onlinePlayerIndex === pwAbilityOnStack.pIdx && (
+                <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.4)', padding: '6px 0', fontStyle: 'italic' }}>
+                  Waiting for opponent to OK or respond...
+                </div>
+              )}
             </div>
             <div style={{ fontSize: 10, opacity: 0.4, marginTop: 4, fontStyle: 'italic' }}>
-              Opponent: click Respond to cast an instant before this resolves
+              {(!onlineMode || onlinePlayerIndex !== pwAbilityOnStack.pIdx)
+                ? 'Click Respond to cast an instant before this resolves'
+                : 'Opponent decides whether to respond'}
             </div>
           </div>
         </div>
       )}
 
-      {etbReminder && (
+      {etbReminder && (!onlineMode || onlinePlayerIndex === etbReminder.pIdx) && (
         <div style={{
           position: 'fixed', bottom: 80, left: '50%', transform: 'translateX(-50%)',
           zIndex: 1500, animation: 'fadeIn 0.2s ease',
@@ -9219,7 +9608,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       )}
 
       {/* PW Ability Reminder (after overlay closes) */}
-      {pwReminder && (
+      {pwReminder && (!onlineMode || onlinePlayerIndex === pwReminder.pIdx) && (
         <div style={{
           position: 'fixed', bottom: 80, left: '50%', transform: 'translateX(-50%)',
           zIndex: 1500, animation: 'fadeIn 0.2s ease',
@@ -9278,9 +9667,109 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
               const untilNextTurnPower = untilNextTurnMatch ? parseInt(untilNextTurnMatch[1]) : 0;
               const untilNextTurnToughness = untilNextTurnMatch ? parseInt(untilNextTurnMatch[2]) : 0;
 
-              if (pwEffects.length > 0 || isEmblem || isUntilNextTurn) {
+              // Chandra-style: "Exile the top card of your library. You may cast that card. If you don't, [PW] deals N damage to each opponent."
+              const exileCastOrDmgMatch = abilityText.match(/exile the top card of your library.*you may cast.*(?:if you don'?t|otherwise).*deals?\s+(\d+)\s+damage/);
+              const isExileCastOrDamage = !!exileCastOrDmgMatch;
+              const exileCastDmg = exileCastOrDmgMatch ? parseInt(exileCastOrDmgMatch[1]) : 0;
+
+              // Token creation detection: "create [N] X/Y [color] [type] creature token(s) [with keywords]"
+              let pwTokenData = null;
+              const tokenCountMatch = abilityText.match(/create\s+(?:(\w+)\s+)?(\d+)\/(\d+)\s+([\w\s]+?)\s+creature\s+tokens?\b/);
+              const tokenNamedMatch = abilityText.match(/create\s+(\w[\w\s]*?),\s+a\s+(?:legendary\s+)?(\d+)\/(\d+)\s+([\w\s]+?)\s+creature\s+token/);
+              if (tokenCountMatch || tokenNamedMatch) {
+                const m = tokenNamedMatch || tokenCountMatch;
+                let tokenName, tokenPower, tokenToughness, colorType;
+                if (tokenNamedMatch) {
+                  tokenName = m[1].trim().split(' ').map(w => w[0].toUpperCase() + w.slice(1)).join(' ');
+                  tokenPower = m[2]; tokenToughness = m[3]; colorType = m[4].trim();
+                } else {
+                  tokenPower = m[2]; tokenToughness = m[3]; colorType = m[4].trim();
+                  tokenName = colorType.split(' ').filter(w => !['white','blue','black','red','green','colorless'].includes(w)).map(w => w[0].toUpperCase() + w.slice(1)).join(' ') || 'Token';
+                }
+                // Parse quantity: "three" -> 3, "two" -> 2, etc.
+                const qtyWord = (abilityText.match(/create\s+(\w+)\s+\d+\/\d+/) || [])[1] || '';
+                const wordToNum = { a: 1, an: 1, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6 };
+                const qty = wordToNum[qtyWord] || 1;
+                // Parse keywords: "with flying", "with vigilance", "with haste and trample"
+                const kwMatch = abilityText.match(/creature tokens?\s+with\s+([\w\s,]+?)(?:\.|$)/);
+                const keywords = kwMatch ? kwMatch[1].replace(/\band\b/g, ',').split(',').map(k => k.trim()).filter(Boolean) : [];
+                // Determine color
+                const colorMap = { white: 'W', blue: 'U', black: 'B', red: 'R', green: 'G' };
+                const colors = Object.keys(colorMap).filter(c => colorType.includes(c)).map(c => colorMap[c]);
+                const creatureType = colorType.split(' ').filter(w => !colorMap[w] && w !== 'colorless').map(w => w[0].toUpperCase() + w.slice(1)).join(' ');
+                pwTokenData = { name: tokenName, power: tokenPower, toughness: tokenToughness, type_line: `Creature Token — ${creatureType}`, colors, keywords, qty };
+              }
+
+              if (pwEffects.length > 0 || isEmblem || isUntilNextTurn || pwTokenData || isExileCastOrDamage) {
                 return (
                   <div style={{ display: 'flex', gap: 8, justifyContent: 'center', flexWrap: 'wrap' }}>
+                    {isExileCastOrDamage && !pwReminder.exiledCard && (
+                      <button className="btn btn-gold" style={{ padding: '6px 16px', fontSize: 12 }}
+                        onClick={() => {
+                          const pIdx = pwReminder.pIdx;
+                          const st = getState(pIdx);
+                          if (st.library.length === 0) {
+                            setCastError({ pIdx, message: '⚠️ Library is empty!' });
+                            setTimeout(() => setCastError(null), 2000);
+                            setPwReminder(null);
+                            return;
+                          }
+                          const topCard = st.library[0];
+                          // Exile the top card
+                          setState(pIdx, prev => ({
+                            ...prev,
+                            library: prev.library.slice(1),
+                            exile: [...prev.exile, { ...topCard, chandraExiled: true }],
+                          }));
+                          addGameLog(pIdx, '🔥', `${pwReminder.card.name}: Exiled ${topCard.name}`);
+                          // Update pwReminder to show the exiled card and choice buttons
+                          setPwReminder(prev => ({ ...prev, exiledCard: topCard, exileCastDmg }));
+                        }}>
+                        📖 Exile Top Card
+                      </button>
+                    )}
+                    {isExileCastOrDamage && pwReminder.exiledCard && (
+                      <>
+                        <div style={{ width: '100%', textAlign: 'center', marginBottom: 6 }}>
+                          <div style={{ fontSize: 11, color: 'rgba(200,170,60,0.8)', marginBottom: 4 }}>Exiled: <strong>{pwReminder.exiledCard.name}</strong></div>
+                          {getCardSmall(pwReminder.exiledCard) && (
+                            <img src={getCardSmall(pwReminder.exiledCard)} alt={pwReminder.exiledCard.name}
+                              style={{ height: 100, borderRadius: 4, border: '1px solid rgba(200,170,60,0.3)' }} />
+                          )}
+                          <div style={{
+                            fontSize: 10, color: 'rgba(255,200,100,0.7)', marginTop: 6, padding: '4px 8px',
+                            background: 'rgba(200,170,60,0.08)', borderRadius: 4, lineHeight: 1.5,
+                          }}>
+                            ⚠️ Du kan kun caste dette kort hvis du har mana nok.
+                            {(pwReminder.exiledCard.type_line || '').toLowerCase().includes('land')
+                              ? ' Lands kræver at du ikke allerede har spillet et land denne tur.'
+                              : ` Mana cost: ${pwReminder.exiledCard.mana_cost || '?'}`}
+                            {' '}Hvis du ikke kan eller vil caste det, vælg damage.
+                          </div>
+                        </div>
+                        <button className="btn btn-gold" style={{ padding: '6px 16px', fontSize: 12 }}
+                          onClick={() => {
+                            addGameLog(pwReminder.pIdx, '🔥', `${pwReminder.card.name}: Cast ${pwReminder.exiledCard.name} from exile`);
+                            setCastError({ pIdx: pwReminder.pIdx, message: `📖 Cast ${pwReminder.exiledCard.name} from exile — pay its mana cost` });
+                            setTimeout(() => setCastError(null), 4000);
+                            setPwReminder(null);
+                          }}>
+                          📖 Cast {pwReminder.exiledCard.name}
+                        </button>
+                        <button className="btn btn-gold" style={{ padding: '6px 16px', fontSize: 12 }}
+                          onClick={() => {
+                            const pIdx = pwReminder.pIdx;
+                            const oppIdx = pIdx === 0 ? 1 : 0;
+                            setState(oppIdx, prev => ({ ...prev, life: prev.life - pwReminder.exileCastDmg }));
+                            markDealtDamage(oppIdx);
+                            try { SFX.lifeLoss(); } catch(e) {}
+                            addGameLog(pIdx, '🔥', `${pwReminder.card.name}: Didn't cast ${pwReminder.exiledCard.name} — deals ${pwReminder.exileCastDmg} damage to ${getState(oppIdx).name}`);
+                            setPwReminder(null);
+                          }}>
+                          🔥 Don't cast — Deal {exileCastDmg} Damage
+                        </button>
+                      </>
+                    )}
                     {pwEffects.length > 0 && (
                       <button className="btn btn-gold" style={{ padding: '6px 16px', fontSize: 12 }}
                         onClick={() => {
@@ -9288,6 +9777,45 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                           setPwReminder(null);
                         }}>
                         ✦ Execute Effect
+                      </button>
+                    )}
+                    {pwTokenData && (
+                      <button className="btn btn-gold" style={{ padding: '6px 16px', fontSize: 12 }}
+                        onClick={() => {
+                          const td = pwTokenData;
+                          for (let i = 0; i < td.qty; i++) {
+                            const token = {
+                              name: td.name, power: td.power, toughness: td.toughness,
+                              type_line: td.type_line, colors: td.colors, keywords: td.keywords,
+                              isToken: true, oracle_text: td.keywords.length > 0 ? td.keywords.join(', ') : '',
+                            };
+                            createToken(pwReminder.pIdx, token, i === 0, true);
+                          }
+                          addGameLog(pwReminder.pIdx, '✦', `${pwReminder.card.name}: Created ${td.qty > 1 ? td.qty + 'x ' : ''}${td.power}/${td.toughness} ${td.name}${td.keywords.length > 0 ? ' with ' + td.keywords.join(', ') : ''}`);
+                          // Fetch Scryfall token art asynchronously
+                          (async () => {
+                            try {
+                              const searchName = td.name.toLowerCase();
+                              const res = await fetch('https://api.scryfall.com/cards/search?q=' + encodeURIComponent('t:token ' + searchName) + '&unique=art&order=released&dir=desc');
+                              if (res.ok) {
+                                const data = await res.json();
+                                const match = data.data?.find(c => c.image_uris && (c.name || '').toLowerCase().includes(searchName));
+                                if (match?.image_uris) {
+                                  setState(pwReminder.pIdx, prev => ({
+                                    ...prev,
+                                    battlefield: prev.battlefield.map(c =>
+                                      c.isToken && c.name === td.name && !c.image_uris
+                                        ? { ...c, image_uris: match.image_uris }
+                                        : c
+                                    )
+                                  }));
+                                }
+                              }
+                            } catch(e) { /* fallback to text rendering */ }
+                          })();
+                          setPwReminder(null);
+                        }}>
+                        ✦ Create {pwTokenData.qty > 1 ? `${pwTokenData.qty}x ` : ''}{pwTokenData.name}
                       </button>
                     )}
                     {isEmblem && (
