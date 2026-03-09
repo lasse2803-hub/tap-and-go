@@ -2522,7 +2522,17 @@ function ZoneViewer({ title, cards, onClose, onCardAction }) {
           <div className="zone-viewer">
             {cards.map((card, i) => (
               <div key={card.id || i} style={{ position: 'relative' }}>
-                {card.isToken ? (
+                {card.isHiddenForetold ? (
+                  /* Opponent's foretold card — shown face-down */
+                  <div onClick={() => onCardAction && onCardAction(card)}
+                    style={{ width: '100%', height: 180, borderRadius: 8, cursor: 'pointer',
+                      background: 'linear-gradient(135deg, #2a1a4a 0%, #1a0a3a 50%, #2a1a4a 100%)',
+                      border: '2px solid rgba(130,80,220,0.4)', display: 'flex', alignItems: 'center',
+                      justifyContent: 'center', flexDirection: 'column', gap: 6 }}>
+                    <span style={{ fontSize: 32 }}>🔮</span>
+                    <span style={{ color: '#b090e0', fontSize: 11, fontWeight: 600 }}>Foretold</span>
+                  </div>
+                ) : card.isToken ? (
                   card.tokenImageSmall ? (
                     <img src={card.tokenImageSmall} alt={card.name}
                       onClick={() => onCardAction && onCardAction(card)}
@@ -2545,7 +2555,7 @@ function ZoneViewer({ title, cards, onClose, onCardAction }) {
                     🔥 Playable
                   </div>
                 )}
-                {card.isForetold && (
+                {card.isForetold && !card.isHiddenForetold && (
                   <div style={{ position: 'absolute', top: 4, right: 4, background: 'rgba(100,60,200,0.9)', color: '#fff', borderRadius: 6, padding: '1px 6px', fontSize: 9, fontWeight: 700 }}>
                     🔮 Foretold
                   </div>
@@ -3501,13 +3511,26 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
           if (tappedNew.length > 0 && entered.length === 0) { SFX.tap(); }
         } catch(e) { /* SFX detection failed silently */ }
 
+        // Hide foretold card details from opponent — show as face-down
+        const oppExile = (serverOpp.exile || prev.exile).map(c => {
+          if (c.isForetold) {
+            return {
+              id: c.id, isForetold: true, isHiddenForetold: true,
+              name: 'Foretold Card', type_line: 'Unknown', oracle_text: '',
+              image_uris: null, card_faces: null, keywords: [], colors: [],
+              mana_cost: '', power: '?', toughness: '?',
+            };
+          }
+          return c;
+        });
+
         return {
           ...prev,
           life: serverOpp.life ?? prev.life,
           poison: serverOpp.poison ?? prev.poison,
           battlefield: serverOpp.battlefield || prev.battlefield,
           graveyard: serverOpp.graveyard || prev.graveyard,
-          exile: serverOpp.exile || prev.exile,
+          exile: oppExile,
           manaPool: serverOpp.manaPool || prev.manaPool,
           emblems: serverOpp.emblems || prev.emblems,
           commandZone: serverOpp.commandZone || prev.commandZone,
