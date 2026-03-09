@@ -3357,12 +3357,14 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
   const [showLibrarySearch, setShowLibrarySearch] = useState(null);
   const [commanderDeathChoice, setCommanderDeathChoice] = useState(null); // { pIdx, card, destination }
   const [peekingHand, setPeekingHand] = useState(null); // { targetPIdx, allowDiscard } — view opponent's hand
-  const [instantCasting, setInstantCasting] = useState(null); // { pIdx } — non-active player casting an instant
+  const [instantCasting, _setInstantCasting] = useState(null); // { pIdx } — non-active player casting an instant
+  const setInstantCasting = (v) => { _setInstantCasting(v); if (onlineMode) onlineSyncNeededRef.current = true; };
   const [scryView, setScryView] = useState(null); // { pIdx, count, mode: 'scry'|'surveil' }
   const [lookTopView, setLookTopView] = useState(null); // { pIdx, cards: [], toHand: N, selected: Set }
   const [librarySearch, _setLibrarySearch] = useState(null); // { pIdx, filter: 'basicLand'|'land', tapped: bool, source: cardName }
   const setLibrarySearch = (v) => { _setLibrarySearch(v); if (onlineMode) onlineSyncNeededRef.current = true; };
-  const [endOfTurnRespond, setEndOfTurnRespond] = useState(false); // true = waiting for opponent to respond before turn passes
+  const [endOfTurnRespond, _setEndOfTurnRespond] = useState(false); // true = waiting for opponent to respond before turn passes
+  const setEndOfTurnRespond = (v) => { _setEndOfTurnRespond(v); if (onlineMode) onlineSyncNeededRef.current = true; };
 
   // Mulligan state — London Mulligan: draw 7, then put back cards equal to mulligans taken
   const [mulliganPhase, _setMulliganPhase] = useState(true); // true at game start
@@ -3452,6 +3454,10 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       sacCounterChoice,
       librarySearch,
       spellStack,
+      instantCasting,
+      endOfTurnRespond,
+      pwAbilityOnStack,
+      preventCombatDamage,
     });
   }); // run on every render when sync is needed
 
@@ -3609,6 +3615,12 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
 
     // Sync spell stack (so opponent sees spells being cast)
     if (onlineState.spellStack !== undefined) _setSpellStack(onlineState.spellStack);
+
+    // Sync instant casting, end-of-turn respond, PW ability stack, prevent combat damage
+    if (onlineState.instantCasting !== undefined) _setInstantCasting(onlineState.instantCasting);
+    if (onlineState.endOfTurnRespond !== undefined) _setEndOfTurnRespond(onlineState.endOfTurnRespond);
+    if (onlineState.pwAbilityOnStack !== undefined) _setPwAbilityOnStack(onlineState.pwAbilityOnStack);
+    if (onlineState.preventCombatDamage !== undefined) _setPreventCombatDamage(onlineState.preventCombatDamage);
 
     // Receive game log entries from opponent
     if (onlineState.__logEntry) {
@@ -5604,7 +5616,8 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
   const stackTop = spellStack.length > 0 ? spellStack[spellStack.length - 1] : null;
   const [sacCounterChoice, _setSacCounterChoice] = useState(null); // { sacPIdx, sacCard, targetEntry, payAmount } — "counter unless pays" choice
   const setSacCounterChoice = (v) => { _setSacCounterChoice(v); if (onlineMode) onlineSyncNeededRef.current = true; };
-  const [pwAbilityOnStack, setPwAbilityOnStack] = useState(null); // { pIdx, card, ability: { cost, text } }
+  const [pwAbilityOnStack, _setPwAbilityOnStack] = useState(null); // { pIdx, card, ability: { cost, text } }
+  const setPwAbilityOnStack = (v) => { _setPwAbilityOnStack(v); if (onlineMode) onlineSyncNeededRef.current = true; };
   const [pwReminder, setPwReminder] = useState(null); // { pIdx, card, ability }
   const [ltbReminder, setLtbReminder] = useState(null); // { pIdx, card, effects[] }
 
@@ -6879,7 +6892,8 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
   const combatStateRef = useRef(combatState);
   combatStateRef.current = combatState;
   const [combatLog, setCombatLog] = useState(null);
-  const [preventCombatDamage, setPreventCombatDamage] = useState(false);
+  const [preventCombatDamage, _setPreventCombatDamage] = useState(false);
+  const setPreventCombatDamage = (v) => { _setPreventCombatDamage(v); if (onlineMode) onlineSyncNeededRef.current = true; };
   // { phase: 'attackers'|'pw-targets'|'combat-respond'|'blockers'|'damage', attackers: [cardId], attackTargets: { attackerId: 'player'|pwCardId }, blocks: { attackerId: [blockerId] }, selectedBlocker: cardId|null }
 
   // Auto-log ETB/LTB reminders to the game log
