@@ -4401,7 +4401,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       }
     }
 
-    try { if (card.tapped) SFX.untap(); else SFX.tap(); } catch(e) {}
+    if (card.tapped) SFX.untap(); else SFX.tap();
     setState(pIdx, prev => ({
       ...prev,
       battlefield: prev.battlefield.map(c => c.id === cardId ? { ...c, tapped: !c.tapped } : c)
@@ -4928,7 +4928,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
   };
 
   const createToken = (pIdx, token, playSound = true, skipLog = false) => {
-    try { if (playSound) SFX.tokenCreate(); } catch(e) {}
+    if (playSound) SFX.tokenCreate();
     setState(pIdx, prev => ({
       ...prev,
       battlefield: [...prev.battlefield, { ...token, id: uid(), tapped: false, counters: {} }]
@@ -6376,16 +6376,18 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
   // §6. SPELL CASTING & STACK
   // ═══════════════════════════════════════════════════════════════
   const resolveSpellFromStack = (stackEntry) => {
+    // NOTE: The card has ALREADY been removed from hand/exile when it was cast
+    // (in castCard / castAdventureFromExile). This is critical for online mode:
+    // the opponent resolves spells on their client but can't modify the caster's hand.
     const { pIdx, card, asAdventure, fromExile } = stackEntry;
-    const sourceZone = fromExile ? 'exile' : 'hand';
 
     if (asAdventure && isAdventure(card)) {
-      // Adventure: move to exile
+      // Adventure: move to exile (card already removed from hand on cast)
       SFX.playSpell();
-      setState(pIdx, prev => {
-        const source = prev[sourceZone].filter(c => c.id !== card.id);
-        return { ...prev, [sourceZone]: source, exile: [...prev.exile, { ...card, tapped: false, adventureCast: true }] };
-      });
+      setState(pIdx, prev => ({
+        ...prev,
+        exile: [...prev.exile, { ...card, tapped: false, adventureCast: true }],
+      }));
 
       const advFace = getAdventureFace(card);
       const advEffects = parseSpellEffects({ ...card, oracle_text: advFace.oracle_text, type_line: advFace.type_line });
@@ -6407,11 +6409,11 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
 
     if (isSpellCard(card)) {
       SFX.playSpell();
-      // Move spell to graveyard
-      setState(pIdx, prev => {
-        const source = prev[sourceZone].filter(c => c.id !== card.id);
-        return { ...prev, [sourceZone]: source, graveyard: [...prev.graveyard, { ...card, tapped: false }] };
-      });
+      // Move spell to graveyard (card already removed from hand/exile on cast)
+      setState(pIdx, prev => ({
+        ...prev,
+        graveyard: [...prev.graveyard, { ...card, tapped: false }],
+      }));
 
       const effects = parseSpellEffects(card);
       const targetMode = getSpellTargetMode(effects);
@@ -6433,9 +6435,11 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       return;
     }
 
-    // Creature / permanent — put on battlefield
-    const fromZone = stackEntry.fromExile ? 'exile' : 'hand';
-    moveCard(pIdx, card, fromZone, 'battlefield');
+    // Creature / permanent — put on battlefield (card already removed from hand/exile on cast)
+    // We still use moveCard for ETB triggers, attachment cleanup, etc. — pass the original
+    // source zone; moveCard's filter is a no-op since the card is already gone from there.
+    const resolveFromZone = fromExile ? 'exile' : 'hand';
+    moveCard(pIdx, card, resolveFromZone, 'battlefield');
     // Play planeswalker entrance sound
     if (isPlaneswalker(card)) {
       SFX.planeswalkerEnters();
@@ -6465,14 +6469,13 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
 
   // Counter a spell on the stack
   const counterSpellOnStack = (stackEntry) => {
-    const { pIdx, card, fromExile } = stackEntry;
+    const { pIdx, card } = stackEntry;
     SFX.counterspell();
-    // Countered spell goes to graveyard, card removed from source zone (mana already paid)
-    const sourceZone = fromExile ? 'exile' : 'hand';
-    setState(pIdx, prev => {
-      const source = prev[sourceZone].filter(c => c.id !== card.id);
-      return { ...prev, [sourceZone]: source, graveyard: [...prev.graveyard, { ...card, tapped: false, counters: {} }] };
-    });
+    // Countered spell goes to graveyard (card already removed from hand/exile on cast)
+    setState(pIdx, prev => ({
+      ...prev,
+      graveyard: [...prev.graveyard, { ...card, tapped: false, counters: {} }],
+    }));
     setCastError({ pIdx, message: `${getDisplayName(card)} was countered!` });
     setTimeout(() => setCastError(null), 2000);
     addGameLog(pIdx, '🚫', `${getDisplayName(card)} was countered`);
@@ -6503,13 +6506,11 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       if (cardCantBeCountered(spellBelow.card)) {
         // Target can't be countered — counterspell fizzles, target stays on stack
         setSpellStack(prev => prev.slice(0, -1)); // remove only top
-        // Move the counterspell to graveyard (it was cast, mana paid, goes to GY)
-        const counterEntry = topSpell;
-        const sourceZone = counterEntry.fromExile ? 'exile' : 'hand';
-        setState(counterEntry.pIdx, prev => {
-          const source = prev[sourceZone].filter(c => c.id !== counterEntry.card.id);
-          return { ...prev, [sourceZone]: source, graveyard: [...prev.graveyard, { ...counterEntry.card, tapped: false }] };
-        });
+        // Move the counterspell to graveyard (card already removed from hand on cast)
+        setState(topSpell.pIdx, prev => ({
+          ...prev,
+          graveyard: [...prev.graveyard, { ...topSpell.card, tapped: false }],
+        }));
         SFX.playSpell();
         const opponentPIdx = topSpell.pIdx === 0 ? 1 : 0;
         setCastError({ pIdx: opponentPIdx, message: `⚠️ ${spellBelow.displayName} can't be countered! ${topSpell.displayName} fizzles.` });
@@ -6518,13 +6519,11 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       } else {
         // Counter succeeds — remove both top and target from stack
         setSpellStack(prev => prev.slice(0, -2));
-        // Move counterspell to graveyard
-        const counterEntry = topSpell;
-        const counterSourceZone = counterEntry.fromExile ? 'exile' : 'hand';
-        setState(counterEntry.pIdx, prev => {
-          const source = prev[counterSourceZone].filter(c => c.id !== counterEntry.card.id);
-          return { ...prev, [counterSourceZone]: source, graveyard: [...prev.graveyard, { ...counterEntry.card, tapped: false }] };
-        });
+        // Move counterspell to graveyard (card already removed from hand on cast)
+        setState(topSpell.pIdx, prev => ({
+          ...prev,
+          graveyard: [...prev.graveyard, { ...topSpell.card, tapped: false }],
+        }));
         SFX.playSpell();
         // Counter the target spell
         counterSpellOnStack(spellBelow);
@@ -6565,10 +6564,20 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
 
     // Pay mana immediately
     const newPool = deductManaCost(p.manaPool, cost);
-    setState(pIdx, prev => ({ ...prev, manaPool: newPool }));
 
-    // Check if card is being cast from exile
+    // Check if card is being cast from exile (foretell, adventure)
     const isFromExile = getState(pIdx).exile.some(c => c.id === card.id);
+    const sourceZone = isFromExile ? 'exile' : 'hand';
+
+    // Remove card from source zone NOW (not on resolve) — this is critical for online
+    // mode because the opponent resolves spells on their client, which can't modify
+    // the caster's hand (server blocks it). Also matches MTG rules: card moves to
+    // stack on cast, not on resolve.
+    setState(pIdx, prev => ({
+      ...prev,
+      manaPool: newPool,
+      [sourceZone]: prev[sourceZone].filter(c => c.id !== card.id),
+    }));
 
     // Put spell on the stack for opponent to see and optionally counter
     const displayName = asAdventure ? getAdventureFace(card).name + ' (Adventure)' : getDisplayName(card);
@@ -6590,8 +6599,13 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       return;
     }
     const newPool = deductManaCost(p.manaPool, cost);
-    setState(pIdx, prev => ({ ...prev, manaPool: newPool }));
-    // Put on stack — mark as fromExile so resolve knows where to move from
+    // Remove card from exile NOW (on cast, not resolve) — required for online mode
+    setState(pIdx, prev => ({
+      ...prev,
+      manaPool: newPool,
+      exile: prev.exile.filter(c => c.id !== card.id),
+    }));
+    // Put on stack — mark as fromExile so resolve knows destination
     setSpellStack(prev => [...prev, { pIdx, card, asAdventure: false, fromExile: true, displayName: creatureFace.name }]);
   };
 
@@ -9041,7 +9055,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
               }}>Command Zone</button>
               <button className="btn" onClick={() => {
                 const { pIdx, card, from, destination } = commanderDeathChoice;
-                try { destination === 'exile' ? SFX.toExile() : SFX.toGraveyard(); } catch(e) {}
+                destination === 'exile' ? SFX.toExile() : SFX.toGraveyard();
                 setState(pIdx, prev => ({
                   ...prev,
                   [from]: prev[from].filter(c => c.id !== card.id),
