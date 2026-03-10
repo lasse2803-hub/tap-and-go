@@ -1716,6 +1716,238 @@ const getSpellTargetMode = (effects) => {
   return 'none'; // self-effect, no target needed
 };
 
+// ============ CARD INFO & HANDLING GUIDE ============
+// Analyzes a card and reports what the game auto-handles vs what requires manual action
+const getCardHandlingInfo = (card) => {
+  const auto = [];   // things the game handles automatically
+  const manual = []; // things the player must do manually via right-click
+  const info = [];   // general info/tips
+
+  const oracle = [card.oracle_text || '', ...(card.card_faces || []).map(f => f.oracle_text || '')].join('\n');
+  const oracleLower = oracle.toLowerCase();
+  const typeLine = (card.type_line || '').toLowerCase();
+  const keywords = (card.keywords || []).map(k => k.toLowerCase());
+
+  // --- Card type ---
+  const isCreatureCard = typeLine.includes('creature');
+  const isLandCard = typeLine.includes('land');
+  const isPW = typeLine.includes('planeswalker');
+  const isSpell = typeLine.includes('instant') || typeLine.includes('sorcery');
+  const isEnch = typeLine.includes('enchantment');
+  const isArt = typeLine.includes('artifact');
+
+  // --- Spell effects ---
+  if (isSpell) {
+    const effects = parseSpellEffects(card);
+    if (effects.length > 0) {
+      effects.forEach(e => {
+        if (['destroy', 'exile', 'bounce', 'damage', 'boost', 'counter_add', 'fight', 'counter_spell',
+             'prevent_combat_damage', 'draw', 'scry', 'surveil', 'look_at_top', 'discard',
+             'each_opponent_loses_life', 'board_wipe_destroy', 'board_wipe_exile', 'board_wipe_bounce',
+             'board_wipe_damage'].includes(e.type)) {
+          auto.push('✅ ' + e.description);
+        }
+      });
+    }
+    if (effects.length === 0) {
+      manual.push('⚠️ Spell effects not auto-parsed — resolve manually via right-click actions');
+    }
+  }
+
+  // --- Counterspell detection ---
+  if (/counter target (spell|nonland|noncreature)|counter that spell/i.test(oracle)) {
+    auto.push('✅ Counterspell: auto-detected, appears as option when spells are on the stack');
+  }
+
+  // --- Can\'t be countered ---
+  if (/can't be countered/i.test(oracle) || keywords.includes("can't be countered")) {
+    auto.push('✅ Cannot be countered: opponents see this restriction');
+  }
+
+  // --- ETB effects ---
+  if (isCreatureCard || isEnch || isArt) {
+    const etbPatterns = [
+      [/when .* enters the battlefield.*deal.*damage/i, 'ETB: deals damage'],
+      [/when .* enters the battlefield.*lose.*life/i, 'ETB: opponent loses life'],
+      [/when .* enters the battlefield.*gain.*life/i, 'ETB: gain life'],
+      [/when .* enters the battlefield.*draw/i, 'ETB: draw cards'],
+      [/when .* enters the battlefield.*destroy/i, 'ETB: destroy target'],
+      [/when .* enters the battlefield.*exile/i, 'ETB: exile target'],
+      [/when .* enters the battlefield.*return.*hand/i, 'ETB: bounce to hand'],
+      [/when .* enters the battlefield.*\+1\/\+1 counter/i, 'ETB: +1/+1 counters'],
+      [/when .* enters the battlefield.*create.*token/i, 'ETB: create token'],
+      [/when .* enters the battlefield.*search.*library/i, 'ETB: search library'],
+      [/when .* enters the battlefield.*scry/i, 'ETB: scry'],
+      [/when .* enters the battlefield.*surveil/i, 'ETB: surveil'],
+      [/when .* enters the battlefield.*discard/i, 'ETB: opponent discards'],
+    ];
+    etbPatterns.forEach(([pat, desc]) => {
+      if (pat.test(oracle)) auto.push('✅ ' + desc + ' (auto-triggered)');
+    });
+    if (/when .* enters the battlefield/i.test(oracle) && !etbPatterns.some(([pat]) => pat.test(oracle))) {
+      manual.push('⚠️ ETB trigger detected but not auto-parsed — resolve manually');
+    }
+  }
+
+  // --- LTB / Dies effects ---
+  if (/when .* dies|when .* leaves the battlefield|when .* is put into a graveyard/i.test(oracle)) {
+    manual.push('⚠️ Dies/LTB trigger: reminder shown, resolve manually');
+  }
+  if (keywords.includes('undying')) auto.push('✅ Undying: returns with +1/+1 counter (reminder shown)');
+  if (keywords.includes('persist')) auto.push('✅ Persist: returns with -1/-1 counter (reminder shown)');
+
+  // --- Planeswalker abilities ---
+  if (isPW) {
+    auto.push('✅ Planeswalker abilities: parsed automatically, activate via right-click');
+    auto.push('✅ Loyalty counters: tracked automatically');
+    if (/create.*token/i.test(oracle)) auto.push('✅ Token creation: auto-detected from abilities');
+    info.push('💡 Click ability buttons in the right-click menu to activate');
+    info.push('💡 Loyalty adjusts automatically when you activate an ability');
+  }
+
+  // --- Creature land ---
+  if (isLandCard && typeof getCreatureLandData === 'function') {
+    const clData = getCreatureLandData(card);
+    if (clData) {
+      auto.push(`✅ Creature land: activate via right-click (becomes ${clData.power}/${clData.toughness})`);
+    }
+  }
+
+  // --- Keywords ---
+  const autoKeywords = ['flying', 'trample', 'deathtouch', 'lifelink', 'first strike', 'double strike',
+    'haste', 'vigilance', 'menace', 'reach', 'indestructible', 'hexproof', 'infect', 'toxic'];
+  autoKeywords.forEach(kw => {
+    if (keywords.includes(kw) || oracleLower.includes(kw)) {
+      auto.push(`✅ ${kw.charAt(0).toUpperCase() + kw.slice(1)}: applied in combat automatically`);
+    }
+  });
+  if (keywords.includes('defender') || oracleLower.includes('defender')) {
+    auto.push('✅ Defender: cannot be declared as attacker');
+  }
+  if (/protection from/i.test(oracle)) {
+    auto.push('✅ Protection: damage prevention and blocking restrictions applied');
+  }
+
+  // --- Cycling ---
+  if (keywords.includes('cycling') || oracleLower.includes('cycling')) {
+    auto.push('✅ Cycling: available via right-click in hand (pay cost, draw a card)');
+    if (/when you cycle/i.test(oracle)) {
+      auto.push('✅ Cycling trigger: auto-detected');
+    }
+  }
+
+  // --- Foretell ---
+  if (keywords.includes('foretell') || oracleLower.includes('foretell')) {
+    auto.push('✅ Foretell: exile face-down from hand, then cast for foretell cost from exile');
+  }
+
+  // --- Alternative casting from graveyard ---
+  if (keywords.includes('flashback') || oracleLower.includes('flashback')) {
+    auto.push('✅ Flashback: cast from graveyard via right-click, then exiled');
+  }
+  if (keywords.includes('jump-start') || oracleLower.includes('jump-start')) {
+    auto.push('✅ Jump-Start: cast from graveyard via right-click');
+  }
+  if (keywords.includes('escape') || oracleLower.includes('escape')) {
+    auto.push('✅ Escape: cast from graveyard via right-click (manually exile cards)');
+  }
+  if (keywords.includes('disturb') || oracleLower.includes('disturb')) {
+    auto.push('✅ Disturb: cast back face from graveyard via right-click');
+  }
+  if (keywords.includes('unearth') || oracleLower.includes('unearth')) {
+    auto.push('✅ Unearth: return from graveyard via right-click');
+  }
+
+  // --- Spectacle ---
+  if (oracleLower.includes('spectacle')) {
+    auto.push('✅ Spectacle: alternative cost shown in hand when opponent dealt damage this turn');
+  }
+
+  // --- Adventure ---
+  if (card.layout === 'adventure' && card.card_faces) {
+    auto.push('✅ Adventure: both faces castable from hand via right-click');
+    auto.push('✅ After adventure spell resolves, creature goes to exile (castable later)');
+  }
+
+  // --- Combat triggers ---
+  if (/whenever .* deals combat damage to (a player|an opponent)/i.test(oracle)) {
+    auto.push('✅ Combat damage trigger: auto-detected after combat');
+  }
+  if (/whenever .* attacks/i.test(oracle)) {
+    if (/create.*token/i.test(oracle)) {
+      auto.push('✅ Attack trigger (token): auto-creates tokens when attacking');
+    } else {
+      manual.push('⚠️ Attack trigger detected — may need manual resolution');
+    }
+  }
+
+  // --- Upkeep triggers ---
+  if (/at the beginning of .* upkeep.*counter/i.test(oracle)) {
+    auto.push('✅ Upkeep trigger: counter added automatically');
+  }
+  if (/at the beginning of .* upkeep.*damage|deals.*damage to you/i.test(oracle)) {
+    auto.push('✅ Upkeep trigger: self-damage applied automatically');
+  }
+
+  // --- Activated abilities ---
+  if (/\{[^}]*\}.*:(?!:)/i.test(oracle) && !isPW) {
+    manual.push('⚠️ Activated ability: some are auto-detected via right-click, others need manual resolution');
+    info.push('💡 Check right-click menu for available activated abilities');
+  }
+
+  // --- Sacrifice abilities ---
+  if (/sacrifice ~.*:/i.test(oracle)) {
+    auto.push('✅ Sacrifice ability: available via right-click on battlefield');
+  }
+
+  // --- Enters tapped ---
+  if (/enters the battlefield tapped/i.test(oracle)) {
+    auto.push('✅ Enters tapped: automatically enters the battlefield tapped');
+  }
+
+  // --- Damage prevention ---
+  if (/prevent all combat damage/i.test(oracle)) {
+    auto.push('✅ Prevent combat damage: applied via spell resolution');
+  }
+  if (/prevent all damage .* would deal/i.test(oracle)) {
+    info.push('💡 Use right-click "Prevent all damage until next turn" on the target creature');
+  }
+
+  // --- Token creation ---
+  if (!isPW && /create.*token/i.test(oracle) && !/when .* enters/i.test(oracle)) {
+    info.push('💡 Token creation: may be auto-detected, or create manually via "Create Token" button');
+  }
+
+  // --- Equipment / Aura ---
+  if (typeLine.includes('equipment')) {
+    auto.push('✅ Equipment: attach via right-click on battlefield');
+    info.push('💡 Right-click → "Attach to creature..." to equip');
+  }
+  if (typeLine.includes('aura')) {
+    auto.push('✅ Aura: attach via right-click on battlefield');
+  }
+
+  // --- Counters ---
+  if (/\+1\/\+1 counter|\-1\/\-1 counter/i.test(oracle)) {
+    info.push('💡 Counters: add/remove via right-click or +/− buttons on card');
+  }
+
+  // --- General tips ---
+  if (isCreatureCard) {
+    info.push('💡 Tap/untap, counters, temp buffs, and keywords all available via right-click');
+  }
+  if (isLandCard) {
+    info.push('💡 Tap for mana via the mana buttons or right-click');
+  }
+
+  // Deduplicate
+  return {
+    auto: [...new Set(auto)],
+    manual: [...new Set(manual)],
+    info: [...new Set(info)],
+  };
+};
+
 // ============ HELPERS ============
 const uid = () => Math.random().toString(36).substr(2, 9);
 
@@ -2650,6 +2882,14 @@ function CardDisplay({ card, size = 60, onClick, onContext, showPreview, extraCl
       )}
       {card.exiledCards && card.exiledCards.length > 0 && (
         <div className="exiled-count-badge" title={`Exiled: ${card.exiledCards.map(c => c.name).join(', ')}`}>📎 {card.exiledCards.length}</div>
+      )}
+      {(card.damagePrevented !== undefined && card.damagePrevented !== false) && (
+        <div style={{
+          position: 'absolute', top: -4, right: -4, zIndex: 6,
+          background: 'rgba(40,120,200,0.95)', color: '#fff', fontSize: 8, padding: '1px 5px',
+          borderRadius: 6, fontWeight: 700, whiteSpace: 'nowrap',
+          boxShadow: '0 1px 4px rgba(0,0,0,0.5)', border: '1px solid rgba(100,180,255,0.5)',
+        }} title="All damage prevented until next turn">🛡 No Dmg</div>
       )}
       {card.originalOwner !== undefined && (
         <div style={{
@@ -4799,7 +5039,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
           return {
             ...prev,
             battlefield: prev.battlefield.filter(c => !dyingIds.has(c.id)),
-            graveyard: [...prev.graveyard, ...dying.map(c => ({ ...c, tapped: false, counters: {}, tempBuffs: null }))],
+            graveyard: [...prev.graveyard, ...dying.map(c => ({ ...c, tapped: false, counters: {}, tempBuffs: null, damagePrevented: undefined }))],
           };
         });
         dying.forEach(c => {
@@ -5267,6 +5507,28 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
             }});
           }
         }
+        // Damage prevention on own creature (e.g. protect from combat damage)
+        if (isCreature(card) && !isPlaneswalker(card)) {
+          if (!card.damagePrevented && card.damagePrevented !== 0) {
+            actions.push({ label: '🛡 Prevent all damage until next turn', fn: () => {
+              setState(pIdx, prev => ({
+                ...prev,
+                battlefield: prev.battlefield.map(c => c.id === card.id ? { ...c, damagePrevented: onlinePlayerIndex } : c)
+              }));
+              addGameLog(pIdx, '🛡', `${card.name}: all damage prevented until ${getState(onlinePlayerIndex).name}'s next turn`);
+              setCastError({ pIdx, message: `🛡 ${card.name}: damage prevented until your next turn`, background: '#1a2a1a' });
+              setTimeout(() => setCastError(null), 2000);
+            }});
+          } else {
+            actions.push({ label: '🛡 Remove damage prevention', fn: () => {
+              setState(pIdx, prev => ({
+                ...prev,
+                battlefield: prev.battlefield.map(c => c.id === card.id ? { ...c, damagePrevented: undefined } : c)
+              }));
+              addGameLog(pIdx, '🛡', `${card.name}: damage prevention removed`);
+            }});
+          }
+        }
         // Attachment options for Auras and Equipment
         if (isAura(card) || isEquipment(card)) {
           actions.push({ sep: true });
@@ -5314,6 +5576,27 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       } else {
         // Opponent's cards: destructive actions + gain control (spell effects)
         actions.push({ label: '➖ -1/-1 Counter', fn: () => addCounter(pIdx, card.id, '-1/-1') });
+        // Damage prevention (Kiora's +1, Fog-like targeted effects)
+        // damagePrevented stores the pIdx of the player who set it — cleared when THAT player's next turn starts
+        if (!card.damagePrevented && card.damagePrevented !== 0) {
+          actions.push({ label: '🛡 Prevent all damage until next turn', fn: () => {
+            setState(pIdx, prev => ({
+              ...prev,
+              battlefield: prev.battlefield.map(c => c.id === card.id ? { ...c, damagePrevented: onlinePlayerIndex } : c)
+            }));
+            addGameLog(pIdx, '🛡', `${card.name}: all damage prevented until ${getState(onlinePlayerIndex).name}'s next turn`);
+            setCastError({ pIdx, message: `🛡 ${card.name}: damage prevented until your next turn`, background: '#1a2a1a' });
+            setTimeout(() => setCastError(null), 2000);
+          }});
+        } else {
+          actions.push({ label: '🛡 Remove damage prevention', fn: () => {
+            setState(pIdx, prev => ({
+              ...prev,
+              battlefield: prev.battlefield.map(c => c.id === card.id ? { ...c, damagePrevented: undefined } : c)
+            }));
+            addGameLog(pIdx, '🛡', `${card.name}: damage prevention removed`);
+          }});
+        }
         actions.push({ sep: true });
         // Gain control options
         if (isCreature(card)) {
@@ -5447,6 +5730,10 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       }
     }
 
+    // Universal: Card Info & Rulings (available on all cards in all zones)
+    actions.push({ sep: true });
+    actions.push({ label: '📖 Card Info & Rulings', fn: () => setCardInfoOverlay({ card }) });
+
     return actions;
   };
 
@@ -5462,6 +5749,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
 
   const [castError, setCastError] = useState(null); // { pIdx, message }
   const [etbReminder, setEtbReminder] = useState(null); // { pIdx, card, effects[] }
+  const [cardInfoOverlay, setCardInfoOverlay] = useState(null); // { card } — shows card info & rulings overlay
 
   // ===== GAME ACTION LOG =====
   const [gameLog, setGameLog] = useState([]); // [{ id, time, pIdx, icon, text, highlight? }]
@@ -6143,7 +6431,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                 });
                 const rest = prev.battlefield.filter(c => !toBounce.includes(c));
                 bounced += toBounce.length;
-                return { ...prev, battlefield: rest, hand: [...prev.hand, ...toBounce.map(c => ({ ...c, tapped: false, counters: {}, tempBuffs: null }))] };
+                return { ...prev, battlefield: rest, hand: [...prev.hand, ...toBounce.map(c => ({ ...c, tapped: false, counters: {}, tempBuffs: null, damagePrevented: undefined }))] };
               });
             });
             SFX.massReturn();
@@ -7428,6 +7716,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     // Return temporarily controlled cards (Claim the Firstborn, Act of Treason, etc.)
     returnTemporaryControl();
     // Clear temporary buffs for both players (until end of turn effects expire)
+    // Note: damagePrevented is NOT cleared here — it persists until the setting player's next turn
     [0, 1].forEach(pi => {
       setState(pi, p => ({
         ...p,
@@ -7438,11 +7727,21 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       const next = prev === 0 ? 1 : 0;
       if (next === 0) setTurnCount(t => t + 1);
       // Clear "until your next turn" effects for the player whose turn is starting
-      // (their next turn has arrived, so effects like Jace's +1 expire)
+      // (their next turn has arrived, so effects like Jace's +1 and Kiora's +1 expire)
       setState(next, p => ({
         ...p,
         untilNextTurnEffects: [],
       }));
+      // Clear damagePrevented flags set by this player (their next turn has arrived)
+      // damagePrevented stores the pIdx of who set it — clear on BOTH players' battlefields
+      [0, 1].forEach(pi => {
+        setState(pi, p => ({
+          ...p,
+          battlefield: p.battlefield.map(c =>
+            c.damagePrevented === next ? { ...c, damagePrevented: undefined } : c
+          ),
+        }));
+      });
       setState(next, p => {
         const base = {
           ...p,
@@ -7731,6 +8030,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         infect: kw.includes('infect') || kw.includes('toxic'),
         toxic: kw.includes('toxic'),
         toxicAmount: (() => { const oracle = (card.oracle_text || '').toLowerCase(); const m = oracle.match(/toxic (\d+)/); return m ? parseInt(m[1]) : 1; })(),
+        damagePrevented: card.damagePrevented !== undefined && card.damagePrevented !== false,
       };
     };
 
@@ -7780,6 +8080,25 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       const attackerDealsNow = phase === 'first'
         ? attackerInfo.firstStrike
         : (!attackerInfo.firstStrike || attackerInfo.doubleStrike);
+
+      // Per-creature damage prevention (Kiora's +1, etc.) — creature deals no combat damage
+      if (attackerInfo.damagePrevented) {
+        // Still let blockers deal damage to this attacker
+        for (const bi of blockerInfos) {
+          if (killedIds.has(bi.id)) continue;
+          const blockerDealsNow = phase === 'first' ? bi.firstStrike : (!bi.firstStrike || bi.doubleStrike);
+          if (!blockerDealsNow) continue;
+          const protFromBlocker = hasProtectionFrom(attackerInfo.card, bi.card);
+          if (protFromBlocker) continue;
+          damageTaken[attackerInfo.id] = (damageTaken[attackerInfo.id] || 0) + bi.power;
+          if (bi.lifelink && bi.power > 0) lifelinkGainDefender += bi.power;
+          if (!attackerInfo.indestructible) {
+            if (bi.deathtouch && bi.power > 0) killedIds.add(attackerInfo.id);
+            if (damageTaken[attackerInfo.id] >= attackerInfo.toughness) killedIds.add(attackerInfo.id);
+          }
+        }
+        return;
+      }
 
       if (blockerInfos.length === 0) {
         // Unblocked — damage goes to attack target (player or planeswalker)
@@ -7952,7 +8271,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         const kw = (c.keywords || []).map(k => k.toLowerCase());
         const has11 = (c.counters?.['+1/+1'] || 0) > 0;
         const hasM1 = (c.counters?.['-1/-1'] || 0) > 0;
-        const cleanCard = { ...c, tapped: false, counters: {}, tempBuffs: null, attachedTo: null };
+        const cleanCard = { ...c, tapped: false, counters: {}, tempBuffs: null, damagePrevented: undefined, attachedTo: null };
 
         if (kw.includes('undying') && !has11 && !c.isToken) {
           undyingReturns.push({ pIdx, card: c, type: 'undying' });
@@ -9777,6 +10096,90 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         );
       })()}
 
+      {/* ===== Card Info & Rulings Overlay ===== */}
+      {cardInfoOverlay && (() => {
+        const { card } = cardInfoOverlay;
+        const handling = getCardHandlingInfo(card);
+        const oracleText = [card.oracle_text || '', ...(card.card_faces || []).map(f => f.oracle_text || '')].filter(Boolean).join('\n---\n');
+        const scryfallUrl = card.scryfall_uri || `https://scryfall.com/search?q=${encodeURIComponent(card.name)}`;
+        return (
+          <div style={{
+            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.92)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            zIndex: 10003, animation: 'fadeIn 0.2s ease',
+          }} onClick={() => setCardInfoOverlay(null)}>
+            <div style={{
+              background: 'linear-gradient(160deg, #1a1a2e, #16213e)', borderRadius: 14, padding: '20px 28px',
+              border: '1px solid rgba(100,140,255,0.3)', boxShadow: '0 8px 40px rgba(0,0,0,0.7), 0 0 30px rgba(60,100,220,0.1)',
+              maxWidth: 650, width: '95%', maxHeight: '85vh', overflow: 'auto', textAlign: 'left',
+            }} onClick={e => e.stopPropagation()}>
+              {/* Header */}
+              <div style={{ display: 'flex', gap: 16, marginBottom: 16, alignItems: 'flex-start' }}>
+                <img src={getCardNormal(card)} alt={card.name}
+                  style={{ height: 140, borderRadius: 8, boxShadow: '0 4px 12px rgba(0,0,0,0.5)', flexShrink: 0 }} />
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 16, fontWeight: 700, color: '#e8e4dc', marginBottom: 4 }}>{getDisplayName(card)}</div>
+                  <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.5)', marginBottom: 4 }}>{card.type_line || ''}</div>
+                  {card.mana_cost && <div style={{ fontSize: 11, color: 'rgba(180,160,220,0.8)', marginBottom: 8 }}>Mana: {card.mana_cost}</div>}
+                  <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.7)', whiteSpace: 'pre-wrap', lineHeight: 1.5,
+                    background: 'rgba(0,0,0,0.3)', borderRadius: 6, padding: '8px 10px', border: '1px solid rgba(255,255,255,0.1)',
+                    maxHeight: 120, overflow: 'auto',
+                  }}>{oracleText || 'No oracle text'}</div>
+                </div>
+              </div>
+
+              {/* Auto-handled */}
+              {handling.auto.length > 0 && (
+                <div style={{ marginBottom: 12 }}>
+                  <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: 2, color: 'rgba(80,200,120,0.8)', marginBottom: 6, fontWeight: 700 }}>
+                    Auto-Handled by Game
+                  </div>
+                  {handling.auto.map((item, i) => (
+                    <div key={i} style={{ fontSize: 11, color: 'rgba(255,255,255,0.75)', padding: '2px 0', lineHeight: 1.4 }}>{item}</div>
+                  ))}
+                </div>
+              )}
+
+              {/* Manual actions needed */}
+              {handling.manual.length > 0 && (
+                <div style={{ marginBottom: 12 }}>
+                  <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: 2, color: 'rgba(255,180,60,0.8)', marginBottom: 6, fontWeight: 700 }}>
+                    Manual Action Required
+                  </div>
+                  {handling.manual.map((item, i) => (
+                    <div key={i} style={{ fontSize: 11, color: 'rgba(255,220,150,0.8)', padding: '2px 0', lineHeight: 1.4 }}>{item}</div>
+                  ))}
+                </div>
+              )}
+
+              {/* Tips */}
+              {handling.info.length > 0 && (
+                <div style={{ marginBottom: 14 }}>
+                  <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: 2, color: 'rgba(100,160,255,0.8)', marginBottom: 6, fontWeight: 700 }}>
+                    Tips
+                  </div>
+                  {handling.info.map((item, i) => (
+                    <div key={i} style={{ fontSize: 11, color: 'rgba(160,200,255,0.8)', padding: '2px 0', lineHeight: 1.4 }}>{item}</div>
+                  ))}
+                </div>
+              )}
+
+              {/* Buttons */}
+              <div style={{ display: 'flex', gap: 8, justifyContent: 'center', marginTop: 8 }}>
+                <button onClick={() => window.open(scryfallUrl, '_blank')} style={{
+                  background: 'linear-gradient(180deg, #2a3a5a, #1a2a4a)', border: '1px solid rgba(100,140,255,0.3)',
+                  borderRadius: 8, padding: '8px 18px', color: '#a0c0ff', cursor: 'pointer', fontSize: 11, fontWeight: 600,
+                }}>🔍 View on Scryfall (Official Rulings)</button>
+                <button onClick={() => setCardInfoOverlay(null)} style={{
+                  background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.2)',
+                  borderRadius: 8, padding: '8px 18px', color: 'rgba(255,255,255,0.6)', cursor: 'pointer', fontSize: 11,
+                }}>Close</button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
       {pwAbilityOnStack && (
         <div className="pw-ability-overlay">
           <div className="pw-ability-card">
@@ -10454,6 +10857,27 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         </div>
       )}
 
+      {/* ===== CARD LOOKUP BUTTON ===== */}
+      <button className="game-log-toggle" onClick={() => {
+        const name = prompt('Enter card name to look up:');
+        if (!name) return;
+        const nameLower = name.toLowerCase();
+        // Search all zones for the card
+        const allCards = [0, 1].flatMap(pi => [
+          ...getState(pi).battlefield, ...getState(pi).graveyard, ...getState(pi).exile,
+          ...(pi === onlinePlayerIndex ? getState(pi).hand : []),
+        ]);
+        const found = allCards.find(c => (c.name || '').toLowerCase().includes(nameLower));
+        if (found) {
+          setCardInfoOverlay({ card: found });
+        } else {
+          // Open Scryfall search if card not in any zone
+          window.open(`https://scryfall.com/search?q=${encodeURIComponent(name)}`, '_blank');
+        }
+      }} style={{ left: 72 }}
+        title="Look up a card — see how it works in this game, with auto-handling info and Scryfall rulings">
+        📖 Lookup
+      </button>
       {/* ===== GAME ACTION LOG ===== */}
       <button className="game-log-toggle" onClick={() => setGameLogOpen(!gameLogOpen)}
         title="Action Log — See all spells cast, abilities activated, triggers, and combat results. Both players see the same log.">
