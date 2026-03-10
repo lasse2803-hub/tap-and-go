@@ -369,6 +369,7 @@ class GameRoom {
       if (update.preventCombatDamage !== undefined) this.gameState.preventCombatDamage = update.preventCombatDamage;
 
       // Forward game log entries from one player to the other
+      if (update.__logEntries) this.gameState.__logEntries = update.__logEntries;
       if (update.__logEntry) this.gameState.__logEntry = update.__logEntry;
 
       this.gameState.timestamp = Date.now();

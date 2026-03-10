@@ -3752,6 +3752,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
   // Online sync: schedule a broadcast after state changes
   const onlineSyncNeededRef = useRef(false);
   const onlineIgnoreNextUpdateRef = useRef(false); // prevent echo loops
+  const pendingLogEntriesRef = useRef([]); // log entries queued for next broadcast
 
   const setState = (pIdx, fn) => {
     if (pIdx === 0) setP1(fn); else setP2(fn);
@@ -3770,7 +3771,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     if (!onlineSyncNeededRef.current) return;
     onlineSyncNeededRef.current = false;
     onlineIgnoreNextUpdateRef.current = true; // ignore the echo from server
-    onStateChange({
+    const payload = {
       players: [p1, p2],
       activePlayer,
       currentPhase,
@@ -3786,7 +3787,16 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       endOfTurnRespond,
       pwAbilityOnStack,
       preventCombatDamage,
-    });
+    };
+    // Bundle any pending log entries into this broadcast
+    // (avoids race condition where separate log broadcast triggers throttle
+    // and causes the actual state sync to be dropped)
+    const entries = pendingLogEntriesRef.current;
+    if (entries.length > 0) {
+      payload.__logEntries = [...entries];
+      pendingLogEntriesRef.current = [];
+    }
+    onStateChange(payload);
   }); // run on every render when sync is needed
 
   // Online mode: receive state updates from server (opponent's actions)
@@ -3963,9 +3973,9 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     if (onlineState.pwAbilityOnStack !== undefined) _setPwAbilityOnStack(onlineState.pwAbilityOnStack);
     if (onlineState.preventCombatDamage !== undefined) _setPreventCombatDamage(onlineState.preventCombatDamage);
 
-    // Receive game log entries from opponent
-    if (onlineState.__logEntry) {
-      const entry = onlineState.__logEntry;
+    // Receive game log entries from opponent (supports both array and single entry)
+    const logEntries = onlineState.__logEntries || (onlineState.__logEntry ? [onlineState.__logEntry] : []);
+    for (const entry of logEntries) {
       // Only process entries from the opponent (avoid our own echo)
       if (entry.pIdx !== onlinePlayerIndex || !gameLog.some(e => e.id === entry.id && e.time === entry.time)) {
         setGameLog(prev => {
@@ -5788,9 +5798,10 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       setHighlightCards(highlightCardIds);
       setTimeout(() => setHighlightCards([]), 2200);
     }
-    // Sync log entry to opponent in online mode
-    if (onlineMode && onStateChange) {
-      onStateChange({ __logEntry: entry });
+    // Queue log entry for next broadcast (bundled with state sync to avoid race conditions)
+    if (onlineMode) {
+      pendingLogEntriesRef.current.push(entry);
+      onlineSyncNeededRef.current = true;
     }
   };
 
@@ -11664,7 +11675,6 @@ function OnlineGameWrapper({ gameSocket, initialState, playerIndex, onExit }) {
           matchInfo, betweenGames, reportGameWon, chooseFirstPlayer, concession, concedeGame, serverGameAction } = gameSocket;
   const [chatOpen, setChatOpen] = useState(false);
   const [chatInput, setChatInput] = useState('');
-  const lastSyncRef = useRef(0);
   const myName = initialState.players[playerIndex].nickname;
   const oppName = initialState.players[playerIndex === 0 ? 1 : 0].nickname;
 
@@ -11802,9 +11812,6 @@ function OnlineGameWrapper({ gameSocket, initialState, playerIndex, onExit }) {
           onlineState={serverState || initialState}
           onlineLastAction={serverLastAction}
           onStateChange={(newState) => {
-            const now = Date.now();
-            if (now - lastSyncRef.current < 100) return;
-            lastSyncRef.current = now;
             sendAction({ type: 'stateSync', state: newState });
           }}
           matchInfo={matchInfo}

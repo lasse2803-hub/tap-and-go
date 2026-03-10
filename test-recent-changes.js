@@ -554,8 +554,10 @@ test('createToken includes game log with skipLog parameter', () => {
   assert(code.includes("if (!skipLog)"), 'skipLog check missing in createToken');
 });
 
-test('addGameLog syncs to opponent via onStateChange', () => {
-  assert(code.includes("onStateChange({ __logEntry: entry })"), 'addGameLog not syncing to opponent');
+test('addGameLog queues log entries for broadcast via pendingLogEntriesRef', () => {
+  assert(code.includes("pendingLogEntriesRef.current.push(entry)"), 'addGameLog not queuing log entries');
+  // Log entries are bundled into the useEffect broadcast as __logEntries
+  assert(code.includes("payload.__logEntries"), 'Log entries not bundled in broadcast payload');
 });
 
 test('moveCard logs zone transitions', () => {
