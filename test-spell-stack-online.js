@@ -573,6 +573,49 @@ test('Empty spellStack correctly clears', () => {
 });
 
 // ════════════════════════════════════════════════════════════════
+// Pre-Cast Targeting (online spell resolution)
+// ════════════════════════════════════════════════════════════════
+console.log('\n▸ Pre-Cast Targeting (online spell resolution)');
+
+test('applyResolvedTargets function exists in client', () => {
+  assert(clientCode.includes('const applyResolvedTargets = (casterIdx, card, targetedEffects, resolvedTargets)'),
+    'applyResolvedTargets function not found');
+});
+
+test('applyResolvedTargets handles creature targets with fizzle check', () => {
+  assert(clientCode.includes('resolvedTargets.type === \'creature\''),
+    'Creature target type check not found');
+  assert(clientCode.includes('fizzles'),
+    'Fizzle handling for missing targets not found');
+});
+
+test('applyResolvedTargets handles player targets with damage', () => {
+  assert(clientCode.includes('resolvedTargets.type === \'player\''),
+    'Player target type check not found');
+  assert(clientCode.includes('resolvedTargets.damage'),
+    'Player damage from resolvedTargets not found');
+});
+
+test('pendingCastRef stores spell info for pre-cast targeting', () => {
+  assert(clientCode.includes('pendingCastRef.current = { pIdx, card, asAdventure'),
+    'pendingCastRef storage not found in castCard');
+});
+
+test('cancelSpellTargeting undoes pre-cast (returns card to source zone)', () => {
+  assert(clientCode.includes('if (pendingCastRef.current)'),
+    'pendingCastRef check in cancelSpellTargeting not found');
+  assert(clientCode.includes('cancels casting'),
+    'Cancel log message not found');
+});
+
+test('resolveSpellFromStack uses resolvedTargets when present', () => {
+  assert(clientCode.includes('if (resolvedTargets)'),
+    'resolvedTargets check in resolveSpellFromStack not found');
+  assert(clientCode.includes('applyResolvedTargets(pIdx, card'),
+    'applyResolvedTargets call in resolveSpellFromStack not found');
+});
+
+// ════════════════════════════════════════════════════════════════
 // Summary
 // ════════════════════════════════════════════════════════════════
 

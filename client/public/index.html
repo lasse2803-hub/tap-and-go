@@ -281,7 +281,7 @@
   /* Reskin art overlay — positions custom art in the card's art box area */
   .reskin-art-overlay {
     position: absolute;
-    top: 7.5%; left: 6%; width: 88%; height: 40%;
+    top: 11.5%; left: 6%; width: 88%; height: 36%;
     object-fit: cover;
     border-radius: 6px / 4px;
     pointer-events: none;
@@ -6047,7 +6047,10 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
   const [gameOver, setGameOver] = useState(null); // { winner, loser, reason }
   const [concedeConfirm, setConcedeConfirm] = useState(false); // show confirmation dialog
   const [spellTargeting, setSpellTargeting] = useState(null); // { pIdx, card, effects, targetMode }
-  const [spellStack, _setSpellStack] = useState([]); // SYNCED — LIFO stack: [{ pIdx, card, asAdventure, fromExile, displayName }, ...]
+  // Pre-cast targeting: when casting a spell with targets, we show the targeting UI
+  // BEFORE putting the spell on the stack. This ref stores the cast info until targets are chosen.
+  const pendingCastRef = useRef(null); // { pIdx, card, asAdventure, fromExile, displayName, nonTargetedEffects }
+  const [spellStack, _setSpellStack] = useState([]); // SYNCED — LIFO stack: [{ pIdx, card, asAdventure, fromExile, displayName, resolvedTargets? }, ...]
   const setSpellStack = syncSetter(_setSpellStack);
   const stackTop = spellStack.length > 0 ? spellStack[spellStack.length - 1] : null;
   const [sacCounterChoice, _setSacCounterChoice] = useState(null); // SYNCED — { sacPIdx, sacCard, targetEntry, payAmount } — "counter unless pays" choice
@@ -6108,6 +6111,35 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
   }, [chatMessages]);
 
   // Apply a spell effect to a target card on the battlefield
+  // Apply pre-selected targets stored at cast time (used by online spell stack)
+  const applyResolvedTargets = (casterIdx, card, targetedEffects, resolvedTargets) => {
+    if (resolvedTargets.type === 'creature') {
+      // Find the target creature on the battlefield by card ID
+      const targetPIdx = resolvedTargets.pIdx;
+      const targetCard = getState(targetPIdx).battlefield.find(c => c.id === resolvedTargets.cardId);
+      if (targetCard) {
+        applySpellEffect(casterIdx, targetPIdx, targetCard, targetedEffects);
+        addGameLog(casterIdx, '🎯', `${getDisplayName(card)} → ${targetCard.name}`);
+      } else {
+        // Target creature is no longer on the battlefield (removed/sacrificed) — fizzle
+        setCastError({ pIdx: casterIdx, message: `${getDisplayName(card)} fizzles — ${resolvedTargets.cardName || 'target'} is no longer on the battlefield`, background: '#4a1a1a' });
+        setTimeout(() => setCastError(null), 2500);
+        addGameLog(casterIdx, '💨', `${getDisplayName(card)} fizzles (target gone)`);
+      }
+    } else if (resolvedTargets.type === 'player') {
+      const targetPIdx = resolvedTargets.pIdx;
+      const dmg = resolvedTargets.damage || 0;
+      if (dmg > 0) {
+        setState(targetPIdx, prev => ({ ...prev, life: prev.life - dmg }));
+        markDealtDamage(targetPIdx);
+        SFX.playerDamage();
+        addGameLog(casterIdx, '🔥', `${getDisplayName(card)}: ${dmg} damage to ${getState(targetPIdx).name}`);
+      }
+    }
+    setCastError({ pIdx: casterIdx, message: `Resolved ${getDisplayName(card)}`, background: '#1a3320' });
+    setTimeout(() => setCastError(null), 1500);
+  };
+
   const applySpellEffect = (casterIdx, targetPIdx, targetCard, effects) => {
     for (const effect of effects) {
       switch (effect.type) {
@@ -6730,7 +6762,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     // NOTE: The card has ALREADY been removed from hand/exile when it was cast
     // (in castCard / castAdventureFromExile). This is critical for online mode:
     // the opponent resolves spells on their client but can't modify the caster's hand.
-    const { pIdx, card, asAdventure, fromExile } = stackEntry;
+    const { pIdx, card, asAdventure, fromExile, resolvedTargets } = stackEntry;
 
     if (asAdventure && isAdventure(card)) {
       // Adventure: move to exile (card already removed from hand on cast)
@@ -6742,15 +6774,20 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
 
       const advFace = getAdventureFace(card);
       const advEffects = parseSpellEffects({ ...card, oracle_text: advFace.oracle_text, type_line: advFace.type_line });
-      const advTargetMode = getSpellTargetMode(advEffects);
       const advTargeted = advEffects.filter(e => ['destroy', 'exile', 'bounce', 'damage', 'boost', 'counter_add', 'fight'].includes(e.type));
       const advNonTargeted = advEffects.filter(e => !['destroy', 'exile', 'bounce', 'damage', 'boost', 'counter_add', 'fight'].includes(e.type));
 
       if (advNonTargeted.length > 0) applyNonTargetedEffects(pIdx, card, advNonTargeted);
-      if (advTargeted.length > 0 && advTargetMode === 'battlefield') {
+
+      // Apply pre-selected targets from cast time (or fall back to targeting UI for local mode)
+      if (resolvedTargets) {
+        applyResolvedTargets(pIdx, card, advTargeted, resolvedTargets);
+      } else if (advTargeted.length > 0) {
+        const advTargetMode = getSpellTargetMode(advEffects);
         setSpellTargeting({ pIdx, card, effects: advTargeted, targetMode: advTargetMode });
         setCastError({ pIdx, message: `${advFace.name}: Choose a target` });
-      } else {
+      }
+      if (!resolvedTargets) {
         setCastError({ pIdx, message: `Cast ${advFace.name} (Adventure)` });
         setTimeout(() => setCastError(null), 1500);
       }
@@ -6767,18 +6804,24 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       }));
 
       const effects = parseSpellEffects(card);
-      const targetMode = getSpellTargetMode(effects);
       const targetedEffects = effects.filter(e => ['destroy', 'exile', 'bounce', 'damage', 'boost', 'counter_add', 'fight'].includes(e.type));
       const nonTargetedEffects = effects.filter(e => !['destroy', 'exile', 'bounce', 'damage', 'boost', 'counter_add', 'fight'].includes(e.type));
 
-      if (nonTargetedEffects.length > 0) {
-        applyNonTargetedEffects(pIdx, card, nonTargetedEffects);
+      // Apply non-targeted effects (scry, draw, gain life, etc.) — also for pre-targeted spells
+      // NOTE: Non-targeted effects from pendingCast were stored, apply them here
+      const ntEffects = stackEntry.nonTargetedEffects || nonTargetedEffects;
+      if (ntEffects.length > 0) {
+        applyNonTargetedEffects(pIdx, card, ntEffects);
       }
 
-      if (targetedEffects.length > 0 && targetMode === 'battlefield') {
+      // Apply pre-selected targets from cast time (or fall back to targeting UI for local mode)
+      if (resolvedTargets) {
+        applyResolvedTargets(pIdx, card, targetedEffects, resolvedTargets);
+      } else if (targetedEffects.length > 0) {
+        const targetMode = getSpellTargetMode(effects);
         setSpellTargeting({ pIdx, card, effects: targetedEffects, targetMode });
         setCastError({ pIdx, message: `${card.name}: Choose a target` });
-      } else if (targetedEffects.length === 0) {
+      } else {
         setCastError({ pIdx, message: `Cast ${card.name}` });
         setTimeout(() => setCastError(null), 1500);
       }
@@ -6930,8 +6973,31 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       [sourceZone]: prev[sourceZone].filter(c => c.id !== card.id),
     }));
 
-    // Put spell on the stack for opponent to see and optionally counter
+    // Determine if this spell needs targeting BEFORE going on the stack
+    // In MTG, targets are chosen at cast time. In online mode, this is critical:
+    // the caster must select targets, not the opponent who clicks "Resolve".
     const displayName = asAdventure ? getAdventureFace(card).name + ' (Adventure)' : getDisplayName(card);
+    const spellToCheck = asAdventure && isAdventure(card)
+      ? { ...card, oracle_text: getAdventureFace(card).oracle_text, type_line: getAdventureFace(card).type_line }
+      : card;
+
+    if (isSpellCard(card) || (asAdventure && isAdventure(card))) {
+      const effects = parseSpellEffects(spellToCheck);
+      const targetMode = getSpellTargetMode(effects);
+      const targetedEffects = effects.filter(e => ['destroy', 'exile', 'bounce', 'damage', 'boost', 'counter_add', 'fight'].includes(e.type));
+      const nonTargetedEffects = effects.filter(e => !['destroy', 'exile', 'bounce', 'damage', 'boost', 'counter_add', 'fight'].includes(e.type));
+
+      if (targetedEffects.length > 0 && (targetMode === 'battlefield' || targetedEffects.some(e => e.type === 'damage'))) {
+        // Spell needs targeting — show targeting UI to the CASTER before putting on stack
+        pendingCastRef.current = { pIdx, card, asAdventure, fromExile: isFromExile, displayName, nonTargetedEffects };
+        setSpellTargeting({ pIdx, card: spellToCheck, effects: targetedEffects, targetMode });
+        setCastError({ pIdx, message: `${displayName}: Choose a target` });
+        addGameLog(pIdx, '🃏', `${getState(pIdx).name} casts ${displayName}`);
+        return;
+      }
+    }
+
+    // No targeting needed — put directly on the stack
     setSpellStack(prev => [...prev, { pIdx, card, asAdventure, fromExile: isFromExile, displayName }]);
     addGameLog(pIdx, '🃏', `${getState(pIdx).name} casts ${displayName}`);
   };
@@ -7277,10 +7343,23 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
           }
         }
 
-        applySpellEffect(spellTargeting.pIdx, pIdx, card, spellTargeting.effects);
-        setCastError(prev => prev ? { ...prev, message: `${getDisplayName(spellTargeting.card)} → ${card.name}`, background: '#1a3320' } : null);
-        setTimeout(() => setCastError(null), 1500);
-        SFX.playSpell();
+        if (pendingCastRef.current) {
+          // PRE-CAST TARGETING: store target, then put spell on stack for opponent to respond
+          const pc = pendingCastRef.current;
+          pendingCastRef.current = null;
+          setSpellTargeting(null);
+          setSpellStack(prev => [...prev, {
+            ...pc, resolvedTargets: { type: 'creature', pIdx, cardId: card.id, cardName: card.name },
+          }]);
+          setCastError({ pIdx: pc.pIdx, message: `${pc.displayName} → ${card.name}`, background: '#1a3320' });
+          setTimeout(() => setCastError(null), 1500);
+        } else {
+          // POST-RESOLVE TARGETING (local/legacy): apply immediately
+          applySpellEffect(spellTargeting.pIdx, pIdx, card, spellTargeting.effects);
+          setCastError(prev => prev ? { ...prev, message: `${getDisplayName(spellTargeting.card)} → ${card.name}`, background: '#1a3320' } : null);
+          setTimeout(() => setCastError(null), 1500);
+          SFX.playSpell();
+        }
         return;
       }
       // Combat mode: declare attackers
@@ -7313,6 +7392,23 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
   // Handle clicking on a player area during spell targeting (for damage spells)
   const handlePlayerTarget = (targetPIdx) => {
     if (!spellTargeting) return;
+
+    if (pendingCastRef.current) {
+      // PRE-CAST TARGETING: store player target, then put spell on stack
+      const pc = pendingCastRef.current;
+      pendingCastRef.current = null;
+      setSpellTargeting(null);
+      const dmgEffects = spellTargeting.effects.filter(e => e.type === 'damage');
+      const dmg = dmgEffects.length > 0 ? (dmgEffects[0].amount || 0) : 0;
+      setSpellStack(prev => [...prev, {
+        ...pc, resolvedTargets: { type: 'player', pIdx: targetPIdx, damage: dmg },
+      }]);
+      setCastError({ pIdx: pc.pIdx, message: `${pc.displayName}: ${dmg} damage → ${getState(targetPIdx).name}`, background: '#1a3320' });
+      setTimeout(() => setCastError(null), 1500);
+      return;
+    }
+
+    // POST-RESOLVE TARGETING (local/legacy): apply immediately
     const dmgEffects = spellTargeting.effects.filter(e => e.type === 'damage');
     if (dmgEffects.length > 0) {
       const dmg = dmgEffects[0].amount || 0;
@@ -7328,6 +7424,19 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
   };
 
   const cancelSpellTargeting = () => {
+    // If cancelling during pre-cast targeting, undo mana payment and return card to source zone
+    if (pendingCastRef.current) {
+      const pc = pendingCastRef.current;
+      pendingCastRef.current = null;
+      const fromZone = pc.fromExile ? 'exile' : 'hand';
+      setState(pc.pIdx, prev => ({
+        ...prev,
+        [fromZone]: [...prev[fromZone], pc.card],
+        // We can't easily restore the exact mana pool — just return the card
+        // The player will need to retap lands. This is simpler and avoids mana pool state bugs.
+      }));
+      addGameLog(pc.pIdx, '↩️', `${getState(pc.pIdx).name} cancels casting ${pc.displayName}`);
+    }
     setSpellTargeting(null);
     setCastError(null);
   };
