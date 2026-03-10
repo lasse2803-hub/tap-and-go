@@ -278,6 +278,15 @@
   .mana-generic { background: #888; color: #fff; }
 
   /* ===== CARD PREVIEW TOOLTIP ===== */
+  /* Reskin art overlay — positions custom art in the card's art box area */
+  .reskin-art-overlay {
+    position: absolute;
+    top: 7.5%; left: 6%; width: 88%; height: 40%;
+    object-fit: cover;
+    border-radius: 6px / 4px;
+    pointer-events: none;
+    z-index: 2;
+  }
   .card-preview { position: fixed; z-index: 900; pointer-events: none; }
   .card-preview img {
     width: 260px; border-radius: 12px;
@@ -986,8 +995,8 @@ const scryfallGetPrintings = async (card) => {
 };
 
 const getCardImage = (card, size = 'normal') => {
-  // Reskinned cards use custom image (same URL for all sizes)
-  if (card._reskin?.customImage) return card._reskin.customImage;
+  // Always return the ORIGINAL card image (with frame, text, stats visible)
+  // Reskin art is overlaid on top of the art box — see ReskinArtOverlay component
   if (card.image_uris) return card.image_uris[size] || card.image_uris.normal;
   if (card.card_faces && card.card_faces[0].image_uris) return card.card_faces[0].image_uris[size] || card.card_faces[0].image_uris.normal;
   return null;
@@ -995,6 +1004,9 @@ const getCardImage = (card, size = 'normal') => {
 
 const getCardSmall = (card) => getCardImage(card, 'small');
 const getCardNormal = (card) => getCardImage(card, 'normal');
+
+// Get the custom reskin art URL (if any) — displayed as overlay on the card art box
+const getReskinArt = (card) => card._reskin?.customImage || null;
 
 // Get display name (custom or original)
 const getDisplayName = (card) => card._reskin?.customName || card.name;
@@ -2013,6 +2025,16 @@ const checkSelfEntersTapped = (card, battlefield) => {
     return otherLandCount >= threshold; // Only tapped if you have enough other lands
   }
 
+  // "enters tapped unless you control two or fewer other lands" (fast lands: Inspiring Vantage, etc.)
+  const fewerLandsMatch = oracle.match(/enters (?:the battlefield )?tapped unless you control (\w+) or fewer other lands/);
+  if (fewerLandsMatch) {
+    const numWords = { one: 1, two: 2, three: 3, four: 4, five: 5 };
+    const threshold = numWords[fewerLandsMatch[1]] || parseInt(fewerLandsMatch[1]) || 2;
+    const isLand = (c) => c.type_line && c.type_line.toLowerCase().includes('land');
+    const otherLandCount = battlefield.filter(c => isLand(c) && c.id !== card.id).length;
+    return otherLandCount > threshold; // Tapped only if you control MORE than the threshold
+  }
+
   // "enters tapped unless you control a [type]" (checklands, Castle Locthwain, etc.)
   // Supports both old format "enters the battlefield tapped unless" and new format "enters tapped unless"
   const unlessMatch = oracle.match(/enters (?:the battlefield )?tapped unless you control an? (.+?)(?:\.|$)/);
@@ -2563,6 +2585,28 @@ const shuffle = (arr) => {
   return a;
 };
 
+// ============ CARD IMAGE WITH RESKIN OVERLAY ============
+// Shows the original card (frame, text, stats) with custom art overlaid in the art box
+function CardImg({ card, alt, style, className, onClick, size }) {
+  const src = card.isToken
+    ? (size === 'small' ? card.tokenImageSmall : card.tokenImageNormal) || null
+    : (size === 'small' ? getCardSmall(card) : getCardNormal(card));
+  const reskinArt = !card.isToken ? getReskinArt(card) : null;
+  if (!reskinArt) {
+    return <img src={src} alt={alt || getDisplayName(card)} style={style} className={className} onClick={onClick} />;
+  }
+  // When reskin is active, apply className (incl. tapped rotation) to the wrapper
+  // so both the card image and the art overlay rotate together
+  return (
+    <div className={className} style={{ position: 'relative', display: 'inline-block', ...style }} onClick={onClick}>
+      <img src={src} alt={alt || getDisplayName(card)}
+        style={{ width: '100%', height: '100%', display: 'block' }} />
+      <img className="reskin-art-overlay" src={reskinArt} alt=""
+        style={{ borderRadius: style?.height > 200 ? 10 : style?.height > 80 ? 6 : 3 }} />
+    </div>
+  );
+}
+
 // ============ CARD PREVIEW ============
 function CardPreview({ card, position }) {
   if (!card) return null;
@@ -2576,7 +2620,7 @@ function CardPreview({ card, position }) {
 
   return ReactDOM.createPortal(
     <div className="card-preview" style={style}>
-      <img src={imgUrl} alt={card.name} />
+      <CardImg card={card} alt={card.name} style={{ height: 363 }} />
     </div>,
     document.body
   );
@@ -2806,7 +2850,7 @@ function ZoneViewer({ title, cards, onClose, onCardAction }) {
                     </div>
                   )
                 ) : (
-                  <img src={getCardSmall(card)} alt={card.name}
+                  <CardImg card={card} size="small" alt={card.name}
                     onClick={() => onCardAction && onCardAction(card)}
                     style={{ width: '100%', ...(card.exilePlayable ? { boxShadow: '0 0 12px rgba(255,120,40,0.7)', borderRadius: 8 } : {}) }} />
                 )}
@@ -2958,25 +3002,14 @@ function CardDisplay({ card, size = 60, onClick, onContext, showPreview, extraCl
           </div>
         )
       ) : (
-        <img
+        <CardImg card={card} size="small"
           className={`card-img${tappedClass}${ec}`}
-          src={getCardSmall(card)}
           alt={getDisplayName(card)}
           style={{ height: size * 1.4, width: size }}
           onClick={() => onClick && onClick(card)}
         />
       )}
-      {card._reskin?.customName && !card._reskin?.customImage && (
-        <div style={{
-          position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
-          zIndex: 15, background: 'rgba(0,0,0,0.85)', color: '#f0d890',
-          padding: '3px 8px', borderRadius: 6, fontSize: 10, fontWeight: 700,
-          border: '1px solid rgba(200,170,60,0.5)', textAlign: 'center',
-          maxWidth: size - 4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-          pointerEvents: 'none',
-        }}>{card._reskin.customName}</div>
-      )}
-      {card._reskin?.customName && card._reskin?.customImage && (
+      {card._reskin?.customName && (
         <div style={{
           position: 'absolute', bottom: card.isToken ? 2 : (showPreview && hasBasePT(card) ? 18 : 2),
           left: 2, right: 2, zIndex: 15,
@@ -3064,7 +3097,7 @@ function CardDisplay({ card, size = 60, onClick, onContext, showPreview, extraCl
       )}
       {showPreview && ReactDOM.createPortal(
         <div className="card-preview" ref={previewElRef} style={{ display: 'none' }}>
-          <img src={card.isToken ? (card.tokenImageNormal || '') : getCardNormal(card)} alt={getDisplayName(card)} />
+          <CardImg card={card} alt={getDisplayName(card)} style={{ height: 363 }} />
           {card._reskin?.customName && (
             <div style={{ textAlign: 'center', color: '#f0d890', fontSize: 13, fontWeight: 700, marginTop: 4 }}>
               {card._reskin.customName}
@@ -3652,6 +3685,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
   //
   // ── RECEIVER: useEffect on onlineState ────────────────────────────
   //   Uses raw _setXxx to update without triggering rebroadcast.
+  //   Echo detection via onlineLastAction.by (NOT a boolean flag).
   //
   // ── ADDING NEW SYNCED STATE: ──────────────────────────────────────
   //   1. Declare with raw setter: const [x, _setX] = useState(init)
@@ -3751,7 +3785,6 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
 
   // Online sync: schedule a broadcast after state changes
   const onlineSyncNeededRef = useRef(false);
-  const onlineIgnoreNextUpdateRef = useRef(false); // prevent echo loops
   const pendingLogEntriesRef = useRef([]); // log entries queued for next broadcast
 
   const setState = (pIdx, fn) => {
@@ -3770,7 +3803,6 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     if (!onlineMode || !onStateChange) return;
     if (!onlineSyncNeededRef.current) return;
     onlineSyncNeededRef.current = false;
-    onlineIgnoreNextUpdateRef.current = true; // ignore the echo from server
     const payload = {
       players: [p1, p2],
       activePlayer,
@@ -3804,21 +3836,18 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
   const onlineStateTimestampRef = useRef(0);
   useEffect(() => {
     if (!onlineMode || !onlineState || !onlineState.timestamp) return;
-    // Skip if this is our own echo
-    if (onlineIgnoreNextUpdateRef.current) {
-      onlineIgnoreNextUpdateRef.current = false;
-      return;
-    }
     // Skip if we've already processed this timestamp
     if (onlineState.timestamp <= onlineStateTimestampRef.current) return;
     onlineStateTimestampRef.current = onlineState.timestamp;
 
     const oppIdx = onlinePlayerIndex === 0 ? 1 : 0;
     const myIdx = onlinePlayerIndex;
+    const isOwnEcho = onlineLastAction && onlineLastAction.by === myIdx;
 
     // Update opponent's state from server (public zones)
+    // Skip opponent state updates for our own echo — local state is already correct
     const serverOpp = onlineState.players?.[oppIdx];
-    if (serverOpp) {
+    if (serverOpp && !isOwnEcho) {
       const setOpp = oppIdx === 0 ? setP1 : setP2;
       setOpp(prev => {
         // === Detect opponent's actions and play appropriate SFX ===
@@ -3891,13 +3920,13 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     }
 
     // Update our own state from server.
-    // When the update was caused by the OPPONENT (e.g. combat damage, destroying
-    // our creatures), we accept zone changes too. When it's our own echo, we only
-    // accept fields the opponent can modify (life, poison, commander damage).
+    // Only process when the opponent caused the update (e.g. combat damage,
+    // destroying our creatures). Skip our own echoes entirely — local state
+    // is already correct and re-applying would cause unnecessary re-renders.
     const serverMe = onlineState.players?.[myIdx];
-    if (serverMe) {
+    const opponentCausedUpdate = !isOwnEcho;
+    if (serverMe && opponentCausedUpdate) {
       const setMe = myIdx === 0 ? setP1 : setP2;
-      const opponentCausedUpdate = onlineLastAction && onlineLastAction.by !== myIdx;
       setMe(prev => {
         // === SFX for opponent-caused changes to OUR state ===
         if (opponentCausedUpdate) {
@@ -8412,7 +8441,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       const oracle = [pair.attacker.card.oracle_text || '', ...(pair.attacker.card.card_faces || []).map(f => f.oracle_text || '')].join(' ').toLowerCase();
       if (oracle.includes('deals combat damage to a player') || oracle.includes('deals combat damage to an opponent')) {
         const trigMatch = oracle.match(/(whenever.*?deals combat damage to (?:a player|an opponent).*?(?:\.|$))/);
-        if (trigMatch) combatDamageTriggers.push({ name: pair.attacker.card.name, text: trigMatch[1].slice(0, 100) });
+        if (trigMatch) combatDamageTriggers.push({ name: pair.attacker.card.name, text: trigMatch[1].slice(0, 300) });
       }
     }
     // Auto-execute known combat damage triggers
@@ -9130,13 +9159,9 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
           <button className="btn text-xs btn-gold" disabled={!!combatState || endOfTurnRespond || (onlineMode && activePlayer !== onlinePlayerIndex)} style={(combatState || endOfTurnRespond || (onlineMode && activePlayer !== onlinePlayerIndex)) ? { opacity: 0.3, cursor: 'not-allowed' } : {}} onClick={() => {
             if (combatState || endOfTurnRespond) return;
             if (onlineMode && activePlayer !== onlinePlayerIndex) return;
-            if (onlineMode) {
-              // Online mode: skip endOfTurnRespond step, pass turn directly
-              executePassTurn();
-            } else {
-              setEndOfTurnRespond(true);
-              setCurrentPhase('end');
-            }
+            // Show end-of-turn priority window so opponent can respond with instants
+            setEndOfTurnRespond(true);
+            setCurrentPhase('end');
           }}>Pass Turn</button>
           <button className="btn btn-danger text-xs" onClick={onExit}>Exit</button>
         </div>
@@ -9461,7 +9486,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
             <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', justifyContent: 'center', maxWidth: '80vw', marginBottom: 20 }}>
               {topCards.map((card, idx) => (
                 <div key={card.id} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
-                  <img src={getCardNormal(card)} alt={card.name}
+                  <CardImg card={card} alt={card.name}
                     style={{ height: 240, borderRadius: 10, boxShadow: '0 4px 16px rgba(0,0,0,0.5)' }} />
                   {canInteract && (
                   <div style={{ display: 'flex', gap: 4 }}>
@@ -9605,7 +9630,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                         return { ...prev, selected: newSelected };
                       });
                     }}>
-                    <img src={getCardNormal(card)} alt={card.name}
+                    <CardImg card={card} alt={card.name}
                       style={{
                         height: 240, borderRadius: 10,
                         boxShadow: isSelected ? '0 0 20px rgba(60,200,160,0.8)' : '0 4px 16px rgba(0,0,0,0.5)',
@@ -9781,7 +9806,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                   onClick={() => {
                     castInstantFromHand(instantCasting.pIdx, card);
                   }}>
-                  <img src={getCardNormal(card)} alt={card.name}
+                  <CardImg card={card} alt={card.name}
                     style={{ height: 140, borderRadius: 8, boxShadow: '0 3px 12px rgba(0,0,0,0.5), 0 0 8px rgba(60,180,220,0.2)' }} />
                   {advFaceName && (
                     <div style={{ position: 'absolute', bottom: 6, left: '50%', transform: 'translateX(-50%)',
@@ -9800,7 +9825,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                     cycleCard(instantCasting.pIdx, card);
                     setInstantCasting(null);
                   }}>
-                  <img src={getCardNormal(card)} alt={card.name}
+                  <CardImg card={card} alt={card.name}
                     style={{ height: 140, borderRadius: 8, boxShadow: '0 3px 12px rgba(0,0,0,0.5), 0 0 8px rgba(140,180,60,0.25)' }} />
                   <div style={{ position: 'absolute', bottom: 6, left: '50%', transform: 'translateX(-50%)',
                     background: 'rgba(0,0,0,0.85)', border: '1px solid rgba(140,180,60,0.4)', borderRadius: 6,
@@ -9859,7 +9884,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                     }
                     setPeekingHand(null);
                   }}>
-                  <img src={getCardNormal(card)} alt={card.name}
+                  <CardImg card={card} alt={card.name}
                     style={{ height: 260, borderRadius: 10, boxShadow: '0 4px 16px rgba(0,0,0,0.5)' }} />
                 </div>
               ))}
@@ -9910,7 +9935,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                     background: i === 0 ? 'rgba(60,180,220,0.15)' : 'rgba(255,255,255,0.05)',
                     borderRadius: 8, border: i === 0 ? '1px solid rgba(60,180,220,0.4)' : '1px solid rgba(255,255,255,0.1)',
                   }}>
-                    <img src={getCardNormal(entry.card)} alt={entry.displayName}
+                    <CardImg card={entry.card} alt={entry.displayName}
                       style={{ height: i === 0 ? 80 : 50, borderRadius: 6 }} />
                     <span style={{ fontSize: 8, color: i === 0 ? '#60c8e8' : 'rgba(255,255,255,0.5)', fontWeight: 700 }}>
                       {i === 0 ? '▶ TOP' : `#${spellStack.length - i}`}
@@ -9922,10 +9947,8 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
             <div className="spell-stack-caster">
               {getState(stackTop.pIdx).name} casts
             </div>
-            <img
-              src={getCardNormal(stackTop.card)}
-              alt={stackTop.displayName}
-            />
+            <CardImg card={stackTop.card} alt={stackTop.displayName}
+              style={{ height: 280 }} />
             <div className="spell-stack-label">On the Stack{spellStack.length > 1 ? ` (resolving top)` : ''}</div>
             <div className="spell-stack-buttons">
               {(!onlineMode || onlinePlayerIndex === (stackTop.pIdx === 0 ? 1 : 0)) && (
@@ -10187,7 +10210,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                       border: isSelected ? '2px solid rgba(220,80,60,0.8)' : '2px solid transparent',
                       borderRadius: 8,
                     }}>
-                      <img src={getCardNormal(card)} alt={card.name}
+                      <CardImg card={card} alt={card.name}
                         style={{ height: 120, borderRadius: 6, display: 'block' }} />
                       {isSelected && (
                         <div style={{
@@ -10250,7 +10273,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
             }} onClick={e => e.stopPropagation()}>
               {/* Header */}
               <div style={{ display: 'flex', gap: 16, marginBottom: 16, alignItems: 'flex-start' }}>
-                <img src={getCardNormal(card)} alt={card.name}
+                <CardImg card={card} alt={card.name}
                   style={{ height: 140, borderRadius: 8, boxShadow: '0 4px 12px rgba(0,0,0,0.5)', flexShrink: 0 }} />
                 <div style={{ flex: 1 }}>
                   <div style={{ fontSize: 16, fontWeight: 700, color: '#e8e4dc', marginBottom: 4 }}>{getDisplayName(card)}</div>
@@ -10321,9 +10344,9 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
             <div className="pw-ability-caster">
               {getState(pwAbilityOnStack.pIdx).name} activates
             </div>
-            <img
-              src={getCardNormal(pwAbilityOnStack.card)}
+            <CardImg card={pwAbilityOnStack.card}
               alt={pwAbilityOnStack.card.name}
+              style={{ height: 280 }}
             />
             <div className="pw-ability-text">
               <span className="pw-ability-cost">[{pwAbilityOnStack.ability.cost}]</span>
@@ -10569,7 +10592,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                         <div style={{ width: '100%', textAlign: 'center', marginBottom: 6 }}>
                           <div style={{ fontSize: 11, color: 'rgba(200,170,60,0.8)', marginBottom: 4 }}>Exiled: <strong>{pwReminder.exiledCard.name}</strong></div>
                           {getCardSmall(pwReminder.exiledCard) && (
-                            <img src={getCardSmall(pwReminder.exiledCard)} alt={pwReminder.exiledCard.name}
+                            <CardImg card={pwReminder.exiledCard} size="small" alt={pwReminder.exiledCard.name}
                               style={{ height: 100, borderRadius: 4, border: '1px solid rgba(200,170,60,0.3)' }} />
                           )}
                           <div style={{

@@ -415,21 +415,24 @@ test('Spell stack resolve button gated to opponent only', () => {
 
 console.log('\n▸ Echo Prevention: No Double Processing');
 
-test('Echo prevention flag set BEFORE calling onStateChange', () => {
-  const broadcastBlock = clientCode.match(/onlineSyncNeededRef\.current = false;[\s\S]{0,1000}?onStateChange\(payload\)/);
-  assert(broadcastBlock, 'Broadcast block not found');
-  const block = broadcastBlock[0];
-  const ignorePos = block.indexOf('onlineIgnoreNextUpdateRef.current = true');
-  const sendPos = block.indexOf('onStateChange(payload)');
-  assert(ignorePos > 0 && ignorePos < sendPos, 'Echo prevention not set before sending');
+test('Echo detection uses lastAction.by (not a boolean flag)', () => {
+  // The old boolean flag approach caused race conditions where opponent updates
+  // were dropped. The new approach uses onlineLastAction.by to identify echoes.
+  assert(clientCode.includes('isOwnEcho = onlineLastAction && onlineLastAction.by === myIdx'),
+    'Echo detection via lastAction.by not found');
+  // Verify the old boolean flag is gone
+  assert(!clientCode.includes('onlineIgnoreNextUpdateRef'),
+    'Old onlineIgnoreNextUpdateRef flag should be removed');
 });
 
-test('Receiver skips when onlineIgnoreNextUpdateRef is true', () => {
-  assert(clientCode.includes('if (onlineIgnoreNextUpdateRef.current)'), 'No echo skip check in receiver');
-  // And resets it
-  const skipBlock = clientCode.match(/if \(onlineIgnoreNextUpdateRef\.current\) \{[\s\S]*?return;[\s\S]*?\}/);
-  assert(skipBlock, 'Echo skip block not found');
-  assert(skipBlock[0].includes('onlineIgnoreNextUpdateRef.current = false'), 'Echo flag not reset after skip');
+test('Opponent state update gated on !isOwnEcho', () => {
+  assert(clientCode.includes('serverOpp && !isOwnEcho'),
+    'Opponent state update not gated on !isOwnEcho');
+});
+
+test('Own state update gated on opponentCausedUpdate', () => {
+  assert(clientCode.includes('serverMe && opponentCausedUpdate'),
+    'Own state update not gated on opponentCausedUpdate');
 });
 
 test('Only ONE broadcast per render cycle (single useEffect)', () => {
