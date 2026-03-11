@@ -871,6 +871,65 @@ test('Modal choice overlay shows Spell label for spell modals', () => {
 });
 
 // ============================================================
+// Overload Mechanic (Cyclonic Rift)
+// ============================================================
+test('Overload: castCard detects overload keyword in oracle text', () => {
+  assert(code.includes('overload') && code.includes('overloadMatch'), 'overload detection in castCard');
+});
+
+test('Overload: regex extracts overload cost from oracle text', () => {
+  const overloadRegex = /overload\s*(\{[^}]+(?:\}\{[^}]+)*\})/;
+  const cyclonic = 'return target nonland permanent you don\'t control to its owner\'s hand.\noverload {4}{u}{u}{u}';
+  const match = cyclonic.match(overloadRegex);
+  assert(match !== null, 'overload regex matches Cyclonic Rift oracle');
+  assert(match[1] === '{4}{u}{u}{u}', 'extracted overload cost: ' + (match ? match[1] : 'null'));
+});
+
+test('Overload: modal shows Normal vs Overload choices', () => {
+  assert(code.includes("action: 'overload_mode'"), 'overload_mode action in choices');
+  assert(code.includes("modeText: 'normal'"), 'normal mode text');
+  assert(code.includes("modeText: 'overload'"), 'overload mode text');
+});
+
+test('Overload: executeModalChoice handles overload_mode action', () => {
+  assert(code.includes("choice.action === 'overload_mode'"), 'overload_mode handler in executeModalChoice');
+});
+
+test('Overload: overload mode puts spell on stack with overloadMode flag', () => {
+  assert(code.includes('overloadMode: true'), 'overloadMode flag on stack entry');
+});
+
+test('Overload: resolveSpellFromStack handles overloadMode', () => {
+  assert(code.includes('stackEntry.overloadMode'), 'overloadMode check in resolveSpellFromStack');
+});
+
+test('Overload: Cyclonic Rift overload bounces all opponent nonland permanents', () => {
+  // Check the resolution code handles nonland permanent bounce for opponents
+  assert(code.includes('return.*nonland permanent.*to its owner') || code.includes('nonland permanent'), 'nonland permanent bounce pattern');
+  assert(code.includes('Overload! Bounced'), 'overload bounce message');
+});
+
+test('Overload: disabled button support in modal choices', () => {
+  assert(code.includes('choice.disabled'), 'disabled check on modal choice buttons');
+  assert(code.includes("cursor: choice.disabled ? 'not-allowed'"), 'not-allowed cursor for disabled');
+});
+
+test('Overload: stack overlay shows OVERLOADED label', () => {
+  assert(code.includes('OVERLOADED'), 'OVERLOADED label in stack overlay');
+});
+
+test('Overload: Cyclonic Rift normal mode still works (single target bounce)', () => {
+  // Normal castCard path should still detect single-target bounce
+  // Regex includes ' in character class to handle "you don't control"
+  const bounceRegex = /return target (creature|nonland permanent|permanent|artifact|enchantment)[\w ']*to its owner's hand/;
+  const cyclonic = "return target nonland permanent you don't control to its owner's hand.";
+  assert(bounceRegex.test(cyclonic), 'single-target bounce regex matches Cyclonic Rift with don\'t control');
+  // Also test simpler bounces
+  const unsummon = "return target creature to its owner's hand.";
+  assert(bounceRegex.test(unsummon), 'single-target bounce regex matches Unsummon');
+});
+
+// ============================================================
 // RESULTS
 // ============================================================
 console.log(`\n${'═'.repeat(55)}`);

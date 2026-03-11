@@ -1494,7 +1494,7 @@ const parseSpellEffects = (card) => {
   }
 
   // Return target to hand (bounce)
-  if (/return target (creature|nonland permanent|permanent|artifact|enchantment)[\w ]*to its owner's hand/.test(allText)) {
+  if (/return target (creature|nonland permanent|permanent|artifact|enchantment)[\w ']*to its owner's hand/.test(allText)) {
     const match = allText.match(/return target (creature|nonland permanent|permanent|artifact|enchantment)/);
     effects.push({ type: 'bounce', targetType: match[1], description: `Return target ${match[1]} to hand` });
   }
@@ -6809,6 +6809,70 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     // the opponent resolves spells on their client but can't modify the caster's hand.
     const { pIdx, card, asAdventure, fromExile, resolvedTargets } = stackEntry;
 
+    // ===== OVERLOAD RESOLUTION =====
+    // When overloaded, "target" becomes "each" — apply mass effect instead of single-target
+    if (stackEntry.overloadMode) {
+      SFX.playSpell();
+      // Move spell to graveyard
+      setState(pIdx, prev => ({
+        ...prev,
+        graveyard: [...prev.graveyard, { ...card, tapped: false }],
+      }));
+      // Parse the overloaded oracle text: replace "target" with "each" to understand the mass effect
+      const oracle = (card.oracle_text || '').toLowerCase();
+      const opponentIdx = pIdx === 0 ? 1 : 0;
+      // Cyclonic Rift: "Return target nonland permanent you don't control to its owner's hand"
+      // → Overloaded: Return each nonland permanent you don't control to its owner's hand
+      if (/return.*nonland permanent.*to its owner's hand/i.test(oracle)) {
+        let bounced = 0;
+        setState(opponentIdx, prev => {
+          const toBounce = prev.battlefield.filter(c => !isLand(c));
+          const rest = prev.battlefield.filter(c => isLand(c));
+          bounced = toBounce.length;
+          return { ...prev, battlefield: rest, hand: [...prev.hand, ...toBounce.map(c => ({ ...c, tapped: false, counters: {}, tempBuffs: null, damagePrevented: undefined }))] };
+        });
+        SFX.massReturn();
+        setCastError({ pIdx, message: `🌊 Overload! Bounced ${bounced} nonland permanent(s) to hand` });
+        setTimeout(() => setCastError(null), 2500);
+        addGameLog(pIdx, '🌊', `${getDisplayName(card)} (Overload): Returned all opponent nonland permanents to hand`);
+        setTimeout(() => cleanupAttachments([opponentIdx]), 50);
+      } else if (/return.*creature.*to its owner's hand/i.test(oracle)) {
+        // Generic creature bounce overload
+        let bounced = 0;
+        [0, 1].forEach(pi => {
+          setState(pi, prev => {
+            const toBounce = prev.battlefield.filter(c => isCreature(c));
+            const rest = prev.battlefield.filter(c => !isCreature(c));
+            bounced += toBounce.length;
+            return { ...prev, battlefield: rest, hand: [...prev.hand, ...toBounce.map(c => ({ ...c, tapped: false, counters: {}, tempBuffs: null, damagePrevented: undefined }))] };
+          });
+        });
+        SFX.massReturn();
+        setCastError({ pIdx, message: `🌊 Overload! Bounced ${bounced} creature(s) to hand` });
+        setTimeout(() => setCastError(null), 2500);
+      } else if (/deals?\s+(\d+)\s+damage\s+to\s+(?:target|any target)/i.test(oracle)) {
+        // Damage overload (e.g. "deal X damage to target creature" → each creature)
+        const dmgMatch = oracle.match(/deals?\s+(\d+)\s+damage/i);
+        const damage = dmgMatch ? parseInt(dmgMatch[1]) : 0;
+        if (damage > 0) {
+          [0, 1].forEach(pi => {
+            setState(pi, prev => ({
+              ...prev,
+              battlefield: prev.battlefield.map(c => isCreature(c) ? { ...c, damage: (c.damage || 0) + damage } : c)
+            }));
+          });
+          setCastError({ pIdx, message: `🌊 Overload! Dealt ${damage} damage to each creature` });
+          setTimeout(() => setCastError(null), 2500);
+        }
+      } else {
+        // Fallback — just log it for manual resolution
+        setCastError({ pIdx, message: `🌊 Overloaded ${getDisplayName(card)} — resolve manually` });
+        setTimeout(() => setCastError(null), 3000);
+      }
+      checkCastTriggers(pIdx, card);
+      return;
+    }
+
     if (asAdventure && isAdventure(card)) {
       // Adventure: move to exile (card already removed from hand on cast)
       SFX.playSpell();
@@ -6980,8 +7044,30 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     }
   };
 
-  const castCard = (pIdx, card, asAdventure = false, altCostStr = null) => {
+  const castCard = (pIdx, card, asAdventure = false, altCostStr = null, overloadMode = false) => {
     const p = getState(pIdx);
+
+    // ===== OVERLOAD DETECTION (e.g. Cyclonic Rift) =====
+    // Overload: alternative cost that changes "target" → "each" (mass effect)
+    if (!altCostStr && !overloadMode && !asAdventure) {
+      const cardOracle = (card.oracle_text || '').toLowerCase();
+      const overloadMatch = cardOracle.match(/overload\s*(\{[^}]+(?:\}\{[^}]+)*\})/);
+      if (overloadMatch) {
+        const overloadCostStr = overloadMatch[1];
+        const normalCostStr = card.mana_cost || '';
+        const overloadCost = parseManaCost(overloadCostStr);
+        const canAffordOverload = canPayManaCost(p.manaPool, overloadCost);
+        const displayName = getDisplayName(card);
+        const choices = [
+          { label: `Normal (${normalCostStr})`, icon: '🎯', action: 'overload_mode', modeText: 'normal', costStr: normalCostStr },
+          { label: `Overload (${overloadCostStr})${!canAffordOverload ? ' — Not enough mana' : ''}`, icon: '🌊', action: 'overload_mode', modeText: 'overload', costStr: overloadCostStr,
+            disabled: !canAffordOverload },
+        ];
+        pendingSpellModalRef.current = { pIdx, card, asAdventure: false, fromExile: false, displayName, spellToCheck: card };
+        setModalChoice({ pIdx, card, triggerType: 'spell', choices });
+        return;
+      }
+    }
 
     // Calculate mana cost
     let manaCostStr;
@@ -7059,6 +7145,13 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       const targetMode = getSpellTargetMode(effects);
       const targetedEffects = effects.filter(e => ['destroy', 'exile', 'bounce', 'damage', 'boost', 'counter_add', 'fight'].includes(e.type));
       const nonTargetedEffects = effects.filter(e => !['destroy', 'exile', 'bounce', 'damage', 'boost', 'counter_add', 'fight'].includes(e.type));
+
+      if (overloadMode) {
+        // Overload mode — skip targeting, goes directly on stack as mass effect
+        setSpellStack(prev => [...prev, { pIdx, card, asAdventure, fromExile: isFromExile, displayName, overloadMode: true }]);
+        addGameLog(pIdx, '🌊', `${getState(pIdx).name} casts ${displayName} with OVERLOAD`);
+        return;
+      }
 
       if (targetedEffects.length > 0 && (targetMode === 'battlefield' || targetedEffects.some(e => e.type === 'damage'))) {
         // Spell needs targeting — show targeting UI to the CASTER before putting on stack
@@ -7819,6 +7912,20 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       });
       addGameLog(pIdx, '🃏', `${getDisplayName(sourceCard)}: Draw ${amount} card${amount > 1 ? 's' : ''}`, [sourceCard.id]);
       SFX.draw();
+    } else if (choice.action === 'overload_mode') {
+      // ===== OVERLOAD MODE CHOICE (Cyclonic Rift, etc.) =====
+      const pending = pendingSpellModalRef.current;
+      if (!pending) { setModalChoice(null); return; }
+      pendingSpellModalRef.current = null;
+      setModalChoice(null);
+      if (choice.modeText === 'overload') {
+        // Re-cast with overload cost and overloadMode flag
+        castCard(pending.pIdx, pending.card, false, choice.costStr, true);
+      } else {
+        // Normal mode — just cast normally
+        castCard(pending.pIdx, pending.card, false);
+      }
+      return;
     } else if (choice.action === 'spell_mode') {
       // ===== MODAL SPELL MODE CHOICE (Decisive Denial, etc.) =====
       const pending = pendingSpellModalRef.current;
@@ -10341,7 +10448,9 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
             </div>
             <CardImg card={stackTop.card} alt={stackTop.displayName}
               className="spell-stack-main-card" />
-            <div className="spell-stack-label">On the Stack{spellStack.length > 1 ? ` (resolving top)` : ''}</div>
+            <div className="spell-stack-label">
+              {stackTop.overloadMode ? '🌊 OVERLOADED — ' : ''}On the Stack{spellStack.length > 1 ? ` (resolving top)` : ''}
+            </div>
             <div className="spell-stack-buttons">
               {(!onlineMode || onlinePlayerIndex === (stackTop.pIdx === 0 ? 1 : 0)) && (
                 <button className="btn-resolve" onClick={() => {
@@ -10879,16 +10988,19 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               {modalChoice.choices.map((choice, i) => (
-                <button key={i} className="btn" style={{
+                <button key={i} className="btn" disabled={choice.disabled} style={{
                   padding: '10px 16px', fontSize: 13, fontWeight: 600,
-                  background: 'rgba(255,180,40,0.08)', border: '1px solid rgba(255,180,40,0.25)',
-                  borderRadius: 8, color: '#e8e4dc', cursor: 'pointer',
+                  background: choice.disabled ? 'rgba(100,100,100,0.1)' : 'rgba(255,180,40,0.08)',
+                  border: choice.disabled ? '1px solid rgba(100,100,100,0.2)' : '1px solid rgba(255,180,40,0.25)',
+                  borderRadius: 8, color: choice.disabled ? 'rgba(150,150,150,0.5)' : '#e8e4dc',
+                  cursor: choice.disabled ? 'not-allowed' : 'pointer',
                   transition: 'all 0.15s ease', textAlign: 'left',
                   display: 'flex', alignItems: 'center', gap: 10,
+                  opacity: choice.disabled ? 0.5 : 1,
                 }}
-                onMouseOver={e => { e.currentTarget.style.background = 'rgba(255,180,40,0.2)'; e.currentTarget.style.borderColor = 'rgba(255,180,40,0.5)'; }}
-                onMouseOut={e => { e.currentTarget.style.background = 'rgba(255,180,40,0.08)'; e.currentTarget.style.borderColor = 'rgba(255,180,40,0.25)'; }}
-                onClick={() => executeModalChoice(choice, modalChoice.pIdx, modalChoice.card)}>
+                onMouseOver={e => { if (!choice.disabled) { e.currentTarget.style.background = 'rgba(255,180,40,0.2)'; e.currentTarget.style.borderColor = 'rgba(255,180,40,0.5)'; } }}
+                onMouseOut={e => { if (!choice.disabled) { e.currentTarget.style.background = 'rgba(255,180,40,0.08)'; e.currentTarget.style.borderColor = 'rgba(255,180,40,0.25)'; } }}
+                onClick={() => !choice.disabled && executeModalChoice(choice, modalChoice.pIdx, modalChoice.card)}>
                   <span style={{ fontSize: 20 }}>{choice.icon}</span>
                   <span style={{ textTransform: 'capitalize' }}>{choice.label}</span>
                 </button>
