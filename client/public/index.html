@@ -278,12 +278,10 @@
   .mana-generic { background: #888; color: #fff; }
 
   /* ===== CARD PREVIEW TOOLTIP ===== */
-  /* Reskin art overlay — positions custom art in the card's art box area */
+  /* Reskin art overlay — base styles; position set inline by CardImg (card-type-aware) */
   .reskin-art-overlay {
     position: absolute;
-    top: 11.5%; left: 6%; width: 88%; height: 36%;
     object-fit: cover;
-    border-radius: 6px / 4px;
     pointer-events: none;
     z-index: 2;
   }
@@ -2595,6 +2593,16 @@ function CardImg({ card, alt, style, className, onClick, size }) {
   if (!reskinArt) {
     return <img src={src} alt={alt || getDisplayName(card)} style={style} className={className} onClick={onClick} />;
   }
+  // Card-type-aware art box positioning (different card layouts have different art boxes)
+  const typeLine = (card.type_line || '').toLowerCase();
+  const isPW = typeLine.includes('planeswalker');
+  const isSaga = typeLine.includes('saga');
+  // Reskin config can override positioning: _reskin: { artTop, artHeight }
+  const reskinCfg = card._reskin || {};
+  const artTop = reskinCfg.artTop != null ? reskinCfg.artTop + '%' : isPW ? '8.5%' : isSaga ? '11%' : '11.5%';
+  const artHeight = reskinCfg.artHeight != null ? reskinCfg.artHeight + '%' : isPW ? '48%' : isSaga ? '70%' : '36%';
+  const artLeft = reskinCfg.artLeft != null ? reskinCfg.artLeft + '%' : '6%';
+  const artWidth = reskinCfg.artWidth != null ? reskinCfg.artWidth + '%' : '88%';
   // When reskin is active, apply className (incl. tapped rotation) to the wrapper
   // so both the card image and the art overlay rotate together
   return (
@@ -2602,7 +2610,10 @@ function CardImg({ card, alt, style, className, onClick, size }) {
       <img src={src} alt={alt || getDisplayName(card)}
         style={{ width: '100%', height: '100%', display: 'block' }} />
       <img className="reskin-art-overlay" src={reskinArt} alt=""
-        style={{ borderRadius: style?.height > 200 ? 10 : style?.height > 80 ? 6 : 3 }} />
+        style={{
+          top: artTop, left: artLeft, width: artWidth, height: artHeight,
+          borderRadius: style?.height > 200 ? 10 : style?.height > 80 ? 6 : 3
+        }} />
     </div>
   );
 }
