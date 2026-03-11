@@ -5006,7 +5006,26 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         SFX.lifeLoss();
         addGameLog(pIdx, '🔥', `${card.name}: upkeep — deals ${dmg} damage to ${getState(pIdx).name}`);
       }
+
     }
+
+    // "At the beginning of each player's upkeep, ~ deals X damage to that player" (Roiling Vortex, etc.)
+    // Scan ALL players' battlefields for permanents that trigger on each player's upkeep
+    // and apply the effect to the player whose upkeep it is (pIdx)
+    [0, 1].forEach(ownerIdx => {
+      const owner = getState(ownerIdx);
+      for (const card of owner.battlefield) {
+        const allText = getOracleText(card);
+        const eachUpkeepDmgMatch = allText.match(/at the beginning of each player'?s upkeep,?\s*(?:~|[\w\s,]+)\s+deals?\s+(\d+)\s+damage to that player/i);
+        if (eachUpkeepDmgMatch) {
+          const dmg = parseInt(eachUpkeepDmgMatch[1]);
+          setState(pIdx, prev => ({ ...prev, life: prev.life - dmg }));
+          markDealtDamage(pIdx);
+          SFX.lifeLoss();
+          addGameLog(pIdx, '🔥', `${card.name}: upkeep — deals ${dmg} damage to ${getState(pIdx).name}`);
+        }
+      }
+    });
   };
 
   const untapAll = (pIdx) => {
