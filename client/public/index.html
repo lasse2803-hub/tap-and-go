@@ -3836,6 +3836,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       pwAbilityOnStack,
       pwReminder,
       preventCombatDamage,
+      modalChoice,
     };
     // Bundle any pending log entries into this broadcast
     // (avoids race condition where separate log broadcast triggers throttle
@@ -4019,6 +4020,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     if (onlineState.pwAbilityOnStack !== undefined) _setPwAbilityOnStack(onlineState.pwAbilityOnStack);
     if (onlineState.pwReminder !== undefined) _setPwReminder(onlineState.pwReminder);
     if (onlineState.preventCombatDamage !== undefined) _setPreventCombatDamage(onlineState.preventCombatDamage);
+    if (onlineState.modalChoice !== undefined) _setModalChoice(onlineState.modalChoice);
 
     // Receive game log entries from opponent (supports both array and single entry)
     const logEntries = onlineState.__logEntries || (onlineState.__logEntry ? [onlineState.__logEntry] : []);
@@ -5827,6 +5829,8 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
 
   const [castError, setCastError] = useState(null); // { pIdx, message }
   const [etbReminder, setEtbReminder] = useState(null); // { pIdx, card, effects[] }
+  const [modalChoice, _setModalChoice] = useState(null); // SYNCED — { pIdx, card, triggerType, choices: [{ label, icon, action }] }
+  const setModalChoice = syncSetter(_setModalChoice);
   const [cardInfoOverlay, setCardInfoOverlay] = useState(null); // { card } — shows card info & rulings overlay
   const [discardChoice, setDiscardChoice] = useState(null); // { pIdx, selected: [cardId, ...] } — cleanup step discard to hand size
 
@@ -7606,6 +7610,169 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     });
   };
 
+  // ===== COMBAT TRIGGER PARSER (shared by attack & block triggers) =====
+  // Parses oracle text for "whenever X attacks [or blocks]" triggers.
+  // Returns { card, trigger } with modal choices if "choose one" is detected,
+  // or a simple token trigger if it's a plain token-creation trigger.
+  const parseCombatTrigger = (creature, oracle, triggerType) => {
+    // Extract effect text after "attacks" or "blocks"
+    const effectMatch = oracle.match(/(?:enters the battlefield or )?(?:attacks|blocks)(?:\s+or\s+(?:attacks|blocks))?,?\s*(?:choose one\s*[-—]?\s*)?(.+)/s);
+    const effectText = effectMatch ? effectMatch[1].trim() : 'combat trigger';
+    const triggerLabel = triggerType === 'attack' ? 'ATTACK' : 'BLOCK';
+
+    // Detect "choose one" modal triggers (Elder Gargaroth pattern)
+    if (/choose one/i.test(oracle)) {
+      // Parse bullet-point choices from oracle text
+      // Oracle format: "choose one —\n• Choice 1.\n• Choice 2.\n• Choice 3."
+      const choicesRaw = oracle.match(/[•\-]\s*([^•\-]+)/g) || [];
+      const choices = [];
+      for (const raw of choicesRaw) {
+        const text = raw.replace(/^[•\-]\s*/, '').trim().replace(/\.$/, '');
+        // Detect token creation choice
+        const tokenMatch = text.match(/create\s+(?:a|an)\s+(\d+)\/(\d+)\s+([\w\s]+?)\s+creature\s+token/);
+        if (tokenMatch) {
+          const tp = tokenMatch[1], tt = tokenMatch[2];
+          const colorType = tokenMatch[3].trim();
+          const colorMap = { white: 'W', blue: 'U', black: 'B', red: 'R', green: 'G' };
+          const tokenColor = Object.keys(colorMap).filter(c => colorType.includes(c)).map(c => colorMap[c]).join('') || '';
+          const creatureType = colorType.split(' ').filter(w => !colorMap[w]).map(w => w[0].toUpperCase() + w.slice(1)).join(' ');
+          choices.push({ label: text, icon: '🐾', action: 'token', token: {
+            name: creatureType || 'Token', power: tp, toughness: tt,
+            type_line: `Creature — ${creatureType}`, color: tokenColor, keywords: []
+          }});
+          continue;
+        }
+        // Detect life gain choice
+        const lifeMatch = text.match(/you gain (\d+) life/);
+        if (lifeMatch) {
+          choices.push({ label: text, icon: '💚', action: 'life', amount: parseInt(lifeMatch[1]) });
+          continue;
+        }
+        // Detect draw card choice
+        if (/draw a card/i.test(text)) {
+          choices.push({ label: text, icon: '🃏', action: 'draw', amount: 1 });
+          continue;
+        }
+        // Generic/unknown choice — add as manual reminder
+        choices.push({ label: text, icon: '✨', action: 'manual' });
+      }
+
+      if (choices.length > 0) {
+        return {
+          card: creature,
+          trigger: {
+            icon: '⚔️', text: `${triggerLabel} — ${creature.name}: Choose one`,
+            modalChoices: choices, isModal: true,
+          }
+        };
+      }
+    }
+
+    // Non-modal: try to auto-parse token creation
+    let parsedToken = null;
+    // Pattern 1: "create [Name], a [legendary] P/T [color] [type] creature token"
+    const namedTokenMatch = oracle.match(/create\s+(\w[\w\s]*?),\s+a\s+(?:legendary\s+)?(\d+)\/(\d+)\s+([\w\s]+?)\s+creature\s+token/);
+    if (namedTokenMatch) {
+      const tokenName = namedTokenMatch[1].trim().split(' ').map(w => w[0].toUpperCase() + w.slice(1)).join(' ');
+      const tp = namedTokenMatch[2], tt = namedTokenMatch[3];
+      const colorType = namedTokenMatch[4].trim();
+      const colorMap = { white: 'W', blue: 'U', black: 'B', red: 'R', green: 'G' };
+      const tokenColor = Object.keys(colorMap).filter(c => colorType.includes(c)).map(c => colorMap[c]).join('') || '';
+      const creatureType = colorType.split(' ').filter(w => !colorMap[w]).map(w => w[0].toUpperCase() + w.slice(1)).join(' ');
+      parsedToken = { name: tokenName, power: tp, toughness: tt,
+        type_line: `Creature — ${creatureType}`, color: tokenColor, keywords: [] };
+    }
+    // Pattern 2: "create a/an [P/T] [color] [type] creature token"
+    if (!parsedToken) {
+      const genericTokenMatch = oracle.match(/create\s+(?:a|an)\s+(\d+)\/(\d+)\s+([\w\s]+?)\s+creature\s+token/);
+      if (genericTokenMatch) {
+        const tp = genericTokenMatch[1], tt = genericTokenMatch[2];
+        const colorType = genericTokenMatch[3].trim();
+        const colorMap = { white: 'W', blue: 'U', black: 'B', red: 'R', green: 'G' };
+        const tokenColor = Object.keys(colorMap).filter(c => colorType.includes(c)).map(c => colorMap[c]).join('') || '';
+        const creatureType = colorType.split(' ').filter(w => !colorMap[w]).map(w => w[0].toUpperCase() + w.slice(1)).join(' ');
+        parsedToken = { name: creatureType || 'Token', power: tp, toughness: tt,
+          type_line: `Creature — ${creatureType}`, color: tokenColor, keywords: [] };
+      }
+    }
+    // Parse keywords from token description
+    if (parsedToken) {
+      const withKwMatch = oracle.match(/creature token[^.]*?\s+with\s+([\w\s,]+?)(?:\.|that|$)/);
+      if (withKwMatch) {
+        parsedToken.keywords = withKwMatch[1].replace(/\band\b/g, ',').split(',').map(k => k.trim()).filter(Boolean);
+      }
+    }
+
+    const trigger = { icon: '⚔️', text: `${triggerLabel} — ${creature.name}: ${effectText}` };
+    if (parsedToken) trigger.token = parsedToken;
+    return { card: creature, trigger };
+  };
+
+  // ===== MODAL CHOICE EXECUTOR =====
+  // Executes a chosen option from a "choose one" trigger (Elder Gargaroth, etc.)
+  const executeModalChoice = (choice, pIdx, sourceCard) => {
+    const reskin = sourceCard._reskin;
+    if (choice.action === 'token') {
+      const tk = choice.token;
+      const tokenName = reskin?.customTokenName || tk.name;
+      const tokenCard = {
+        id: uid(), name: tokenName, isToken: true,
+        type_line: tk.type_line, power: tk.power, toughness: tk.toughness,
+        keywords: tk.keywords || [], tapped: false, counters: {}, enteredThisTurn: true,
+      };
+      if (reskin?.customTokenImage) {
+        tokenCard.tokenImageSmall = reskin.customTokenImage;
+        tokenCard.tokenImageNormal = reskin.customTokenImage;
+      }
+      setState(pIdx, prev => ({
+        ...prev,
+        battlefield: [...prev.battlefield, tokenCard],
+      }));
+      addGameLog(pIdx, '🐾', `${getDisplayName(sourceCard)}: Create ${tokenName} ${tk.power}/${tk.toughness}`, [sourceCard.id]);
+      SFX.playCreature();
+      // Fetch Scryfall token art if no reskin image
+      if (!reskin?.customTokenImage) {
+        ((tName, pI) => {
+          (async () => {
+            try {
+              const res = await fetch('https://api.scryfall.com/cards/search?q=' + encodeURIComponent('t:token ' + tName.toLowerCase()) + '&unique=art&order=released&dir=desc');
+              if (res.ok) {
+                const data = await res.json();
+                const match = data.data?.find(c => c.image_uris && (c.name || '').toLowerCase().includes(tName.toLowerCase()));
+                if (match?.image_uris) {
+                  setState(pI, prev => ({
+                    ...prev,
+                    battlefield: prev.battlefield.map(c =>
+                      c.isToken && c.name === tName && !c.image_uris ? { ...c, image_uris: match.image_uris } : c
+                    )
+                  }));
+                }
+              }
+            } catch(e) {}
+          })();
+        })(tokenName, pIdx);
+      }
+    } else if (choice.action === 'life') {
+      const amount = choice.amount || 3;
+      setState(pIdx, prev => ({ ...prev, life: prev.life + amount }));
+      addGameLog(pIdx, '💚', `${getDisplayName(sourceCard)}: Gain ${amount} life`, [sourceCard.id]);
+      SFX.lifeGain();
+    } else if (choice.action === 'draw') {
+      const amount = choice.amount || 1;
+      setState(pIdx, prev => {
+        if (prev.library.length === 0) return prev;
+        const drawn = prev.library.slice(0, amount);
+        return { ...prev, library: prev.library.slice(amount), hand: [...prev.hand, ...drawn] };
+      });
+      addGameLog(pIdx, '🃏', `${getDisplayName(sourceCard)}: Draw ${amount} card${amount > 1 ? 's' : ''}`, [sourceCard.id]);
+      SFX.draw();
+    } else {
+      // Manual — just log the reminder
+      addGameLog(pIdx, '✨', `${getDisplayName(sourceCard)}: ${choice.label}`, [sourceCard.id]);
+    }
+    setModalChoice(null);
+  };
+
   const confirmAttackers = () => {
     if (!combatState) return;
     const p = getState(activePlayer);
@@ -7669,67 +7836,16 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       if (attacker.animatedCreature && attacker.animatedData?.attackTrigger) {
         attackTriggers.push({ card: attacker, trigger: attacker.animatedData.attackTrigger });
       }
-      // Regular creature attack triggers: "whenever [name] attacks" or "whenever [name] enters the battlefield or attacks"
+      // Regular creature attack triggers: "whenever [name] attacks" or "whenever [name] attacks or blocks"
       if (isCreature(attacker) && !attacker.animatedCreature) {
         const oracle = [attacker.oracle_text || '', ...(attacker.card_faces || []).map(f => f.oracle_text || '')].join(' ').toLowerCase();
         const nameLower = (attacker.name || '').toLowerCase();
         const nameEscaped = nameLower.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        // Match patterns: "whenever [name] attacks", "whenever [name] enters the battlefield or attacks"
-        const selfAttackPattern = new RegExp('whenever ' + nameEscaped + '(?:\\s+enters the battlefield or)?\\s+attacks');
+        // Match patterns: "whenever [name] attacks", "whenever [name] attacks or blocks", "whenever [name] enters the battlefield or attacks"
+        const selfAttackPattern = new RegExp('whenever ' + nameEscaped + '(?:\\s+enters the battlefield or)?\\s+attacks(?:\\s+or\\s+blocks)?');
         if (selfAttackPattern.test(oracle)) {
-          // Extract the effect text after "attacks, "
-          const effectMatch = oracle.match(/(?:enters the battlefield or )?attacks,?\s*([^.]+)/);
-          const effectText = effectMatch ? effectMatch[1].trim() : 'attack trigger';
-
-          // Try to auto-parse token creation from oracle text
-          // Patterns: "create a/an [P/T] [colors] [type] creature token [named X]"
-          //           "create [Name], a [legendary] [P/T] [colors] [type] creature token"
-          let parsedToken = null;
-          // Pattern 1: "create [Name], a [legendary] P/T [color] [type] creature token"
-          const namedTokenMatch = oracle.match(/create\s+(\w[\w\s]*?),\s+a\s+(?:legendary\s+)?(\d+)\/(\d+)\s+([\w\s]+?)\s+creature\s+token/);
-          if (namedTokenMatch) {
-            const tokenName = namedTokenMatch[1].trim().split(' ').map(w => w[0].toUpperCase() + w.slice(1)).join(' ');
-            const tp = namedTokenMatch[2];
-            const tt = namedTokenMatch[3];
-            const colorType = namedTokenMatch[4].trim();
-            const colorMap = { white: 'W', blue: 'U', black: 'B', red: 'R', green: 'G' };
-            const tokenColor = Object.keys(colorMap).filter(c => colorType.includes(c)).map(c => colorMap[c]).join('') || '';
-            const creatureType = colorType.split(' ').filter(w => !colorMap[w]).map(w => w[0].toUpperCase() + w.slice(1)).join(' ');
-            parsedToken = {
-              name: tokenName, power: tp, toughness: tt,
-              type_line: `Creature \u2014 ${creatureType}`, color: tokenColor, keywords: []
-            };
-          }
-          // Pattern 2: "create a/an [P/T] [color] [type] creature token"
-          if (!parsedToken) {
-            const genericTokenMatch = oracle.match(/create\s+(?:a|an)\s+(\d+)\/(\d+)\s+([\w\s]+?)\s+creature\s+token/);
-            if (genericTokenMatch) {
-              const tp = genericTokenMatch[1];
-              const tt = genericTokenMatch[2];
-              const colorType = genericTokenMatch[3].trim();
-              const colorMap = { white: 'W', blue: 'U', black: 'B', red: 'R', green: 'G' };
-              const tokenColor = Object.keys(colorMap).filter(c => colorType.includes(c)).map(c => colorMap[c]).join('') || '';
-              const creatureType = colorType.split(' ').filter(w => !colorMap[w]).map(w => w[0].toUpperCase() + w.slice(1)).join(' ');
-              parsedToken = {
-                name: creatureType || 'Token', power: tp, toughness: tt,
-                type_line: `Creature \u2014 ${creatureType}`, color: tokenColor, keywords: []
-              };
-            }
-          }
-
-          // Parse keywords from the token description (e.g. "with flying", "with haste and trample")
-          if (parsedToken) {
-            const withKwMatch = oracle.match(/creature token[^.]*?\s+with\s+([\w\s,]+?)(?:\.|that|$)/);
-            if (withKwMatch) {
-              const kwList = withKwMatch[1].replace(/\band\b/g, ',').split(',').map(k => k.trim()).filter(Boolean);
-              parsedToken.keywords = kwList;
-            }
-          }
-
-          const trigger = { icon: '\u2694\uFE0F', text: `ATTACK \u2014 ${attacker.name}: ${effectText}` };
-          if (parsedToken) trigger.token = parsedToken;
-
-          attackTriggers.push({ card: attacker, trigger });
+          const parsedTrigger = parseCombatTrigger(attacker, oracle, 'attack');
+          if (parsedTrigger) attackTriggers.push(parsedTrigger);
         }
       }
     }
@@ -7760,12 +7876,28 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     }
 
     if (attackTriggers.length > 0) {
-      // Show ETB-style reminder for attack triggers and auto-create tokens
-      const triggerTexts = attackTriggers.map(t => t.trigger);
-      setEtbReminder({ pIdx: activePlayer, card: attackTriggers[0].card,
-        effects: triggerTexts.map(t => ({ icon: t.icon, text: t.text })) });
-      // Auto-create tokens from attack triggers
-      for (const t of attackTriggers) {
+      // Separate modal triggers (choose one) from simple auto-execute triggers
+      const modalTriggers = attackTriggers.filter(t => t.trigger.isModal);
+      const simpleTriggers = attackTriggers.filter(t => !t.trigger.isModal);
+
+      // Show ETB-style reminder for non-modal triggers
+      if (simpleTriggers.length > 0) {
+        const triggerTexts = simpleTriggers.map(t => t.trigger);
+        setEtbReminder({ pIdx: activePlayer, card: simpleTriggers[0].card,
+          effects: triggerTexts.map(t => ({ icon: t.icon, text: t.text })) });
+      }
+
+      // Show modal choice overlay for "choose one" triggers (Elder Gargaroth etc.)
+      if (modalTriggers.length > 0) {
+        const mt = modalTriggers[0]; // Process one modal trigger at a time
+        setModalChoice({
+          pIdx: activePlayer, card: mt.card, triggerType: 'attack',
+          choices: mt.trigger.modalChoices,
+        });
+      }
+
+      // Auto-create tokens from non-modal simple triggers
+      for (const t of simpleTriggers) {
         if (t.trigger.token) {
           const tk = t.trigger.token;
           const reskin = t.card._reskin;
@@ -7785,7 +7917,6 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
           if (triggerOracle.includes('exile') && triggerOracle.includes('end of combat')) {
             tokenCard.exileAtEndOfCombat = true;
           }
-          // Also check original card's oracle for exile instructions
           const sourceOracle = [t.card.oracle_text || '', ...(t.card.card_faces || []).map(f => f.oracle_text || '')].join(' ').toLowerCase();
           if (sourceOracle.includes('exile') && sourceOracle.includes('end of combat')) {
             tokenCard.exileAtEndOfCombat = true;
@@ -7794,9 +7925,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
             ...prev,
             battlefield: [...prev.battlefield, tokenCard],
           }));
-          // Add the token to the attackers list (it enters "tapped and attacking")
           setCombatState(prev => prev ? { ...prev, attackers: [...prev.attackers, tokenCard.id] } : prev);
-          // Fetch Scryfall token art asynchronously (skip if reskin provides custom image)
           if (!reskin?.customTokenImage) {
             ((tName, pI) => {
               (async () => {
@@ -7809,9 +7938,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                       setState(pI, prev => ({
                         ...prev,
                         battlefield: prev.battlefield.map(c =>
-                          c.isToken && c.name === tName && !c.image_uris
-                            ? { ...c, image_uris: match.image_uris }
-                            : c
+                          c.isToken && c.name === tName && !c.image_uris ? { ...c, image_uris: match.image_uris } : c
                         )
                       }));
                     }
@@ -8181,9 +8308,48 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       }
     }
 
+    // ===== BLOCK TRIGGERS: scan blocking creatures for "whenever X blocks" or "whenever X attacks or blocks" =====
+    const defendingPlayer = activePlayer === 0 ? 1 : 0;
+    const defenderState = getState(defendingPlayer);
+    const allBlockerIds = new Set(Object.values(combatState.blocks).flat());
+    const blockTriggers = [];
+    for (const blockerId of allBlockerIds) {
+      const blocker = defenderState.battlefield.find(c => c.id === blockerId);
+      if (!blocker || !isCreature(blocker)) continue;
+      const oracle = [blocker.oracle_text || '', ...(blocker.card_faces || []).map(f => f.oracle_text || '')].join(' ').toLowerCase();
+      const nameLower = (blocker.name || '').toLowerCase();
+      const nameEscaped = nameLower.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      // Match "whenever [name] blocks" or "whenever [name] attacks or blocks"
+      const selfBlockPattern = new RegExp('whenever ' + nameEscaped + '(?:\\s+attacks\\s+or)?\\s+blocks');
+      if (selfBlockPattern.test(oracle)) {
+        const parsedTrigger = parseCombatTrigger(blocker, oracle, 'block');
+        if (parsedTrigger) blockTriggers.push(parsedTrigger);
+      }
+    }
+
+    if (blockTriggers.length > 0) {
+      const modalBlockTriggers = blockTriggers.filter(t => t.trigger.isModal);
+      const simpleBlockTriggers = blockTriggers.filter(t => !t.trigger.isModal);
+
+      if (simpleBlockTriggers.length > 0) {
+        const triggerTexts = simpleBlockTriggers.map(t => t.trigger);
+        setEtbReminder({ pIdx: defendingPlayer, card: simpleBlockTriggers[0].card,
+          effects: triggerTexts.map(t => ({ icon: t.icon, text: t.text })) });
+      }
+
+      if (modalBlockTriggers.length > 0) {
+        const mt = modalBlockTriggers[0];
+        setModalChoice({
+          pIdx: defendingPlayer, card: mt.card, triggerType: 'block',
+          choices: mt.trigger.modalChoices,
+        });
+      }
+    }
+
     SFX.tap();
     setCombatState(prev => ({ ...prev, phase: 'damage' }));
-    // Resolve damage after a short delay for visual feedback
+    // Resolve damage after a short delay (extra delay if block triggers need processing)
+    const damageDelay = blockTriggers.length > 0 ? 800 : 500;
     setTimeout(() => {
       resolveCombatDamage();
       // Safety retry: if combat is still in damage phase after 2s, try again
@@ -8192,7 +8358,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
           resolveCombatDamage();
         }
       }, 2000);
-    }, 500);
+    }, damageDelay);
   };
 
   const resolveCombatDamage = () => {
@@ -10591,6 +10757,46 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
               onClick={() => setEtbReminder(null)}>
               OK
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Choice Overlay (Elder Gargaroth "choose one" etc.) */}
+      {modalChoice && (!onlineMode || onlinePlayerIndex === modalChoice.pIdx) && (
+        <div style={{
+          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+          background: 'rgba(0,0,0,0.6)', zIndex: 1600,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          animation: 'fadeIn 0.2s ease',
+        }}>
+          <div style={{
+            background: 'linear-gradient(160deg, #1a1830, #14122a)', borderRadius: 16, padding: '20px 28px',
+            border: '1px solid rgba(255,180,40,0.4)', boxShadow: '0 12px 48px rgba(0,0,0,0.8), 0 0 30px rgba(255,180,40,0.1)',
+            maxWidth: 420, width: '90%', textAlign: 'center',
+          }}>
+            <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: 2, color: 'rgba(255,180,40,0.6)', marginBottom: 4, fontWeight: 700 }}>
+              {modalChoice.triggerType === 'attack' ? '⚔️ Attack Trigger' : '🛡 Block Trigger'}
+            </div>
+            <div style={{ fontSize: 15, fontWeight: 700, color: '#e8d8a0', marginBottom: 14 }}>
+              {getDisplayName(modalChoice.card)} — Choose One
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {modalChoice.choices.map((choice, i) => (
+                <button key={i} className="btn" style={{
+                  padding: '10px 16px', fontSize: 13, fontWeight: 600,
+                  background: 'rgba(255,180,40,0.08)', border: '1px solid rgba(255,180,40,0.25)',
+                  borderRadius: 8, color: '#e8e4dc', cursor: 'pointer',
+                  transition: 'all 0.15s ease', textAlign: 'left',
+                  display: 'flex', alignItems: 'center', gap: 10,
+                }}
+                onMouseOver={e => { e.currentTarget.style.background = 'rgba(255,180,40,0.2)'; e.currentTarget.style.borderColor = 'rgba(255,180,40,0.5)'; }}
+                onMouseOut={e => { e.currentTarget.style.background = 'rgba(255,180,40,0.08)'; e.currentTarget.style.borderColor = 'rgba(255,180,40,0.25)'; }}
+                onClick={() => executeModalChoice(choice, modalChoice.pIdx, modalChoice.card)}>
+                  <span style={{ fontSize: 20 }}>{choice.icon}</span>
+                  <span style={{ textTransform: 'capitalize' }}>{choice.label}</span>
+                </button>
+              ))}
+            </div>
           </div>
         </div>
       )}

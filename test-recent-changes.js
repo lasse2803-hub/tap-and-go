@@ -685,6 +685,86 @@ test('Exile button shows foretell indicator', () => {
 });
 
 // ============================================================
+// Modal Choice ("Choose One") & Block Triggers
+// ============================================================
+console.log('\n▸ Modal Choice (Choose One) & Block Triggers');
+
+test('parseCombatTrigger function exists', () => {
+  assert(code.includes('const parseCombatTrigger'), 'parseCombatTrigger not found');
+  assert(code.includes('triggerType'), 'triggerType param not found');
+});
+
+test('parseCombatTrigger detects "choose one" modal triggers', () => {
+  assert(code.includes('choose one'), 'choose one detection not found');
+  assert(code.includes('modalChoices'), 'modalChoices not set');
+  assert(code.includes('isModal: true'), 'isModal flag not set');
+});
+
+test('parseCombatTrigger parses token/life/draw choices', () => {
+  assert(code.includes("action: 'token'"), 'token action not parsed');
+  assert(code.includes("action: 'life'"), 'life action not parsed');
+  assert(code.includes("action: 'draw'"), 'draw action not parsed');
+});
+
+test('executeModalChoice function exists', () => {
+  assert(code.includes('const executeModalChoice'), 'executeModalChoice not found');
+  assert(code.includes('choice.action'), 'choice action handling not found');
+});
+
+test('executeModalChoice creates token with reskin support', () => {
+  assert(code.includes('customTokenName') && code.includes('executeModalChoice'), 'reskin token name in modal');
+  assert(code.includes('customTokenImage') && code.includes('tokenImageSmall'), 'reskin token image in modal');
+});
+
+test('executeModalChoice handles life gain choice', () => {
+  assert(code.includes("choice.action === 'life'"), 'life gain handling');
+  assert(code.includes('prev.life + amount'), 'life addition');
+});
+
+test('executeModalChoice handles draw card choice', () => {
+  assert(code.includes("choice.action === 'draw'"), 'draw handling');
+  assert(code.includes('prev.library.slice(0, amount)'), 'library draw slice');
+});
+
+test('modalChoice is a synced state for online mode', () => {
+  assert(code.includes('const [modalChoice, _setModalChoice] = useState(null)'), 'modalChoice state');
+  assert(code.includes('const setModalChoice = syncSetter(_setModalChoice)'), 'modalChoice syncSetter');
+});
+
+test('modalChoice in broadcast payload', () => {
+  assert(code.includes('modalChoice,') && code.includes('preventCombatDamage,'), 'modalChoice in payload');
+});
+
+test('modalChoice in receiver', () => {
+  assert(code.includes('_setModalChoice(onlineState.modalChoice)'), 'modalChoice receiver');
+});
+
+test('Block trigger scanning in confirmBlockers', () => {
+  assert(code.includes('BLOCK TRIGGERS'), 'block trigger comment');
+  assert(code.includes('selfBlockPattern'), 'block pattern matching');
+  assert(code.includes('blockTriggers'), 'blockTriggers array');
+});
+
+test('Modal choice overlay UI renders', () => {
+  assert(code.includes('Modal Choice Overlay'), 'modal overlay comment');
+  assert(code.includes('Choose One'), 'choose one title');
+  assert(code.includes('executeModalChoice(choice'), 'modal choice click handler');
+});
+
+test('Attack triggers use parseCombatTrigger', () => {
+  assert(code.includes("parseCombatTrigger(attacker, oracle, 'attack')"), 'attack triggers use shared parser');
+});
+
+test('Block triggers use parseCombatTrigger', () => {
+  assert(code.includes("parseCombatTrigger(blocker, oracle, 'block')"), 'block triggers use shared parser');
+});
+
+test('Modal triggers separated from simple triggers in attack processing', () => {
+  assert(code.includes('modalTriggers = attackTriggers.filter(t => t.trigger.isModal)'), 'modal filter');
+  assert(code.includes('simpleTriggers = attackTriggers.filter(t => !t.trigger.isModal)'), 'simple filter');
+});
+
+// ============================================================
 // RESULTS
 // ============================================================
 console.log(`\n${'═'.repeat(55)}`);
