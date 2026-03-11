@@ -150,6 +150,7 @@
   /* ===== CONTEXT MENU — dark glass ===== */
   .context-menu {
     position: fixed; z-index: 1000; min-width: 200px;
+    max-height: 80vh; overflow-y: auto;
     background: linear-gradient(160deg, rgba(30,28,45,0.97), rgba(20,18,32,0.98));
     border: 1px solid rgba(200,170,60,0.12);
     border-radius: 8px; padding: 4px;
@@ -462,9 +463,12 @@
     from { transform: translateY(40px) scale(0.9); opacity: 0; }
     to { transform: translateY(0) scale(1); opacity: 1; }
   }
-  .spell-stack-card img {
+  .spell-stack-card > .spell-stack-main-card {
     width: 280px; border-radius: 12px;
     box-shadow: 0 0 40px rgba(200,170,60,0.3), 0 8px 32px rgba(0,0,0,0.5);
+  }
+  .spell-stack-card img {
+    border-radius: 8px;
   }
   .spell-stack-caster {
     font-size: 13px; color: rgba(255,255,255,0.7);
@@ -3022,7 +3026,8 @@ function CardDisplay({ card, size = 60, onClick, onContext, showPreview, extraCl
       )}
       {card._reskin?.customName && (
         <div style={{
-          position: 'absolute', bottom: card.isToken ? 2 : (showPreview && hasBasePT(card) ? 18 : 2),
+          position: 'absolute',
+          bottom: card.isToken ? 2 : (showPreview && hasBasePT(card) ? 18 : (isPlaneswalker(card) ? 22 : 2)),
           left: 2, right: 2, zIndex: 15,
           background: 'rgba(0,0,0,0.8)', color: '#f0d890',
           padding: '1px 4px', borderRadius: 4, fontSize: 8, fontWeight: 700,
@@ -3688,7 +3693,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
   //   activePlayer, instantCasting, librarySearch, endOfTurnRespond,
   //   mulliganPhase, mulliganCounts, mulliganPlayer,
   //   turnCount, currentPhase, combatState, preventCombatDamage,
-  //   spellStack, sacCounterChoice, pwAbilityOnStack,
+  //   spellStack, sacCounterChoice, pwAbilityOnStack, pwReminder,
   //   p1/p2 (via setState wrapper)
   //
   // ── BROADCAST PAYLOAD: onStateChange({...}) ───────────────────────
@@ -3829,6 +3834,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       instantCasting,
       endOfTurnRespond,
       pwAbilityOnStack,
+      pwReminder,
       preventCombatDamage,
     };
     // Bundle any pending log entries into this broadcast
@@ -4011,6 +4017,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     if (onlineState.instantCasting !== undefined) _setInstantCasting(onlineState.instantCasting);
     if (onlineState.endOfTurnRespond !== undefined) _setEndOfTurnRespond(onlineState.endOfTurnRespond);
     if (onlineState.pwAbilityOnStack !== undefined) _setPwAbilityOnStack(onlineState.pwAbilityOnStack);
+    if (onlineState.pwReminder !== undefined) _setPwReminder(onlineState.pwReminder);
     if (onlineState.preventCombatDamage !== undefined) _setPreventCombatDamage(onlineState.preventCombatDamage);
 
     // Receive game log entries from opponent (supports both array and single entry)
@@ -5380,6 +5387,9 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
   // ═══════════════════════════════════════════════════════════════
   const getCardActions = (pIdx, card, zone) => {
     const actions = [];
+    // Card Info & Rulings always at top — always accessible
+    actions.push({ label: '📖 Card Info & Rulings', fn: () => setCardInfoOverlay({ card }) });
+    actions.push({ sep: true });
     // Ownership is determined by which player THIS client is
     const isOwner = pIdx === onlinePlayerIndex;
     const isOpponent = !isOwner;
@@ -5802,10 +5812,6 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       }
     }
 
-    // Universal: Card Info & Rulings (available on all cards in all zones)
-    actions.push({ sep: true });
-    actions.push({ label: '📖 Card Info & Rulings', fn: () => setCardInfoOverlay({ card }) });
-
     return actions;
   };
 
@@ -6068,7 +6074,8 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
   const setSacCounterChoice = syncSetter(_setSacCounterChoice);
   const [pwAbilityOnStack, _setPwAbilityOnStack] = useState(null); // SYNCED — { pIdx, card, ability: { cost, text } }
   const setPwAbilityOnStack = syncSetter(_setPwAbilityOnStack);
-  const [pwReminder, setPwReminder] = useState(null); // { pIdx, card, ability }
+  const [pwReminder, _setPwReminder] = useState(null); // SYNCED — { pIdx, card, ability, exiledCard?, exileCastDmg? }
+  const setPwReminder = syncSetter(_setPwReminder);
   const [ltbReminder, setLtbReminder] = useState(null); // { pIdx, card, effects[] }
 
   // ===== IN-GAME CHAT =====
@@ -7946,13 +7953,15 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
           dealtDamageThisTurn: false,
           manaPool: { W: 0, U: 0, B: 0, R: 0, G: 0, C: 0 },
         };
-        // In online mode, DON'T draw a card for the other player here.
-        // Each player draws their own card when their turn starts (see onlineTurnDrawEffect).
-        // This avoids the sync issue where hand/library data can't cross the visibility filter.
-        if (onlineMode && next !== onlinePlayerIndex) {
+        // In online mode, NEVER draw a card here — the onlineTurnDrawEffect handles
+        // all turn-start draws. This function can be called by either the active player
+        // (via discard flow) or the opponent (via "Proceed" button), and the
+        // onlineTurnDrawEffect already fires when activePlayer changes. Drawing here
+        // too would cause a double-draw.
+        if (onlineMode) {
           return base;
         }
-        // Hotseat or drawing for ourselves: draw normally
+        // Hotseat: draw normally (no onlineTurnDrawEffect in hotseat)
         return {
           ...base,
           library: p.library.slice(1),
@@ -10056,7 +10065,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                     borderRadius: 8, border: i === 0 ? '1px solid rgba(60,180,220,0.4)' : '1px solid rgba(255,255,255,0.1)',
                   }}>
                     <CardImg card={entry.card} alt={entry.displayName}
-                      style={{ height: i === 0 ? 80 : 50, borderRadius: 6 }} />
+                      style={{ width: i === 0 ? 70 : 45, borderRadius: 6 }} />
                     <span style={{ fontSize: 8, color: i === 0 ? '#60c8e8' : 'rgba(255,255,255,0.5)', fontWeight: 700 }}>
                       {i === 0 ? '▶ TOP' : `#${spellStack.length - i}`}
                     </span>
@@ -10068,7 +10077,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
               {getState(stackTop.pIdx).name} casts
             </div>
             <CardImg card={stackTop.card} alt={stackTop.displayName}
-              style={{ height: 280 }} />
+              className="spell-stack-main-card" />
             <div className="spell-stack-label">On the Stack{spellStack.length > 1 ? ` (resolving top)` : ''}</div>
             <div className="spell-stack-buttons">
               {(!onlineMode || onlinePlayerIndex === (stackTop.pIdx === 0 ? 1 : 0)) && (
