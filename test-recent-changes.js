@@ -804,12 +804,14 @@ test('PW ability resolver detects prevent damage pattern', () => {
   assert(code.includes("until your next turn,?\\s+prevent all damage"), 'prevent damage regex');
 });
 
-test('PW ability resolver shows prevent damage button', () => {
-  assert(code.includes('Prevent All Damage on Target'), 'prevent damage button label');
+test('PW ability resolver shows target buttons for each opponent permanent', () => {
+  assert(code.includes('oppPermanents.map'), 'renders button per opponent permanent');
+  assert(code.includes('oppPermanents = getState(oppIdx).battlefield'), 'targets all permanents, not just creatures');
 });
 
-test('Prevent damage button auto-selects single creature', () => {
-  assert(code.includes('oppCreatures.length === 1'), 'auto-select when only one creature');
+test('Prevent damage targets any permanent (not just creatures)', () => {
+  assert(!code.includes('oppCreatures = getState(oppIdx).battlefield.filter(c => isCreature(c))') ||
+         code.includes('oppPermanents = getState(oppIdx).battlefield'), 'targets permanents not just creatures');
 });
 
 // ============================================================
