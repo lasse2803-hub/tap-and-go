@@ -835,6 +835,42 @@ test('Block trigger parsing is wrapped in try-catch', () => {
 });
 
 // ============================================================
+// Modal Spell Choice ("choose one" instants like Decisive Denial)
+// ============================================================
+console.log('\n▸ Modal Spell Choice (Choose One Instants)');
+
+test('castCard detects "choose one" spells and shows modal', () => {
+  assert(code.includes("choose one/i.test(spellOracle)"), 'choose one detection in castCard');
+  assert(code.includes("pendingSpellModalRef.current ="), 'stores pending spell modal state');
+  assert(code.includes("triggerType: 'spell'"), 'sets triggerType to spell for modal');
+});
+
+test('pendingSpellModalRef exists for storing spell modal state', () => {
+  assert(code.includes('pendingSpellModalRef = useRef(null)'), 'pendingSpellModalRef declared');
+});
+
+test('executeModalChoice handles spell_mode action', () => {
+  assert(code.includes("choice.action === 'spell_mode'"), 'spell_mode action handler');
+});
+
+test('Spell modal counter mode puts on stack with chosenMode', () => {
+  assert(code.includes("chosenMode: 'counter'"), 'counter chosenMode in stack entry');
+});
+
+test('resolveTopOfStack respects chosenMode for modal spells', () => {
+  assert(code.includes("shouldActAsCounter"), 'shouldActAsCounter variable');
+  assert(code.includes("topSpell.chosenMode === 'counter'"), 'checks chosenMode for counter');
+});
+
+test('parseSpellEffects detects "counter target noncreature spell"', () => {
+  assert(code.includes('counter target [\\w\\s]*spell'), 'broadened counter regex');
+});
+
+test('Modal choice overlay shows Spell label for spell modals', () => {
+  assert(code.includes("Spell — Choose Mode"), 'spell modal overlay label');
+});
+
+// ============================================================
 // RESULTS
 // ============================================================
 console.log(`\n${'═'.repeat(55)}`);

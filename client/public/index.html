@@ -1562,8 +1562,10 @@ const parseSpellEffects = (card) => {
   }
 
   // Counter target spell (special — targets stack, not battlefield)
-  if (/counter target spell/.test(allText)) {
-    effects.push({ type: 'counter_spell', description: 'Counter target spell' });
+  // Matches: "counter target spell", "counter target noncreature spell", "counter target instant or sorcery spell"
+  if (/counter target [\w\s]*spell/.test(allText)) {
+    const counterDesc = (allText.match(/counter target ([\w\s]*spell)/)?.[0] || 'counter target spell');
+    effects.push({ type: 'counter_spell', description: counterDesc.charAt(0).toUpperCase() + counterDesc.slice(1) });
   }
 
   // Gain life
@@ -6091,6 +6093,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
   // Pre-cast targeting: when casting a spell with targets, we show the targeting UI
   // BEFORE putting the spell on the stack. This ref stores the cast info until targets are chosen.
   const pendingCastRef = useRef(null); // { pIdx, card, asAdventure, fromExile, displayName, nonTargetedEffects }
+  const pendingSpellModalRef = useRef(null); // { pIdx, card, asAdventure, fromExile, displayName, spellToCheck } — for "choose one" spells
   const [spellStack, _setSpellStack] = useState([]); // SYNCED — LIFO stack: [{ pIdx, card, asAdventure, fromExile, displayName, resolvedTargets? }, ...]
   const setSpellStack = syncSetter(_setSpellStack);
   const stackTop = spellStack.length > 0 ? spellStack[spellStack.length - 1] : null;
@@ -6937,7 +6940,10 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     const topSpell = spellStack[spellStack.length - 1];
     const spellBelow = spellStack.length > 1 ? spellStack[spellStack.length - 2] : null;
 
-    if (isCounterSpellCard(topSpell.card) && spellBelow) {
+    // For modal "choose one" spells (e.g. Decisive Denial), only counter if user chose counter mode
+    const shouldActAsCounter = isCounterSpellCard(topSpell.card) && spellBelow &&
+      (!topSpell.chosenMode || topSpell.chosenMode === 'counter');
+    if (shouldActAsCounter) {
       // This is a counterspell resolving — check if target can be countered
       if (cardCantBeCountered(spellBelow.card)) {
         // Target can't be countered — counterspell fizzles, target stays on stack
@@ -7024,6 +7030,31 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       : card;
 
     if (isSpellCard(card) || (asAdventure && isAdventure(card))) {
+      // ===== MODAL SPELL DETECTION ("choose one" — e.g. Decisive Denial) =====
+      const spellOracle = (spellToCheck.oracle_text || '').toLowerCase();
+      if (/choose one/i.test(spellOracle)) {
+        const choicesRaw = spellOracle.match(/[•\-]\s*([^•\-]+)/g) || [];
+        if (choicesRaw.length > 1) {
+          const choices = choicesRaw.map(raw => {
+            const text = raw.replace(/^[•\-]\s*/, '').trim().replace(/\.$/, '');
+            let icon = '✦';
+            if (/counter/i.test(text)) icon = '🚫';
+            if (/fight/i.test(text)) icon = '⚔️';
+            if (/destroy/i.test(text)) icon = '💀';
+            if (/damage/i.test(text)) icon = '🔥';
+            if (/draw/i.test(text)) icon = '🃏';
+            if (/gain.*life/i.test(text)) icon = '💚';
+            if (/return/i.test(text)) icon = '↩️';
+            return { label: text, icon, action: 'spell_mode', modeText: text };
+          });
+          pendingSpellModalRef.current = { pIdx, card, asAdventure, fromExile: isFromExile, displayName, spellToCheck };
+          setModalChoice({ pIdx, card: spellToCheck, triggerType: 'spell', choices });
+          addGameLog(pIdx, '🃏', `${getState(pIdx).name} casts ${displayName}`);
+          SFX.playSpell();
+          return;
+        }
+      }
+
       const effects = parseSpellEffects(spellToCheck);
       const targetMode = getSpellTargetMode(effects);
       const targetedEffects = effects.filter(e => ['destroy', 'exile', 'bounce', 'damage', 'boost', 'counter_add', 'fight'].includes(e.type));
@@ -7788,6 +7819,39 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       });
       addGameLog(pIdx, '🃏', `${getDisplayName(sourceCard)}: Draw ${amount} card${amount > 1 ? 's' : ''}`, [sourceCard.id]);
       SFX.draw();
+    } else if (choice.action === 'spell_mode') {
+      // ===== MODAL SPELL MODE CHOICE (Decisive Denial, etc.) =====
+      const pending = pendingSpellModalRef.current;
+      if (!pending) { setModalChoice(null); return; }
+      pendingSpellModalRef.current = null;
+
+      // Create a temp card with only the chosen mode's oracle text for effect parsing
+      const modeCard = { ...pending.spellToCheck, oracle_text: choice.modeText };
+      const effects = parseSpellEffects(modeCard);
+      const targetMode = getSpellTargetMode(effects);
+      const targetedEffects = effects.filter(e => ['destroy', 'exile', 'bounce', 'damage', 'boost', 'counter_add', 'fight'].includes(e.type));
+      const nonTargetedEffects = effects.filter(e => !['destroy', 'exile', 'bounce', 'damage', 'boost', 'counter_add', 'fight'].includes(e.type));
+
+      if (targetedEffects.length > 0 && (targetMode === 'battlefield' || targetedEffects.some(e => e.type === 'damage'))) {
+        // Targeted mode (fight, damage, etc.) — show targeting UI
+        pendingCastRef.current = { pIdx: pending.pIdx, card: pending.card, asAdventure: pending.asAdventure, fromExile: pending.fromExile, displayName: pending.displayName, nonTargetedEffects, chosenMode: choice.modeText };
+        setSpellTargeting({ pIdx: pending.pIdx, card: modeCard, effects: targetedEffects, targetMode });
+        setCastError({ pIdx: pending.pIdx, message: `${pending.displayName}: Choose a target` });
+      } else if (effects.some(e => e.type === 'counter_spell')) {
+        // Counter mode — put on stack as counterspell
+        setSpellStack(prev => [...prev, {
+          pIdx: pending.pIdx, card: pending.card, asAdventure: pending.asAdventure,
+          fromExile: pending.fromExile, displayName: pending.displayName, chosenMode: 'counter',
+        }]);
+      } else {
+        // Other mode — put on stack
+        setSpellStack(prev => [...prev, {
+          pIdx: pending.pIdx, card: pending.card, asAdventure: pending.asAdventure,
+          fromExile: pending.fromExile, displayName: pending.displayName, chosenMode: choice.modeText,
+        }]);
+      }
+      setModalChoice(null);
+      return; // Don't fall through to the combat trigger setModalChoice(null) below
     } else {
       // Manual — just log the reminder
       addGameLog(pIdx, '✨', `${getDisplayName(sourceCard)}: ${choice.label}`, [sourceCard.id]);
@@ -10808,7 +10872,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
             maxWidth: 420, width: '90%', textAlign: 'center',
           }}>
             <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: 2, color: 'rgba(255,180,40,0.6)', marginBottom: 4, fontWeight: 700 }}>
-              {modalChoice.triggerType === 'attack' ? '⚔️ Attack Trigger' : '🛡 Block Trigger'}
+              {modalChoice.triggerType === 'spell' ? '🃏 Spell — Choose Mode' : modalChoice.triggerType === 'attack' ? '⚔️ Attack Trigger' : '🛡 Block Trigger'}
             </div>
             <div style={{ fontSize: 15, fontWeight: 700, color: '#e8d8a0', marginBottom: 14 }}>
               {getDisplayName(modalChoice.card)} — Choose One
