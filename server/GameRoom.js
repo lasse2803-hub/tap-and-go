@@ -366,7 +366,9 @@ class GameRoom {
       if (update.instantCasting !== undefined) this.gameState.instantCasting = update.instantCasting;
       if (update.endOfTurnRespond !== undefined) this.gameState.endOfTurnRespond = update.endOfTurnRespond;
       if (update.pwAbilityOnStack !== undefined) this.gameState.pwAbilityOnStack = update.pwAbilityOnStack;
+      if (update.pwReminder !== undefined) this.gameState.pwReminder = update.pwReminder;
       if (update.preventCombatDamage !== undefined) this.gameState.preventCombatDamage = update.preventCombatDamage;
+      if (update.modalChoice !== undefined) this.gameState.modalChoice = update.modalChoice;
 
       // Forward game log entries from one player to the other
       if (update.__logEntries) this.gameState.__logEntries = update.__logEntries;
