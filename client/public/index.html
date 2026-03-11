@@ -2604,7 +2604,7 @@ function CardImg({ card, alt, style, className, onClick, size }) {
   // Reskin config can override positioning: _reskin: { artTop, artHeight }
   const reskinCfg = card._reskin || {};
   const artTop = reskinCfg.artTop != null ? reskinCfg.artTop + '%' : isPW ? '8.5%' : isSaga ? '11%' : '11.5%';
-  const artHeight = reskinCfg.artHeight != null ? reskinCfg.artHeight + '%' : isPW ? '48%' : isSaga ? '70%' : '36%';
+  const artHeight = reskinCfg.artHeight != null ? reskinCfg.artHeight + '%' : isPW ? '48%' : isSaga ? '70%' : '44%';
   const artLeft = reskinCfg.artLeft != null ? reskinCfg.artLeft + '%' : '6%';
   const artWidth = reskinCfg.artWidth != null ? reskinCfg.artWidth + '%' : '88%';
   // When reskin is active, apply className (incl. tapped rotation) to the wrapper
@@ -2616,7 +2616,8 @@ function CardImg({ card, alt, style, className, onClick, size }) {
       <img className="reskin-art-overlay" src={reskinArt} alt=""
         style={{
           top: artTop, left: artLeft, width: artWidth, height: artHeight,
-          borderRadius: style?.height > 200 ? 10 : style?.height > 80 ? 6 : 3
+          borderRadius: style?.height > 200 ? 10 : style?.height > 80 ? 6 : 3,
+          objectPosition: reskinCfg.objectPosition || 'center 25%',
         }} />
     </div>
   );
@@ -7192,8 +7193,10 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       return;
     }
     setInstantCasting(null); // Close the instant casting overlay
-    // Adventure cards with instant adventure face: cast as adventure (e.g. Bonecrusher Giant → Stomp)
-    if (isAdventureCard(card) && !isInstant(card) && !hasFlash(card)) {
+    // Adventure cards with instant adventure face: ALWAYS cast as adventure at instant speed
+    // (e.g. Bonecrusher Giant → Stomp). Note: can't use !isInstant(card) because the combined
+    // type_line includes "Instant" from the adventure face, making isInstant() return true.
+    if (isAdventureCard(card)) {
       const advFace = card.card_faces?.[1];
       if (advFace && advFace.type_line && advFace.type_line.toLowerCase().includes('instant')) {
         castCard(pIdx, card, true); // asAdventure = true
@@ -7862,9 +7865,15 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         const nameEscaped = nameLower.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         // Match patterns: "whenever [name] attacks", "whenever [name] attacks or blocks", "whenever [name] enters the battlefield or attacks"
         const selfAttackPattern = new RegExp('whenever ' + nameEscaped + '(?:\\s+enters the battlefield or)?\\s+attacks(?:\\s+or\\s+blocks)?');
-        if (selfAttackPattern.test(oracle)) {
-          const parsedTrigger = parseCombatTrigger(attacker, oracle, 'attack');
-          if (parsedTrigger) attackTriggers.push(parsedTrigger);
+        // Also match generic "~ attacks" or "this creature attacks" patterns as fallback
+        const genericAttackPattern = /whenever (?:~|this creature)(?:\s+enters the battlefield or)?\s+attacks(?:\s+or\s+blocks)?/;
+        if (selfAttackPattern.test(oracle) || genericAttackPattern.test(oracle)) {
+          try {
+            const parsedTrigger = parseCombatTrigger(attacker, oracle, 'attack');
+            if (parsedTrigger) attackTriggers.push(parsedTrigger);
+          } catch (e) {
+            console.error('[Attack Trigger] Error parsing trigger for', attacker.name, e);
+          }
         }
       }
     }
@@ -8340,9 +8349,14 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       const nameEscaped = nameLower.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       // Match "whenever [name] blocks" or "whenever [name] attacks or blocks"
       const selfBlockPattern = new RegExp('whenever ' + nameEscaped + '(?:\\s+attacks\\s+or)?\\s+blocks');
-      if (selfBlockPattern.test(oracle)) {
-        const parsedTrigger = parseCombatTrigger(blocker, oracle, 'block');
-        if (parsedTrigger) blockTriggers.push(parsedTrigger);
+      const genericBlockPattern = /whenever (?:~|this creature)(?:\s+attacks\s+or)?\s+blocks/;
+      if (selfBlockPattern.test(oracle) || genericBlockPattern.test(oracle)) {
+        try {
+          const parsedTrigger = parseCombatTrigger(blocker, oracle, 'block');
+          if (parsedTrigger) blockTriggers.push(parsedTrigger);
+        } catch (e) {
+          console.error('[Block Trigger] Error parsing trigger for', blocker.name, e);
+        }
       }
     }
 
@@ -10111,7 +10125,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
             </div>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'flex-end', marginBottom: 10, maxHeight: '25vh', overflowY: 'auto' }}>
               {instantCards.map(card => {
-                const isAdv = isAdventureCard(card) && !isInstant(card) && !hasFlash(card);
+                const isAdv = isAdventureCard(card) && card.card_faces?.[1]?.type_line?.toLowerCase().includes('instant');
                 const advFaceName = isAdv ? card.card_faces?.[1]?.name : null;
                 return (
                 <div key={card.id} style={{ cursor: 'pointer', transition: 'transform 0.15s ease', position: 'relative' }}
@@ -10880,6 +10894,9 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
               const untilNextTurnPower = untilNextTurnMatch ? parseInt(untilNextTurnMatch[1]) : 0;
               const untilNextTurnToughness = untilNextTurnMatch ? parseInt(untilNextTurnMatch[2]) : 0;
 
+              // "Until your next turn, prevent all damage" detection (Kiora's +1)
+              const isPreventDamage = /until your next turn,?\s+prevent all damage/i.test(abilityText);
+
               // Chandra-style: "Exile the top card of your library. You may cast that card. If you don't, [PW] deals N damage to each opponent."
               const exileCastOrDmgMatch = abilityText.match(/exile the top card of your library.*you may cast.*(?:if you don'?t|otherwise).*deals?\s+(\d+)\s+damage/);
               const isExileCastOrDamage = !!exileCastOrDmgMatch;
@@ -10913,7 +10930,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                 pwTokenData = { name: tokenName, power: tokenPower, toughness: tokenToughness, type_line: `Creature Token — ${creatureType}`, colors, keywords, qty };
               }
 
-              if (pwEffects.length > 0 || isEmblem || isUntilNextTurn || pwTokenData || isExileCastOrDamage) {
+              if (pwEffects.length > 0 || isEmblem || isUntilNextTurn || pwTokenData || isExileCastOrDamage || isPreventDamage) {
                 return (
                   <div style={{ display: 'flex', gap: 8, justifyContent: 'center', flexWrap: 'wrap' }}>
                     {isExileCastOrDamage && !pwReminder.exiledCard && (
@@ -11070,6 +11087,49 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                           setPwReminder(null);
                         }}>
                         🛡️ Activate Effect
+                      </button>
+                    )}
+                    {isPreventDamage && (
+                      <button className="btn btn-gold" style={{ padding: '6px 16px', fontSize: 12 }}
+                        onClick={() => {
+                          // Show opponent's creatures for selection
+                          const oppIdx = pwReminder.pIdx === 0 ? 1 : 0;
+                          const oppCreatures = getState(oppIdx).battlefield.filter(c => isCreature(c));
+                          if (oppCreatures.length === 0) {
+                            setCastError({ pIdx: pwReminder.pIdx, message: '⚠️ No opponent creatures to target!' });
+                            setTimeout(() => setCastError(null), 2000);
+                            setPwReminder(null);
+                            return;
+                          }
+                          if (oppCreatures.length === 1) {
+                            // Auto-select the only creature
+                            const target = oppCreatures[0];
+                            setState(oppIdx, prev => ({
+                              ...prev,
+                              battlefield: prev.battlefield.map(c => c.id === target.id ? { ...c, damagePrevented: pwReminder.pIdx } : c)
+                            }));
+                            addGameLog(pwReminder.pIdx, '🛡', `${pwReminder.card.name}: All damage prevented on ${getDisplayName(target)} until your next turn`);
+                            setCastError({ pIdx: pwReminder.pIdx, message: `🛡️ ${getDisplayName(target)}: all damage prevented until your next turn`, background: '#1a2a1a' });
+                            setTimeout(() => setCastError(null), 3000);
+                            setPwReminder(null);
+                          } else {
+                            // Multiple targets — show a simple selection prompt
+                            const targetName = prompt(`${pwReminder.card.name}: Choose target creature to prevent all damage:\n${oppCreatures.map((c, i) => `${i + 1}. ${getDisplayName(c)}`).join('\n')}\n\nEnter number:`);
+                            const idx = parseInt(targetName) - 1;
+                            if (idx >= 0 && idx < oppCreatures.length) {
+                              const target = oppCreatures[idx];
+                              setState(oppIdx, prev => ({
+                                ...prev,
+                                battlefield: prev.battlefield.map(c => c.id === target.id ? { ...c, damagePrevented: pwReminder.pIdx } : c)
+                              }));
+                              addGameLog(pwReminder.pIdx, '🛡', `${pwReminder.card.name}: All damage prevented on ${getDisplayName(target)} until your next turn`);
+                              setCastError({ pIdx: pwReminder.pIdx, message: `🛡️ ${getDisplayName(target)}: all damage prevented until your next turn`, background: '#1a2a1a' });
+                              setTimeout(() => setCastError(null), 3000);
+                            }
+                            setPwReminder(null);
+                          }
+                        }}>
+                        🛡️ Prevent All Damage on Target
                       </button>
                     )}
                     <button className="btn" style={{ padding: '6px 16px', fontSize: 11 }}

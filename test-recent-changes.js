@@ -765,6 +765,76 @@ test('Modal triggers separated from simple triggers in attack processing', () =>
 });
 
 // ============================================================
+// Bug Fix: Bonecrusher Giant adventure instant casting
+// ============================================================
+console.log('\n▸ Bug Fix: Bonecrusher Giant Adventure Instant Casting');
+
+test('Adventure instant cast always uses adventure face at instant speed', () => {
+  // The fix: removed !isInstant(card) && !hasFlash(card) check that prevented
+  // adventure cards with instant adventure faces from being cast as adventures
+  // The condition should now be just: if (isAdventureCard(card)) {
+  const castInstantSection = code.substring(
+    code.indexOf('setInstantCasting(null); // Close the instant casting overlay'),
+    code.indexOf('castCard(pIdx, card);', code.indexOf('setInstantCasting(null); // Close'))
+  );
+  // The actual code condition should NOT have && !isInstant(card) && !hasFlash(card) on the same line as isAdventureCard
+  assert(!castInstantSection.includes('isAdventureCard(card) && !isInstant(card)'), 'removed !isInstant condition from adventure check');
+});
+
+test('Instant casting overlay shows adventure label for instant adventures', () => {
+  assert(code.includes("card.card_faces?.[1]?.type_line?.toLowerCase().includes('instant')"), 'adventure label uses face type_line');
+});
+
+// ============================================================
+// Bug Fix: Reskin art overlay height
+// ============================================================
+console.log('\n▸ Bug Fix: Reskin Art Overlay Height');
+
+test('Non-planeswalker reskin art uses 44% height', () => {
+  assert(code.includes("'44%'"), 'creature reskin art height is 44%');
+});
+
+// ============================================================
+// Bug Fix: Kiora +1 prevent damage
+// ============================================================
+console.log('\n▸ Bug Fix: Kiora +1 Prevent Damage');
+
+test('PW ability resolver detects prevent damage pattern', () => {
+  assert(code.includes('isPreventDamage'), 'isPreventDamage variable exists');
+  assert(code.includes("until your next turn,?\\s+prevent all damage"), 'prevent damage regex');
+});
+
+test('PW ability resolver shows prevent damage button', () => {
+  assert(code.includes('Prevent All Damage on Target'), 'prevent damage button label');
+});
+
+test('Prevent damage button auto-selects single creature', () => {
+  assert(code.includes('oppCreatures.length === 1'), 'auto-select when only one creature');
+});
+
+// ============================================================
+// Bug Fix: Attack/block trigger robustness
+// ============================================================
+console.log('\n▸ Bug Fix: Attack/Block Trigger Robustness');
+
+test('Attack trigger has generic fallback pattern for ~ self-reference', () => {
+  assert(code.includes('genericAttackPattern'), 'generic attack pattern variable');
+  assert(code.includes('~|this creature'), 'pattern matches tilde and this creature');
+});
+
+test('Block trigger has generic fallback pattern', () => {
+  assert(code.includes('genericBlockPattern'), 'generic block pattern variable');
+});
+
+test('Attack trigger parsing is wrapped in try-catch', () => {
+  assert(code.includes("[Attack Trigger] Error parsing trigger for"), 'attack trigger try-catch with error log');
+});
+
+test('Block trigger parsing is wrapped in try-catch', () => {
+  assert(code.includes("[Block Trigger] Error parsing trigger for"), 'block trigger try-catch with error log');
+});
+
+// ============================================================
 // RESULTS
 // ============================================================
 console.log(`\n${'═'.repeat(55)}`);
