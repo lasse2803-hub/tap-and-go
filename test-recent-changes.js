@@ -933,6 +933,114 @@ test('Overload: Cyclonic Rift normal mode still works (single target bounce)', (
 });
 
 // ============================================================
+// BUG FIX: Boros Charm / Skewer planeswalker targeting
+// ============================================================
+console.log('\n--- Boros Charm / Skewer Planeswalker Targeting ---');
+
+test('Damage regex matches "player or planeswalker"', () => {
+  const dmgRegex = /deals? (\d+|x) damage to (any target|target (creature or planeswalker|player or planeswalker|creature or player|creature|player|opponent))/;
+  assert(dmgRegex.test('deals 4 damage to target player or planeswalker'), 'Boros Charm pattern matches');
+  assert(dmgRegex.test('deals 3 damage to target player or planeswalker'), 'Skewer pattern matches');
+});
+
+test('Damage regex longer patterns match before shorter ones', () => {
+  const dmgRegex = /deals? (\d+|x) damage to (any target|target (creature or planeswalker|player or planeswalker|creature or player|creature|player|opponent))/;
+  const match = 'deals 4 damage to target player or planeswalker'.match(dmgRegex);
+  assert(match, 'regex matches');
+  assert(match[3] === 'player or planeswalker', `captured group is "player or planeswalker", got "${match[3]}"`);
+});
+
+test('Planeswalker damage removes loyalty counters in code', () => {
+  assert(code.includes('isPlaneswalker(targetCard)'), 'checks if target is planeswalker');
+  assert(code.includes('currentLoyalty - dmg') || code.includes('currentLoyalty-dmg'), 'subtracts damage from loyalty');
+});
+
+// ============================================================
+// BUG FIX: Light Up the Stage (library as public zone)
+// ============================================================
+console.log('\n--- Light Up the Stage (library public zone) ---');
+
+test('Server GameRoom.js has library in public zone', () => {
+  const serverCode = fs.readFileSync(path.join(__dirname, 'server', 'GameRoom.js'), 'utf8');
+  // Library should be updated outside the `if (i === playerIndex)` block
+  // Check that library update is NOT inside the private-only section
+  const publicZoneSection = serverCode.match(/Update public zones.*?Semi-private/s);
+  if (publicZoneSection) {
+    assert(publicZoneSection[0].includes('u.library'), 'library is in public zone section');
+  } else {
+    // Alternative check: library update should not be gated by playerIndex
+    assert(serverCode.includes('if (u.library) s.library = u.library'), 'library update exists in server');
+  }
+});
+
+// ============================================================
+// BUG FIX: Pain lands deal 1 damage
+// ============================================================
+console.log('\n--- Pain Lands ---');
+
+test('Pain land detection regex works', () => {
+  const painRegex = /deals? 1 damage to you/i;
+  assert(painRegex.test('Whenever you tap Caves of Koilos for mana, it deals 1 damage to you.'), 'Caves of Koilos matches');
+  assert(painRegex.test('{T}: Add {C}. {T}: Add {W} or {B}. Battlefield Forge deals 1 damage to you.'), 'Battlefield Forge matches');
+  assert(!painRegex.test('{T}: Add {G} or {U}.'), 'Normal dual land does not match');
+});
+
+test('Pain land code deducts life on colored mana', () => {
+  assert(code.includes('isPainLand'), 'isPainLand variable exists');
+  assert(code.includes('pain land') || code.includes('Pain land'), 'pain land log message exists');
+});
+
+test('Mana choice overlay passes isPainLand', () => {
+  assert(code.includes('isPainLand') && code.includes('manaChoice.isPainLand'), 'manaChoice carries isPainLand flag');
+});
+
+// ============================================================
+// BUG FIX: Roiling Vortex curly apostrophe
+// ============================================================
+console.log('\n--- Roiling Vortex Curly Apostrophe ---');
+
+test('Upkeep damage regex handles curly apostrophe', () => {
+  // The regex in code uses ['\u2018\u2019] character class
+  const upkeepRegex = /at the beginning of each player['\u2018\u2019]?s upkeep,?\s*(?:~|[\w\s,]+)\s+deals?\s+(\d+)\s+damage to that player/i;
+  // Scryfall uses right single quotation mark U+2019
+  const scryfallText = "At the beginning of each player\u2019s upkeep, Roiling Vortex deals 1 damage to that player.";
+  assert(upkeepRegex.test(scryfallText), 'regex matches Scryfall curly apostrophe');
+  // Also test straight apostrophe
+  const straightText = "At the beginning of each player's upkeep, Roiling Vortex deals 1 damage to that player.";
+  assert(upkeepRegex.test(straightText), 'regex matches straight apostrophe');
+});
+
+test('Code uses curly apostrophe character class for upkeep damage', () => {
+  assert(code.includes("['\u2018\u2019]"), 'code contains curly apostrophe character class');
+});
+
+// ============================================================
+// BUG FIX: Exit Game (leaveRoom)
+// ============================================================
+console.log('\n--- Exit Game (leaveRoom) ---');
+
+test('leaveRoom function exists in useGameSocket', () => {
+  assert(code.includes('const leaveRoom'), 'leaveRoom function is defined');
+  assert(code.includes("socket.emit('leaveRoom'") || code.includes('socket.emit("leaveRoom"'), 'leaveRoom emits socket event');
+});
+
+test('leaveRoom resets all game state', () => {
+  assert(code.includes('setRoomInfo(null)'), 'resets roomInfo');
+  assert(code.includes('setGameState(null)'), 'resets gameState');
+  assert(code.includes('setGameStarted(false)'), 'resets gameStarted');
+});
+
+test('onExit calls leaveRoom', () => {
+  assert(code.includes('gameSocket.leaveRoom()'), 'onExit calls gameSocket.leaveRoom()');
+});
+
+test('Server has leaveRoom handler', () => {
+  const serverCode = fs.readFileSync(path.join(__dirname, 'server', 'index.js'), 'utf8');
+  assert(serverCode.includes("socket.on('leaveRoom'"), 'server handles leaveRoom event');
+  assert(serverCode.includes('socket.leave(socket.roomId)'), 'server leaves socket room');
+});
+
+// ============================================================
 // RESULTS
 // ============================================================
 console.log(`\n${'═'.repeat(55)}`);

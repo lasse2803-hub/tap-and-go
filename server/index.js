@@ -271,6 +271,26 @@ io.on('connection', (socket) => {
     });
   });
 
+  // Player leaves room (Exit Game)
+  socket.on('leaveRoom', (_, callback) => {
+    console.log(`[Socket] Player leaving room: ${socket.id} from ${socket.roomId}`);
+    if (socket.roomId) {
+      const room = roomManager.getRoom(socket.roomId);
+      if (room) {
+        // Notify opponent
+        socket.to(socket.roomId).emit('opponentDisconnected', {
+          playerIndex: socket.playerIndex
+        });
+        room.playerDisconnected(socket.playerIndex, socket.id);
+      }
+      socket.leave(socket.roomId);
+      socket.roomId = null;
+      socket.playerIndex = null;
+      socket.playerId = null;
+    }
+    callback?.({ ok: true });
+  });
+
   // Disconnect handling
   socket.on('disconnect', () => {
     console.log(`[Socket] Disconnected: ${socket.id}`);

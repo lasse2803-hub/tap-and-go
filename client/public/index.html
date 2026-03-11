@@ -1486,7 +1486,7 @@ const parseSpellEffects = (card) => {
   }
 
   // Deal damage to any target / target creature / target player
-  const dmgMatch = allText.match(/deals? (\d+|x) damage to (any target|target (creature|player|opponent|creature or player|creature or planeswalker))/);
+  const dmgMatch = allText.match(/deals? (\d+|x) damage to (any target|target (creature or planeswalker|player or planeswalker|creature or player|creature|player|opponent))/);
   if (dmgMatch) {
     const amount = dmgMatch[1] === 'x' ? 0 : parseInt(dmgMatch[1]);
     const targetDesc = dmgMatch[2];
@@ -4659,11 +4659,18 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         ...prev,
         battlefield: prev.battlefield.map(c => c.id === cardId ? { ...c, tapped: true } : c),
       }));
+      // Detect pain lands: "{T}: Add {X} or {Y}. CARDNAME deals 1 damage to you."
+      const landOracle = getOracleText(card);
+      const isPainLand = /deals? 1 damage to you/i.test(landOracle) && /\{t\}:\s*add\s/.test(landOracle);
       if (colors.length === 1) {
         addManaToPool(pIdx, colors[0]);
+        if (isPainLand && colors[0] !== 'C') {
+          setState(pIdx, prev => ({ ...prev, life: prev.life - 1 }));
+          addGameLog(pIdx, '🩸', `${card.name}: 1 damage (pain land)`);
+        }
       } else if (colors.length > 1) {
-        // Multiple colors: player must choose
-        setManaChoice({ pIdx, colors, cardId });
+        // Multiple colors: player must choose — pass pain land flag
+        setManaChoice({ pIdx, colors, cardId, isPainLand });
       }
       return;
     }
@@ -5019,7 +5026,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       const owner = getState(ownerIdx);
       for (const card of owner.battlefield) {
         const allText = getOracleText(card);
-        const eachUpkeepDmgMatch = allText.match(/at the beginning of each player'?s upkeep,?\s*(?:~|[\w\s,]+)\s+deals?\s+(\d+)\s+damage to that player/i);
+        const eachUpkeepDmgMatch = allText.match(/at the beginning of each player['‘’]?s upkeep,?\s*(?:~|[\w\s,]+)\s+deals?\s+(\d+)\s+damage to that player/i);
         if (eachUpkeepDmgMatch) {
           const dmg = parseInt(eachUpkeepDmgMatch[1]);
           setState(pIdx, prev => ({ ...prev, life: prev.life - dmg }));
@@ -6207,8 +6214,25 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
               setCastError({ pIdx: casterIdx, message: `${dmg} damage to ${targetCard.name} (survives: ${toughness} toughness)` });
               setTimeout(() => setCastError(null), 2000);
             }
-          } else {
+          } else if (isPlaneswalker(targetCard)) {
             // Damage to planeswalker — remove loyalty counters
+            const currentLoyalty = targetCard.loyalty != null ? targetCard.loyalty : (targetCard.counters?.loyalty || 0);
+            const newLoyalty = currentLoyalty - dmg;
+            if (newLoyalty <= 0) {
+              // Planeswalker dies (loyalty reaches 0)
+              moveCard(targetPIdx, targetCard, 'battlefield', 'graveyard');
+              addGameLog(casterIdx, '💀', `${dmg} damage to ${targetCard.name} — destroyed (loyalty 0)`);
+            } else {
+              setState(targetPIdx, prev => ({
+                ...prev,
+                battlefield: prev.battlefield.map(c => c.id === targetCard.id ? { ...c, loyalty: newLoyalty, counters: { ...(c.counters || {}), loyalty: newLoyalty } } : c)
+              }));
+              addGameLog(casterIdx, '🔥', `${dmg} damage to ${targetCard.name} (loyalty: ${currentLoyalty} → ${newLoyalty})`);
+            }
+            setCastError({ pIdx: casterIdx, message: `${dmg} damage to ${targetCard.name} (loyalty: ${newLoyalty <= 0 ? 'destroyed' : newLoyalty})` });
+            setTimeout(() => setCastError(null), 2500);
+          } else {
+            // Non-creature, non-PW permanent — just show message
             setCastError({ pIdx: casterIdx, message: `${dmg} damage to ${targetCard.name}` });
             setTimeout(() => setCastError(null), 2000);
           }
@@ -9902,11 +9926,18 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
             background: '#1e1c30', borderRadius: 12, padding: 20, textAlign: 'center',
             border: '1px solid rgba(255,255,255,0.1)',
           }}>
-            <p style={{ marginBottom: 12, fontSize: 13 }}>Choose mana color to produce:</p>
+            <p style={{ marginBottom: 12, fontSize: 13 }}>
+              Choose mana color to produce:{manaChoice.isPainLand ? ' (colored = 1 damage)' : ''}
+            </p>
             <div style={{ display: 'flex', gap: 8, justifyContent: 'center' }}>
               {manaChoice.colors.map(c => (
                 <button key={c} className="btn" onClick={() => {
                   addManaToPool(manaChoice.pIdx, c);
+                  // Pain land: deal 1 damage for colored mana (not colorless)
+                  if (manaChoice.isPainLand && c !== 'C') {
+                    setState(manaChoice.pIdx, prev => ({ ...prev, life: prev.life - 1 }));
+                    addGameLog(manaChoice.pIdx, '🩸', `Pain land: 1 damage for {${c}}`);
+                  }
                   setManaChoice(null);
                 }} style={{
                   fontSize: 18, padding: '8px 16px',
@@ -11946,13 +11977,33 @@ function useGameSocket() {
     });
   }, [socket]);
 
+  const leaveRoom = useCallback(() => {
+    if (socket) {
+      socket.emit('leaveRoom', {});
+      // Reset all game state so user returns to a clean lobby
+      setRoomInfo(null);
+      setPlayerIndex(null);
+      setPlayerId(null);
+      setGameState(null);
+      setLastAction(null);
+      setGameStarted(false);
+      setOpponentReady(false);
+      setOpponentDisconnected(false);
+      setChatMessages([]);
+      setMatchInfo(null);
+      setBetweenGames(null);
+      setConcession(null);
+      setError(null);
+    }
+  }, [socket]);
+
   return {
     socket, connected, roomInfo, playerIndex, playerId,
     error, setError, gameState, lastAction, gameStarted, opponentReady,
     opponentDisconnected, chatMessages,
     createRoom, joinRoom, submitDeck, sendAction, sendChat,
     matchInfo, betweenGames, reportGameWon, chooseFirstPlayer,
-    concession, concedeGame, serverGameAction
+    concession, concedeGame, serverGameAction, leaveRoom
   };
 }
 
@@ -12456,6 +12507,7 @@ function App() {
         initialState={onlineGameState}
         playerIndex={onlinePlayerIndex}
         onExit={() => {
+          gameSocket.leaveRoom();
           setOnlineGameState(null);
           setOnlinePlayerIndex(null);
           window.history.pushState({}, '', '/');

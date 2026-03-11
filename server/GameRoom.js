@@ -331,11 +331,13 @@ class GameRoom {
           if (u.emblems) s.emblems = u.emblems;
           if (u.commandZone) s.commandZone = u.commandZone;
           if (u.commanderDamageReceived) s.commanderDamageReceived = u.commanderDamageReceived;
+          // Library must be public so spell resolution (e.g. Light Up the Stage exile-from-library)
+          // can be applied by the resolving player (opponent), not just the owning player.
+          if (u.library) s.library = u.library;
 
           // Semi-private game tracking (only owning player updates these)
           if (i === playerIndex) {
             if (u.hand) s.hand = u.hand;
-            if (u.library) s.library = u.library;
             if (u.landPlayedThisTurn !== undefined) s.landPlayedThisTurn = u.landPlayedThisTurn;
             if (u.dealtDamageThisTurn !== undefined) s.dealtDamageThisTurn = u.dealtDamageThisTurn;
             if (u.commanderCastCount !== undefined) s.commanderCastCount = u.commanderCastCount;
