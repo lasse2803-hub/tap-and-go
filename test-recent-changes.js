@@ -805,8 +805,9 @@ test('PW ability resolver detects prevent damage pattern', () => {
 });
 
 test('PW ability resolver shows target buttons for each opponent permanent', () => {
-  assert(code.includes('oppPermanents.map'), 'renders button per opponent permanent');
+  assert(code.includes('oppPermanents.forEach'), 'renders button per opponent permanent');
   assert(code.includes('oppPermanents = getState(oppIdx).battlefield'), 'targets all permanents, not just creatures');
+  assert(code.includes('No target (loyalty only)'), 'has no-target option for loyalty-only activation');
 });
 
 test('Prevent damage targets any permanent (not just creatures)', () => {

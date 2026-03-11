@@ -11266,36 +11266,40 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                       </button>
                     )}
                     {isPreventDamage && (() => {
-                      // Auto-show target selection for Kiora's +1 (targets any permanent, not just creatures)
+                      // Kiora's +1: optionally target any permanent an opponent controls
+                      // Player can also choose no target (just for the loyalty counter)
                       const oppIdx = pwReminder.pIdx === 0 ? 1 : 0;
                       const oppPermanents = getState(oppIdx).battlefield;
-                      if (oppPermanents.length === 0) {
-                        return (
-                          <button className="btn btn-gold" style={{ padding: '6px 16px', fontSize: 12 }}
-                            onClick={() => {
-                              setCastError({ pIdx: pwReminder.pIdx, message: '⚠️ No opponent permanents to target!' });
-                              setTimeout(() => setCastError(null), 2000);
-                              setPwReminder(null);
-                            }}>
-                            ⚠️ No targets available
-                          </button>
-                        );
-                      }
-                      return oppPermanents.map((perm, i) => (
-                        <button key={perm.id} className="btn btn-gold" style={{ padding: '6px 12px', fontSize: 11, maxWidth: 180 }}
+                      const buttons = [];
+                      // "No target" option — just take the loyalty counter
+                      buttons.push(
+                        <button key="no-target" className="btn" style={{ padding: '6px 14px', fontSize: 11 }}
                           onClick={() => {
-                            setState(oppIdx, prev => ({
-                              ...prev,
-                              battlefield: prev.battlefield.map(c => c.id === perm.id ? { ...c, damagePrevented: pwReminder.pIdx } : c)
-                            }));
-                            addGameLog(pwReminder.pIdx, '🛡', `${pwReminder.card.name}: All damage prevented on ${getDisplayName(perm)} until your next turn`);
-                            setCastError({ pIdx: pwReminder.pIdx, message: `🛡️ ${getDisplayName(perm)}: all damage prevented until your next turn`, background: '#1a2a1a' });
-                            setTimeout(() => setCastError(null), 3000);
+                            addGameLog(pwReminder.pIdx, '🛡', `${pwReminder.card.name}: +1 (no target chosen)`);
                             setPwReminder(null);
                           }}>
-                          🛡️ {getDisplayName(perm)}
+                          ✓ No target (loyalty only)
                         </button>
-                      ));
+                      );
+                      // One button per opponent permanent (creatures, lands, enchantments, etc.)
+                      oppPermanents.forEach(perm => {
+                        buttons.push(
+                          <button key={perm.id} className="btn btn-gold" style={{ padding: '6px 12px', fontSize: 11, maxWidth: 180 }}
+                            onClick={() => {
+                              setState(oppIdx, prev => ({
+                                ...prev,
+                                battlefield: prev.battlefield.map(c => c.id === perm.id ? { ...c, damagePrevented: pwReminder.pIdx } : c)
+                              }));
+                              addGameLog(pwReminder.pIdx, '🛡', `${pwReminder.card.name}: All damage prevented on ${getDisplayName(perm)} until your next turn`);
+                              setCastError({ pIdx: pwReminder.pIdx, message: `🛡️ ${getDisplayName(perm)}: all damage prevented until your next turn`, background: '#1a2a1a' });
+                              setTimeout(() => setCastError(null), 3000);
+                              setPwReminder(null);
+                            }}>
+                            🛡️ {getDisplayName(perm)}
+                          </button>
+                        );
+                      });
+                      return buttons;
                     })()}
                     <button className="btn" style={{ padding: '6px 16px', fontSize: 11 }}
                       onClick={() => setPwReminder(null)}>
