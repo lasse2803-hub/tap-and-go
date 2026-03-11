@@ -1189,7 +1189,7 @@ const PRESET_DECKS = [
     level: 2,
     description: 'Green-blue control — ramp into huge threats, fog, counters, and Kiora damage prevention',
     list: `2 Koma, Cosmos Serpent (KHM) 221 >> Gyarados|https://raw.githubusercontent.com/lasse2803-hub/tap-and-go/main/MTG%20Billeder/Pokemon/Gyrados.png
-4 Elder Gargaroth (M21) 179 >> Venusaur|https://raw.githubusercontent.com/lasse2803-hub/tap-and-go/main/MTG%20Billeder/Pokemon/Venusaur.png|Bulbasaur|https://raw.githubusercontent.com/lasse2803-hub/tap-and-go/main/MTG%20Billeder/Pokemon/Bulbasaur.png
+4 Elder Gargaroth (M21) 179 >> Venusaur|https://raw.githubusercontent.com/lasse2803-hub/tap-and-go/main/MTG%20Billeder/Pokemon/Venusaur.png|Bulbasaur|https://raw.githubusercontent.com/lasse2803-hub/tap-and-go/main/MTG%20Billeder/Pokemon/Bulbasaur.png|https://raw.githubusercontent.com/lasse2803-hub/tap-and-go/main/MTG%20Billeder/Pokemon/Venusaur%20Card.jpg
 2 Hydroid Krasis (RNA) 183
 3 Kiora, the Crashing Wave (BNG) 149 >> Blastoise|https://raw.githubusercontent.com/lasse2803-hub/tap-and-go/main/MTG%20Billeder/Pokemon/Blastoise.png
 4 Growth Spiral (STA) 61
@@ -1228,6 +1228,7 @@ const parseArenaDecklist = (text) => {
         customImage: parts[1] || null,
         customTokenName: parts[2] || null,
         customTokenImage: parts[3] || null,
+        fullCardImage: parts[4] || null,
       };
     }
     // Supports: "4 Lightning Bolt", "4 Island (ZNR) 271", "4 Island (ZNR)", "4 Card (SET) 1★"
@@ -2595,6 +2596,11 @@ function CardImg({ card, alt, style, className, onClick, size }) {
   const src = card.isToken
     ? (size === 'small' ? card.tokenImageSmall : card.tokenImageNormal) || null
     : (size === 'small' ? getCardSmall(card) : getCardNormal(card));
+  // Full card image replacement — shows the custom card frame instead of Scryfall card
+  const fullCardImg = !card.isToken && card._reskin?.fullCardImage;
+  if (fullCardImg) {
+    return <img src={fullCardImg} alt={alt || getDisplayName(card)} style={style} className={className} onClick={onClick} />;
+  }
   const reskinArt = !card.isToken ? getReskinArt(card) : null;
   if (!reskinArt) {
     return <img src={src} alt={alt || getDisplayName(card)} style={style} className={className} onClick={onClick} />;
