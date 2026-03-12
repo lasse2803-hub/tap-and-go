@@ -8258,6 +8258,12 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
   const MAX_HAND_SIZE = 7;
 
   const executePassTurn = () => {
+    // Safety: don't pass turn while spells are still on the stack
+    if (spellStack.length > 0) {
+      setCastError({ pIdx: activePlayer, message: '⚠️ Resolve all spells on the stack before passing the turn!' });
+      setTimeout(() => setCastError(null), 2500);
+      return;
+    }
     // Cleanup step: check if active player must discard to hand size
     const ap = activePlayer;
     const handSize = getState(ap).hand.length;
@@ -10087,7 +10093,8 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       })()}
 
       {/* End of Turn — opponent can respond before turn passes */}
-      {endOfTurnRespond && !instantCasting && (() => {
+      {/* IMPORTANT: Hide when spellStack is active — stack overlay must take priority so spells resolve first */}
+      {endOfTurnRespond && !instantCasting && spellStack.length === 0 && (() => {
         const opponentIdx = activePlayer === 0 ? 1 : 0;
         const opponentName = getState(opponentIdx).name;
         const activeName = getState(activePlayer).name;

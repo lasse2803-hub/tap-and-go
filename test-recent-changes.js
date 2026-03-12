@@ -1143,6 +1143,40 @@ test('resolveTopOfStack checks chosenMode for modal counter spells', () => {
 });
 
 // ============================================================
+// Stack/Turn Transition — spells must resolve before turn passes
+// ============================================================
+console.log('\n--- Stack/Turn Transition (Bug Fix) ---');
+
+test('End-of-turn overlay hides when spellStack is not empty', () => {
+  // The bug: end-of-turn overlay (z-index 10000) covered the stack overlay (z-index 9999),
+  // so "Pass Turn" was clickable even with spells on the stack
+  const overlayCondition = code.match(/endOfTurnRespond && !instantCasting && spellStack\.length === 0/);
+  assert(overlayCondition, 'End-of-turn overlay requires spellStack.length === 0');
+});
+
+test('executePassTurn blocks when spellStack is not empty', () => {
+  const blockCheck = code.match(/const executePassTurn[\s\S]{0,300}spellStack\.length > 0/);
+  assert(blockCheck, 'executePassTurn checks for non-empty stack');
+  assert(code.includes('Resolve all spells on the stack before passing'), 'Shows warning message when stack is not empty');
+});
+
+test('Stack overlay z-index is below end-of-turn overlay', () => {
+  // z-index is in CSS (outside script block), check full HTML
+  const stackZIndex = html.match(/spell-stack-overlay[\s\S]{0,100}z-index:\s*(\d+)/);
+  assert(stackZIndex && parseInt(stackZIndex[1]) === 9999, 'Stack overlay z-index is 9999');
+  // End-of-turn overlay z-index is inline in JSX
+  const eotZIndex = html.match(/End of Turn[\s\S]{0,2000}zIndex:\s*(\d+)/);
+  assert(eotZIndex && parseInt(eotZIndex[1]) >= 10000, 'End-of-turn overlay z-index >= 10000');
+});
+
+test('End-of-turn respond state persists while stack resolves', () => {
+  const resolveCode = code.match(/const resolveTopOfStack[\s\S]{0,500}/);
+  assert(resolveCode, 'resolveTopOfStack function exists');
+  assert(!resolveCode[0].includes('setEndOfTurnRespond(false)'),
+    'resolveTopOfStack does NOT clear endOfTurnRespond');
+});
+
+// ============================================================
 // RESULTS
 // ============================================================
 console.log(`\n${'═'.repeat(55)}`);
