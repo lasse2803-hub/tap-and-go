@@ -1077,7 +1077,7 @@ const PRESET_DECKS = [
 4 Gray Merchant of Asphodel
 4 Thoughtseize
 4 Fatal Push
-2 Invoke Despair
+2 Vraska's Contempt
 2 Hero's Downfall
 3 Vampire Nighthawk
 1 Liliana, the Necromancer
@@ -1473,16 +1473,16 @@ const parseSpellEffects = (card) => {
 
   // === TARGETED EFFECTS (require clicking a target) ===
 
-  // Destroy target creature/permanent
-  if (/destroy target (creature|permanent|nonland permanent|artifact|enchantment)/.test(allText)) {
-    const match = allText.match(/destroy target (creature|permanent|nonland permanent|artifact|enchantment)/);
+  // Destroy target creature/permanent (longer patterns first to avoid partial matches)
+  if (/destroy target (creature or planeswalker|nonland permanent|permanent|creature|artifact|enchantment)/.test(allText)) {
+    const match = allText.match(/destroy target (creature or planeswalker|nonland permanent|permanent|creature|artifact|enchantment)/);
     effects.push({ type: 'destroy', targetType: match[1], description: `Destroy target ${match[1]}` });
   }
 
-  // Exile target
-  if (/exile target (creature|permanent|nonland permanent|artifact|enchantment)/.test(allText) ||
+  // Exile target (longer patterns first)
+  if (/exile target (creature or planeswalker|nonland permanent|permanent|creature|artifact|enchantment)/.test(allText) ||
       /exile (target|it).*with (converted )?mana (cost|value)/.test(allText)) {
-    const match = allText.match(/exile target (\w+[\w ]*?)(?:\.|,| with)/);
+    const match = allText.match(/exile target (creature or planeswalker|nonland permanent|permanent|creature|artifact|enchantment|\w+[\w ]*?)(?:\.|,| with)/);
     effects.push({ type: 'exile', targetType: match?.[1] || 'permanent', description: `Exile target ${match?.[1] || 'permanent'}` });
   }
 
