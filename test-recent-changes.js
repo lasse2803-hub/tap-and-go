@@ -1041,6 +1041,108 @@ test('Server has leaveRoom handler', () => {
 });
 
 // ============================================================
+// PW Loyalty Damage — uses counters.loyalty, not card.loyalty
+// ============================================================
+console.log('\n--- PW Loyalty Damage (Bug Fix) ---');
+
+test('applySpellEffect reads counters.loyalty for PW damage, not card.loyalty', () => {
+  // The bug was: code used targetCard.loyalty (printed starting value) instead of counters.loyalty (current value)
+  // This caused PWs to die from damage that should have been survivable
+  const loyaltyLine = code.match(/Damage to planeswalker[\s\S]{0,200}const currentLoyalty = ([^;]+);/);
+  assert(loyaltyLine, 'PW damage loyalty calculation exists');
+  const calcExpr = loyaltyLine[1];
+  // Must check counters.loyalty FIRST, not card.loyalty
+  assert(calcExpr.includes('counters') && calcExpr.includes('loyalty'), 'Uses counters.loyalty for PW damage calculation');
+  // Must NOT use targetCard.loyalty as the primary source
+  assert(!calcExpr.includes('targetCard.loyalty != null ? targetCard.loyalty'),
+    'Does NOT use targetCard.loyalty (printed starting value) as primary source');
+});
+
+test('PW loyalty read priority: counters.loyalty > card.loyalty', () => {
+  // Extract the actual loyalty calculation line
+  const match = code.match(/\/\/ IMPORTANT:.*\n\s*const currentLoyalty = ([^;]+);/);
+  assert(match, 'Has IMPORTANT comment and currentLoyalty assignment');
+  const expr = match[1];
+  // counters.loyalty should come BEFORE targetCard.loyalty in the expression
+  const countersPos = expr.indexOf('counters');
+  const targetLoyaltyPos = expr.indexOf('targetCard.loyalty');
+  assert(countersPos >= 0, 'Expression references counters');
+  assert(targetLoyaltyPos >= 0 || expr.includes('parseInt'), 'Has fallback to card.loyalty');
+  assert(countersPos < targetLoyaltyPos || targetLoyaltyPos === -1,
+    'counters.loyalty is checked BEFORE targetCard.loyalty');
+});
+
+test('PW survives damage when counters.loyalty > damage amount', () => {
+  // Simulate: Kiora with starting loyalty 2, current counters.loyalty = 4, takes 3 damage
+  // With the fix, currentLoyalty should be 4 (from counters), not 2 (from card.loyalty)
+  // newLoyalty = 4 - 3 = 1 > 0, so PW should survive
+  const kiora = { loyalty: 2, counters: { loyalty: 4 } };
+  const dmg = 3;
+  const currentLoyalty = (kiora.counters && kiora.counters.loyalty != null) ? kiora.counters.loyalty : (parseInt(kiora.loyalty) || 0);
+  assert(currentLoyalty === 4, `currentLoyalty should be 4 (from counters), got ${currentLoyalty}`);
+  const newLoyalty = currentLoyalty - dmg;
+  assert(newLoyalty === 1, `newLoyalty should be 1, got ${newLoyalty}`);
+  assert(newLoyalty > 0, 'PW should survive (loyalty > 0)');
+});
+
+test('PW dies from damage when counters.loyalty <= damage amount', () => {
+  const kiora = { loyalty: 2, counters: { loyalty: 3 } };
+  const dmg = 3;
+  const currentLoyalty = (kiora.counters && kiora.counters.loyalty != null) ? kiora.counters.loyalty : (parseInt(kiora.loyalty) || 0);
+  assert(currentLoyalty === 3, `currentLoyalty should be 3, got ${currentLoyalty}`);
+  const newLoyalty = currentLoyalty - dmg;
+  assert(newLoyalty <= 0, 'PW should die (loyalty <= 0)');
+});
+
+test('PW with no counters falls back to card.loyalty', () => {
+  // Fresh PW that just entered (before first ability activation)
+  const freshPW = { loyalty: 3, counters: {} };
+  const currentLoyalty = (freshPW.counters && freshPW.counters.loyalty != null) ? freshPW.counters.loyalty : (parseInt(freshPW.loyalty) || 0);
+  assert(currentLoyalty === 3, `Fresh PW should use card.loyalty (3), got ${currentLoyalty}`);
+});
+
+test('PW with counters.loyalty = 0 uses 0 (not card.loyalty)', () => {
+  // Edge case: loyalty exactly 0 but not yet cleaned up
+  const pw = { loyalty: 4, counters: { loyalty: 0 } };
+  const currentLoyalty = (pw.counters && pw.counters.loyalty != null) ? pw.counters.loyalty : (parseInt(pw.loyalty) || 0);
+  assert(currentLoyalty === 0, `PW with loyalty 0 in counters should read 0, got ${currentLoyalty}`);
+});
+
+// ============================================================
+// Decisive Denial Modal — counter icon should not look disabled
+// ============================================================
+console.log('\n--- Decisive Denial Modal UX (Bug Fix) ---');
+
+test('Counter mode icon is shield (not prohibited sign)', () => {
+  // The 🚫 icon made the counter option look disabled/prohibited
+  // Changed to 🛡 which better represents "counter/shield"
+  const iconLine = code.match(/if \(\/counter\/i\.test\(text\)\) icon = '([^']+)'/);
+  assert(iconLine, 'Counter icon assignment exists');
+  assert(iconLine[1] !== '\u{1F6AB}', 'Counter icon should NOT be 🚫 (prohibited sign)');
+  assert(iconLine[1] === '\u{1F6E1}', `Counter icon should be 🛡 (shield), got ${iconLine[1]}`);
+});
+
+test('Decisive Denial is in Simic deck', () => {
+  assert(code.includes('Decisive Denial'), 'Decisive Denial card exists in codebase');
+});
+
+test('isCounterSpellCard detects modal counter spells via regex', () => {
+  // Decisive Denial oracle includes "counter target noncreature spell"
+  // isCounterSpellCard must detect this via /counter target.*spell/ regex
+  assert(code.includes('/counter target.*spell/.test(oracle)'),
+    'isCounterSpellCard has regex for "counter target...spell" pattern');
+});
+
+test('Modal spell counter mode puts spell on stack with chosenMode counter', () => {
+  assert(code.includes("chosenMode: 'counter'"), 'Counter mode sets chosenMode to "counter"');
+});
+
+test('resolveTopOfStack checks chosenMode for modal counter spells', () => {
+  const counterCheck = code.includes("topSpell.chosenMode === 'counter'");
+  assert(counterCheck, 'resolveTopOfStack checks for chosenMode === counter');
+});
+
+// ============================================================
 // RESULTS
 // ============================================================
 console.log(`\n${'═'.repeat(55)}`);

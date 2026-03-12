@@ -6222,7 +6222,8 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
             }
           } else if (isPlaneswalker(targetCard)) {
             // Damage to planeswalker — remove loyalty counters
-            const currentLoyalty = targetCard.loyalty != null ? targetCard.loyalty : (targetCard.counters?.loyalty || 0);
+            // IMPORTANT: Use counters.loyalty (current in-game value) first, NOT card.loyalty (printed starting value)
+            const currentLoyalty = (targetCard.counters && targetCard.counters.loyalty != null) ? targetCard.counters.loyalty : (parseInt(targetCard.loyalty) || 0);
             const newLoyalty = currentLoyalty - dmg;
             if (newLoyalty <= 0) {
               // Planeswalker dies (loyalty reaches 0)
@@ -7154,7 +7155,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
           const choices = choicesRaw.map(raw => {
             const text = raw.replace(/^[•\-]\s*/, '').trim().replace(/\.$/, '');
             let icon = '✦';
-            if (/counter/i.test(text)) icon = '🚫';
+            if (/counter/i.test(text)) icon = '🛡';
             if (/fight/i.test(text)) icon = '⚔️';
             if (/destroy/i.test(text)) icon = '💀';
             if (/damage/i.test(text)) icon = '🔥';
