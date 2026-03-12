@@ -8964,6 +8964,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     const combatDamageTriggers = [];
     for (const pair of combatPairs) {
       if (killedIds.has(pair.attacker.id)) continue;
+      if (pair.attacker.damagePrevented) continue; // Kiora +1 etc. — no damage dealt, no trigger
       const blockerIds = cs.blocks[pair.attacker.id] || [];
       const dealtToPlayer = blockerIds.length === 0 || pair.attacker.card.keywords?.some(k => k.toLowerCase() === 'trample');
       if (!dealtToPlayer) continue;
@@ -8991,19 +8992,18 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
           keywords: [],
         };
         createToken(defendingPlayer, gcToken, true, true);
-        // Fetch official Scryfall token art asynchronously
+        // Fetch official Scryfall token art — use direct card endpoint (TZNR #11)
         (async () => {
           try {
-            const res = await fetch('https://api.scryfall.com/cards/search?q=' + encodeURIComponent('t:token goblin construct set:tznr') + '&unique=art&order=released&dir=desc');
+            const res = await fetch('https://api.scryfall.com/cards/tznr/11');
             if (res.ok) {
-              const data = await res.json();
-              const match = data.data?.[0];
-              if (match?.image_uris) {
+              const card = await res.json();
+              if (card?.image_uris) {
                 setState(defendingPlayer, prev => ({
                   ...prev,
                   battlefield: prev.battlefield.map(c =>
                     c.name === 'Goblin Construct' && !c.image_uris
-                      ? { ...c, image_uris: match.image_uris }
+                      ? { ...c, image_uris: card.image_uris, tokenImageSmall: card.image_uris.small, tokenImageNormal: card.image_uris.normal }
                       : c
                   )
                 }));
