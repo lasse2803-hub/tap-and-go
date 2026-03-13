@@ -1177,6 +1177,57 @@ test('End-of-turn respond state persists while stack resolves', () => {
 });
 
 // ============================================================
+// Test of Talents — counter type restriction + search & exile
+// ============================================================
+console.log('\n--- Test of Talents (Counter + Search & Exile) ---');
+
+test('Counter type restriction: instant or sorcery check exists', () => {
+  assert(code.includes('counter target instant or sorcery spell'), 'Detects "counter target instant or sorcery spell" oracle text');
+  assert(code.includes("counterTypeValid = targetTypeLine.includes('instant') || targetTypeLine.includes('sorcery')"),
+    'Validates target is instant or sorcery');
+});
+
+test('Counter type restriction: noncreature check exists', () => {
+  assert(code.includes('counter target noncreature spell'), 'Detects "counter target noncreature spell" oracle text');
+});
+
+test('Counter fizzles when type restriction not met', () => {
+  assert(code.includes('counterTypeValid') && code.includes('!counterTypeValid'),
+    'Has counterTypeValid check and fizzle path');
+  assert(code.includes('is not a valid target'), 'Logs fizzle when target type is wrong');
+});
+
+test('searchExile state variable exists and is synced', () => {
+  assert(code.includes('searchExile'), 'searchExile state exists');
+  assert(code.includes('setSearchExile = syncSetter'), 'searchExile uses syncSetter');
+  assert(html.includes('searchExile,') && html.includes('onlineState.searchExile'),
+    'searchExile is in broadcast and receiver');
+});
+
+test('Post-counter search & exile triggered for Test of Talents pattern', () => {
+  assert(code.includes('exile.*cards? with the same name') || code.includes('search.*graveyard.*hand.*library.*exile'),
+    'Detects search-and-exile oracle pattern');
+  assert(code.includes('setSearchExile({ pIdx: topSpell.pIdx, targetPIdx: spellBelow.pIdx, cardName:'),
+    'Opens searchExile overlay after successful counter');
+});
+
+test('Search & exile overlay shows hand, graveyard, and library', () => {
+  assert(code.includes('Search & Exile'), 'Overlay has title');
+  assert(code.includes('handMatches') && code.includes('gyMatches') && code.includes('libMatches'),
+    'Searches all three zones for matching cards');
+});
+
+test('Search & exile overlay allows exiling from each zone', () => {
+  assert(code.includes("Exiled ${getDisplayName(c)} from ${targetState.name}'s hand"), 'Can exile from hand');
+  assert(code.includes("Exiled ${getDisplayName(c)} from ${targetState.name}'s graveyard"), 'Can exile from graveyard');
+  assert(code.includes("Exiled ${getDisplayName(c)} from ${targetState.name}'s library"), 'Can exile from library');
+});
+
+test('Search & exile overlay has Done button', () => {
+  assert(code.includes("onClick={() => setSearchExile(null)"), 'Done button closes overlay');
+});
+
+// ============================================================
 // RESULTS
 // ============================================================
 console.log(`\n${'═'.repeat(55)}`);

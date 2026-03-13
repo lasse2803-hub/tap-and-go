@@ -3698,11 +3698,11 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
   // state changes in online mode. Receivers use raw _setState to avoid
   // re-broadcasting (echo prevention).
   //
-  // ── SYNCED STATE (15 variables): ──────────────────────────────────
+  // ── SYNCED STATE (16 variables): ──────────────────────────────────
   //   activePlayer, instantCasting, librarySearch, endOfTurnRespond,
   //   mulliganPhase, mulliganCounts, mulliganPlayer,
   //   turnCount, currentPhase, combatState, preventCombatDamage,
-  //   spellStack, sacCounterChoice, pwAbilityOnStack, pwReminder,
+  //   spellStack, sacCounterChoice, pwAbilityOnStack, pwReminder, searchExile,
   //   p1/p2 (via setState wrapper)
   //
   // ── BROADCAST PAYLOAD: onStateChange({...}) ───────────────────────
@@ -3846,6 +3846,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       pwReminder,
       preventCombatDamage,
       modalChoice,
+      searchExile,
     };
     // Bundle any pending log entries into this broadcast
     // (avoids race condition where separate log broadcast triggers throttle
@@ -4030,6 +4031,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     if (onlineState.pwReminder !== undefined) _setPwReminder(onlineState.pwReminder);
     if (onlineState.preventCombatDamage !== undefined) _setPreventCombatDamage(onlineState.preventCombatDamage);
     if (onlineState.modalChoice !== undefined) _setModalChoice(onlineState.modalChoice);
+    if (onlineState.searchExile !== undefined) _setSearchExile(onlineState.searchExile);
 
     // Receive game log entries from opponent (supports both array and single entry)
     const logEntries = onlineState.__logEntries || (onlineState.__logEntry ? [onlineState.__logEntry] : []);
@@ -6116,6 +6118,8 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
   const setPwAbilityOnStack = syncSetter(_setPwAbilityOnStack);
   const [pwReminder, _setPwReminder] = useState(null); // SYNCED — { pIdx, card, ability, exiledCard?, exileCastDmg? }
   const setPwReminder = syncSetter(_setPwReminder);
+  const [searchExile, _setSearchExile] = useState(null); // SYNCED — { pIdx, targetPIdx, cardName } — post-counter search & exile (Test of Talents)
+  const setSearchExile = syncSetter(_setSearchExile);
   const [ltbReminder, setLtbReminder] = useState(null); // { pIdx, card, effects[] }
 
   // ===== IN-GAME CHAT =====
@@ -7039,8 +7043,31 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     const shouldActAsCounter = isCounterSpellCard(topSpell.card) && spellBelow &&
       (!topSpell.chosenMode || topSpell.chosenMode === 'counter');
     if (shouldActAsCounter) {
-      // This is a counterspell resolving — check if target can be countered
-      if (cardCantBeCountered(spellBelow.card)) {
+      // Check counter type restrictions (e.g. "counter target instant or sorcery spell" can't counter creatures)
+      const counterOracle = (topSpell.card.oracle_text || '').toLowerCase();
+      const targetTypeLine = (spellBelow.card.type_line || '').toLowerCase();
+      let counterTypeValid = true;
+      if (/counter target instant or sorcery spell/.test(counterOracle)) {
+        counterTypeValid = targetTypeLine.includes('instant') || targetTypeLine.includes('sorcery');
+      } else if (/counter target noncreature spell/.test(counterOracle)) {
+        counterTypeValid = !targetTypeLine.includes('creature');
+      } else if (/counter target instant spell/.test(counterOracle)) {
+        counterTypeValid = targetTypeLine.includes('instant');
+      }
+
+      if (!counterTypeValid) {
+        // Target doesn't match counter's type restriction — counterspell fizzles
+        setSpellStack(prev => prev.slice(0, -1));
+        setState(topSpell.pIdx, prev => ({
+          ...prev,
+          graveyard: [...prev.graveyard, { ...topSpell.card, tapped: false }],
+        }));
+        SFX.playSpell();
+        const opponentPIdx = topSpell.pIdx === 0 ? 1 : 0;
+        setCastError({ pIdx: opponentPIdx, message: `⚠️ ${topSpell.displayName} can only counter ${/instant or sorcery/.test(counterOracle) ? 'instants/sorceries' : 'matching spells'}! Fizzles.` });
+        setTimeout(() => setCastError(null), 3000);
+        addGameLog(topSpell.pIdx, '⚠️', `${topSpell.displayName} fizzled — ${spellBelow.displayName} is not a valid target`);
+      } else if (cardCantBeCountered(spellBelow.card)) {
         // Target can't be countered — counterspell fizzles, target stays on stack
         setSpellStack(prev => prev.slice(0, -1)); // remove only top
         // Move the counterspell to graveyard (card already removed from hand on cast)
@@ -7067,6 +7094,12 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         const opponentPIdx = topSpell.pIdx === 0 ? 1 : 0;
         setCastError({ pIdx: opponentPIdx, message: `✕ ${spellBelow.displayName} was countered by ${topSpell.displayName}!` });
         setTimeout(() => setCastError(null), 2500);
+        // Post-counter search & exile (Test of Talents: "search...exile cards with the same name")
+        if (/search.*(?:graveyard|hand|library).*exile/i.test(counterOracle) ||
+            /exile.*cards? with the same name/i.test(counterOracle)) {
+          const counteredName = spellBelow.card.name || getDisplayName(spellBelow.card);
+          setSearchExile({ pIdx: topSpell.pIdx, targetPIdx: spellBelow.pIdx, cardName: counteredName });
+        }
       }
     } else {
       // Not a counterspell (or nothing below) — resolve normally
@@ -11054,6 +11087,135 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
           </div>
         </div>
       )}
+
+      {/* Search & Exile Overlay (Test of Talents — after counter, search opponent's zones and exile copies) */}
+      {searchExile && (!onlineMode || onlinePlayerIndex === searchExile.pIdx) && (() => {
+        const targetState = getState(searchExile.targetPIdx);
+        const cardName = searchExile.cardName;
+        // Find matching cards in each zone (cards with the same name)
+        const baseName = cardName.split(' //')[0].trim(); // Handle adventure/split cards
+        const matchesName = (c) => {
+          const n = (c.name || '').split(' //')[0].trim();
+          return n.toLowerCase() === baseName.toLowerCase();
+        };
+        const handMatches = targetState.hand.filter(matchesName);
+        const gyMatches = targetState.graveyard.filter(matchesName);
+        const libMatches = targetState.library.filter(matchesName);
+        const totalMatches = handMatches.length + gyMatches.length + libMatches.length;
+        return (
+          <div style={{
+            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)', zIndex: 11000,
+            display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+            animation: 'fadeIn 0.2s ease', overflowY: 'auto', padding: 20,
+          }}>
+            <div style={{
+              background: 'linear-gradient(160deg, #1a1830, #14122a)', borderRadius: 16, padding: '24px 32px',
+              border: '1px solid rgba(200,100,40,0.5)', boxShadow: '0 12px 48px rgba(0,0,0,0.8)',
+              maxWidth: 700, width: '95%', textAlign: 'center',
+            }}>
+              <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: 2, color: 'rgba(200,100,40,0.8)', marginBottom: 4, fontWeight: 700 }}>
+                Search & Exile — Test of Talents
+              </div>
+              <div style={{ fontSize: 15, fontWeight: 700, color: '#e8d8a0', marginBottom: 6 }}>
+                Search for copies of "{cardName}"
+              </div>
+              <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.4)', marginBottom: 16, fontStyle: 'italic' }}>
+                Click cards to exile them from {targetState.name}'s hand, graveyard, and library. ({totalMatches} matching card{totalMatches !== 1 ? 's' : ''} found)
+              </div>
+
+              {/* Hand */}
+              <div style={{ marginBottom: 14 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: '#60c8e8', marginBottom: 6, textTransform: 'uppercase', letterSpacing: 1 }}>
+                  Hand ({handMatches.length} match{handMatches.length !== 1 ? 'es' : ''})
+                </div>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', justifyContent: 'center', minHeight: 30 }}>
+                  {targetState.hand.map(c => {
+                    const isMatch = matchesName(c);
+                    return (
+                      <div key={c.id} style={{ position: 'relative', opacity: isMatch ? 1 : 0.3, cursor: isMatch ? 'pointer' : 'default',
+                        transition: 'all 0.15s ease', border: isMatch ? '2px solid rgba(255,100,40,0.6)' : '1px solid rgba(255,255,255,0.1)', borderRadius: 6 }}
+                        onClick={() => {
+                          if (!isMatch) return;
+                          setState(searchExile.targetPIdx, prev => ({
+                            ...prev,
+                            hand: prev.hand.filter(h => h.id !== c.id),
+                            exile: [...prev.exile, { ...c, tapped: false }],
+                          }));
+                          addGameLog(searchExile.pIdx, '🔍', `Exiled ${getDisplayName(c)} from ${targetState.name}'s hand`);
+                        }}>
+                        <CardImg card={c} alt={c.name} style={{ width: 55, borderRadius: 5 }} />
+                      </div>
+                    );
+                  })}
+                  {targetState.hand.length === 0 && <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.3)' }}>Empty</span>}
+                </div>
+              </div>
+
+              {/* Graveyard */}
+              <div style={{ marginBottom: 14 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: '#c080e0', marginBottom: 6, textTransform: 'uppercase', letterSpacing: 1 }}>
+                  Graveyard ({gyMatches.length} match{gyMatches.length !== 1 ? 'es' : ''})
+                </div>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', justifyContent: 'center', minHeight: 30 }}>
+                  {targetState.graveyard.map((c, i) => {
+                    const isMatch = matchesName(c);
+                    return (
+                      <div key={c.id + '-gy-' + i} style={{ position: 'relative', opacity: isMatch ? 1 : 0.3, cursor: isMatch ? 'pointer' : 'default',
+                        transition: 'all 0.15s ease', border: isMatch ? '2px solid rgba(255,100,40,0.6)' : '1px solid rgba(255,255,255,0.1)', borderRadius: 6 }}
+                        onClick={() => {
+                          if (!isMatch) return;
+                          setState(searchExile.targetPIdx, prev => ({
+                            ...prev,
+                            graveyard: prev.graveyard.filter((g, gi) => !(g.id === c.id && gi === i)),
+                            exile: [...prev.exile, { ...c, tapped: false }],
+                          }));
+                          addGameLog(searchExile.pIdx, '🔍', `Exiled ${getDisplayName(c)} from ${targetState.name}'s graveyard`);
+                        }}>
+                        <CardImg card={c} alt={c.name} style={{ width: 55, borderRadius: 5 }} />
+                      </div>
+                    );
+                  })}
+                  {targetState.graveyard.length === 0 && <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.3)' }}>Empty</span>}
+                </div>
+              </div>
+
+              {/* Library */}
+              <div style={{ marginBottom: 18 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: '#e0c060', marginBottom: 6, textTransform: 'uppercase', letterSpacing: 1 }}>
+                  Library ({libMatches.length} match{libMatches.length !== 1 ? 'es' : ''} of {targetState.library.length} cards)
+                </div>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', justifyContent: 'center', minHeight: 30, maxHeight: 180, overflowY: 'auto' }}>
+                  {libMatches.map((c, i) => (
+                    <div key={c.id + '-lib-' + i} style={{ cursor: 'pointer',
+                      transition: 'all 0.15s ease', border: '2px solid rgba(255,100,40,0.6)', borderRadius: 6 }}
+                      onClick={() => {
+                        setState(searchExile.targetPIdx, prev => {
+                          const idx = prev.library.findIndex(l => l.id === c.id);
+                          if (idx === -1) return prev;
+                          const removed = prev.library[idx];
+                          return {
+                            ...prev,
+                            library: [...prev.library.slice(0, idx), ...prev.library.slice(idx + 1)],
+                            exile: [...prev.exile, { ...removed, tapped: false }],
+                          };
+                        });
+                        addGameLog(searchExile.pIdx, '🔍', `Exiled ${getDisplayName(c)} from ${targetState.name}'s library`);
+                      }}>
+                      <CardImg card={c} alt={c.name} style={{ width: 55, borderRadius: 5 }} />
+                    </div>
+                  ))}
+                  {libMatches.length === 0 && <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.3)' }}>No matches in library</span>}
+                </div>
+              </div>
+
+              <button className="btn btn-gold" style={{ padding: '10px 36px', fontSize: 13 }}
+                onClick={() => setSearchExile(null)}>
+                Done
+              </button>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* PW Ability Reminder (after overlay closes) */}
       {pwReminder && (!onlineMode || onlinePlayerIndex === pwReminder.pIdx) && (
