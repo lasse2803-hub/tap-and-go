@@ -4108,6 +4108,12 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     });
     SFX.untapAll();
     SFX.draw();
+    // Process upkeep triggers for the new active player (me) after a short delay
+    // This is the canonical upkeep trigger handler for online mode — the passing
+    // player's executePassTurn deliberately skips it so triggers fire on the correct client.
+    setTimeout(() => {
+      processUpkeepTriggers(myIdx);
+    }, 300);
   });
 
   // Wire up star P/T resolution to access game state
@@ -8375,14 +8381,17 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     SFX.untapAll();
     // In online mode the receiving player plays the draw SFX when they auto-draw
     if (!onlineMode) { SFX.draw(); }
-    // Process upkeep triggers for BOTH players (Midnight Clock triggers at beginning of EACH upkeep)
-    // In online mode, only process our own permanents' triggers
+    // Process upkeep triggers for the NEW active player only
+    // Compute next here so setTimeout has access to it
+    const nextPlayer = activePlayer === 0 ? 1 : 0;
     setTimeout(() => {
       if (onlineMode) {
-        processUpkeepTriggers(onlinePlayerIndex);
+        // In online mode, DON'T process upkeep triggers here — the passing player's
+        // client runs this, but it's the NEW active player who should get upkeep triggers.
+        // The onlineTurnDrawEffect on the receiving client handles this instead.
       } else {
-        processUpkeepTriggers(0);
-        processUpkeepTriggers(1);
+        // Hotseat: process upkeep triggers for the new active player only
+        processUpkeepTriggers(nextPlayer);
       }
     }, 200);
   };
