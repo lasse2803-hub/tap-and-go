@@ -1044,6 +1044,79 @@ const fetchAvatarImages = async () => {
   return results;
 };
 
+// ============ SAVED DECKS (localStorage) ============
+const SAVED_DECKS_KEY = 'tapAndGo_savedDecks';
+
+const getSavedDecks = () => {
+  try {
+    const raw = localStorage.getItem(SAVED_DECKS_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch { return []; }
+};
+
+const saveDeckToStorage = (name, listText) => {
+  const decks = getSavedDecks();
+  const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  decks.push({ id, name, listText, createdAt: Date.now() });
+  localStorage.setItem(SAVED_DECKS_KEY, JSON.stringify(decks));
+  return id;
+};
+
+const deleteDeckFromStorage = (id) => {
+  const decks = getSavedDecks().filter(d => d.id !== id);
+  localStorage.setItem(SAVED_DECKS_KEY, JSON.stringify(decks));
+};
+
+const renameDeckInStorage = (id, newName) => {
+  const decks = getSavedDecks().map(d => d.id === id ? { ...d, name: newName } : d);
+  localStorage.setItem(SAVED_DECKS_KEY, JSON.stringify(decks));
+};
+
+// Convert loaded deck cards back to Arena-format text for storage
+const deckToArenaText = (deck, sideboard) => {
+  const lines = [];
+  // Group by card name to consolidate quantities
+  const mainMap = new Map();
+  for (const entry of deck) {
+    const card = entry.card || entry;
+    const name = card.name;
+    const set = card.set ? `(${card.set.toUpperCase()})` : '';
+    const cn = card.collector_number || '';
+    const reskin = card._reskin ? ` >> ${[card._reskin.customName || '', card._reskin.customImage || '', card._reskin.customTokenName || '', card._reskin.customTokenImage || '', card._reskin.fullCardImage || ''].join('|')}` : '';
+    const key = `${name}|${set}|${cn}|${reskin}`;
+    mainMap.set(key, (mainMap.get(key) || 0) + (entry.qty || 1));
+  }
+  for (const [key, qty] of mainMap) {
+    const [name, set, cn, reskin] = key.split('|');
+    let line = `${qty} ${name}`;
+    if (set && cn) line += ` ${set} ${cn}`;
+    else if (set) line += ` ${set}`;
+    if (reskin) line += reskin;
+    lines.push(line);
+  }
+  if (sideboard && sideboard.length > 0) {
+    lines.push('');
+    lines.push('Sideboard');
+    const sbMap = new Map();
+    for (const entry of sideboard) {
+      const card = entry.card || entry;
+      const name = card.name;
+      const set = card.set ? `(${card.set.toUpperCase()})` : '';
+      const cn = card.collector_number || '';
+      const key = `${name}|${set}|${cn}`;
+      sbMap.set(key, (sbMap.get(key) || 0) + (entry.qty || 1));
+    }
+    for (const [key, qty] of sbMap) {
+      const [name, set, cn] = key.split('|');
+      let line = `${qty} ${name}`;
+      if (set && cn) line += ` ${set} ${cn}`;
+      else if (set) line += ` ${set}`;
+      lines.push(line);
+    }
+  }
+  return lines.join('\n');
+};
+
 // ============ PRESET DECKS (Arena format) ============
 const PRESET_DECKS = [
   // ── Level 1: Mono-color starter decks ──
@@ -3279,10 +3352,12 @@ function VersionPicker({ card, onSelect, onClose }) {
 
 // ============ DECK BUILDER ============
 function DeckChooser({ playerName, onChoosePreset, onPasteList, onBuildCustom, onBack }) {
-  const [tab, setTab] = useState('presets'); // presets | paste
+  const [tab, setTab] = useState('presets'); // presets | paste | saved
   const [pasteText, setPasteText] = useState('');
   const [loadingDeck, setLoadingDeck] = useState(null); // deck name or 'paste'
   const [progress, setProgress] = useState('');
+  const [savedDecks, setSavedDecks] = useState(() => getSavedDecks());
+  const [confirmDelete, setConfirmDelete] = useState(null); // deck id awaiting delete confirm
 
   const handleLoadPreset = async (preset) => {
     setLoadingDeck(preset.name);
@@ -3298,6 +3373,28 @@ function DeckChooser({ playerName, onChoosePreset, onPasteList, onBuildCustom, o
     }
     setLoadingDeck(null);
     onChoosePreset({ deck, sideboard });
+  };
+
+  const handleLoadSaved = async (saved) => {
+    setLoadingDeck(saved.name);
+    setProgress('Parsing...');
+    const entries = parseArenaDecklist(saved.listText);
+    setProgress(`Loading cards: 0/${entries.length}`);
+    const { deck, sideboard, skipped } = await loadDeckFromList(entries, (loaded, total) => {
+      setProgress(`Loading cards: ${loaded}/${total}`);
+    });
+    if (skipped.length > 0) {
+      setProgress(`Skipped ${skipped.length} unsupported card${skipped.length > 1 ? 's' : ''}: ${skipped.map(s => s.name).join(', ')}`);
+      await new Promise(r => setTimeout(r, 2500));
+    }
+    setLoadingDeck(null);
+    onChoosePreset({ deck, sideboard });
+  };
+
+  const handleDeleteSaved = (id) => {
+    deleteDeckFromStorage(id);
+    setSavedDecks(getSavedDecks());
+    setConfirmDelete(null);
   };
 
   const handlePaste = async () => {
@@ -3330,6 +3427,10 @@ function DeckChooser({ playerName, onChoosePreset, onPasteList, onBuildCustom, o
       <div style={{ display: 'flex', gap: 6, marginBottom: 16 }}>
         <button className={`btn text-xs ${tab === 'presets' ? 'btn-gold' : ''}`}
           onClick={() => setTab('presets')}>Preset Decks</button>
+        <button className={`btn text-xs ${tab === 'saved' ? 'btn-gold' : ''}`}
+          onClick={() => { setSavedDecks(getSavedDecks()); setTab('saved'); }}>
+          My Decks {savedDecks.length > 0 && <span style={{ opacity: 0.5 }}>({savedDecks.length})</span>}
+        </button>
         <button className={`btn text-xs ${tab === 'paste' ? 'btn-gold' : ''}`}
           onClick={() => setTab('paste')}>Paste Decklist</button>
       </div>
@@ -3390,6 +3491,65 @@ function DeckChooser({ playerName, onChoosePreset, onPasteList, onBuildCustom, o
               </React.Fragment>
             );
           })}
+        </div>
+      )}
+
+      {!loadingDeck && tab === 'saved' && (
+        <div>
+          {savedDecks.length === 0 ? (
+            <div style={{ textAlign: 'center', padding: '40px 20px' }}>
+              <div style={{ fontSize: 32, marginBottom: 12, opacity: 0.3 }}>&#x1F4BE;</div>
+              <div style={{ fontSize: 14, opacity: 0.5, marginBottom: 8 }}>No saved decks yet</div>
+              <div style={{ fontSize: 12, opacity: 0.3 }}>
+                Load a preset or paste a decklist, then save it for quick access in future games.
+              </div>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {savedDecks.map(saved => {
+                const entries = parseArenaDecklist(saved.listText);
+                const totalCards = entries.filter(e => !e.inSideboard).reduce((s, e) => s + e.qty, 0);
+                const sbCards = entries.filter(e => e.inSideboard).reduce((s, e) => s + e.qty, 0);
+                const dateStr = new Date(saved.createdAt).toLocaleDateString();
+                return (
+                  <div key={saved.id} style={{
+                    padding: '12px 16px', borderRadius: 8,
+                    background: 'linear-gradient(90deg, rgba(100,180,255,0.06), rgba(100,180,255,0.02))',
+                    border: '1px solid rgba(100,180,255,0.12)',
+                    transition: 'all 0.2s',
+                  }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <div style={{ flex: 1, cursor: 'pointer' }} onClick={() => handleLoadSaved(saved)}>
+                        <span style={{ fontWeight: 700, fontSize: 14, color: '#7cb8ff' }}>{saved.name}</span>
+                        <div className="text-xs" style={{ opacity: 0.4, marginTop: 2 }}>
+                          {totalCards} cards{sbCards > 0 ? ` + ${sbCards} sideboard` : ''} &middot; Saved {dateStr}
+                        </div>
+                      </div>
+                      <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                        <button className="btn btn-gold text-xs" style={{ padding: '6px 14px' }}
+                          onClick={() => handleLoadSaved(saved)}>
+                          Load
+                        </button>
+                        {confirmDelete === saved.id ? (
+                          <div style={{ display: 'flex', gap: 4 }}>
+                            <button className="btn text-xs" style={{ padding: '6px 10px', background: 'rgba(220,60,60,0.2)', border: '1px solid rgba(220,60,60,0.4)', color: '#e67373' }}
+                              onClick={() => handleDeleteSaved(saved.id)}>Delete</button>
+                            <button className="btn text-xs" style={{ padding: '6px 8px', opacity: 0.5 }}
+                              onClick={() => setConfirmDelete(null)}>Cancel</button>
+                          </div>
+                        ) : (
+                          <button className="btn text-xs" style={{ padding: '6px 8px', opacity: 0.4 }}
+                            onClick={() => setConfirmDelete(saved.id)} title="Delete deck">
+                            &#x2715;
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
 
@@ -6303,6 +6463,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
             if (dmg >= toughness) {
               moveCard(targetPIdx, targetCard, 'battlefield', 'graveyard');
             } else {
+              SFX.playerDamage();
               setCastError({ pIdx: casterIdx, message: `${dmg} damage to ${targetCard.name} (survives: ${toughness} toughness)` });
               setTimeout(() => setCastError(null), 2000);
             }
@@ -6320,12 +6481,14 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                 ...prev,
                 battlefield: prev.battlefield.map(c => c.id === targetCard.id ? { ...c, loyalty: newLoyalty, counters: { ...(c.counters || {}), loyalty: newLoyalty } } : c)
               }));
+              SFX.playerDamage();
               addGameLog(casterIdx, '🔥', `${dmg} damage to ${targetCard.name} (loyalty: ${currentLoyalty} → ${newLoyalty})`);
             }
             setCastError({ pIdx: casterIdx, message: `${dmg} damage to ${targetCard.name} (loyalty: ${newLoyalty <= 0 ? 'destroyed' : newLoyalty})` });
             setTimeout(() => setCastError(null), 2500);
           } else {
             // Non-creature, non-PW permanent — just show message
+            SFX.playerDamage();
             setCastError({ pIdx: casterIdx, message: `${dmg} damage to ${targetCard.name}` });
             setTimeout(() => setCastError(null), 2000);
           }
@@ -6334,6 +6497,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         }
         case 'boost': {
           // e.g. "+2/+2" or "-3/-3" — applied as temporary buff (until end of turn)
+          SFX.playSpell();
           const match = effect.amount.match(/([+-]\d+)\/([+-]\d+)/);
           if (match) {
             const pMod = parseInt(match[1]);
@@ -6929,7 +7093,8 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     // ===== OVERLOAD RESOLUTION =====
     // When overloaded, "target" becomes "each" — apply mass effect instead of single-target
     if (stackEntry.overloadMode) {
-      SFX.playSpell();
+      // NOTE: No SFX.playSpell() here — overload effects play their own sounds
+      // (SFX.massReturn, SFX.creatureDeath, etc.) to avoid double-sound overlap.
       // Move spell to graveyard
       setState(pIdx, prev => ({
         ...prev,
@@ -6978,11 +7143,13 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
               battlefield: prev.battlefield.map(c => isCreature(c) ? { ...c, damage: (c.damage || 0) + damage } : c)
             }));
           });
+          SFX.playerDamage();
           setCastError({ pIdx, message: `🌊 Overload! Dealt ${damage} damage to each creature` });
           setTimeout(() => setCastError(null), 2500);
         }
       } else {
         // Fallback — just log it for manual resolution
+        SFX.playSpell();
         setCastError({ pIdx, message: `🌊 Overloaded ${getDisplayName(card)} — resolve manually` });
         setTimeout(() => setCastError(null), 3000);
       }
@@ -6992,7 +7159,8 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
 
     if (asAdventure && isAdventure(card)) {
       // Adventure: move to exile (card already removed from hand on cast)
-      SFX.playSpell();
+      // NOTE: No SFX.playSpell() here — effect handlers (applyResolvedTargets/applySpellEffect)
+      // play their own context-specific sounds. Only play fallback if no targeted effects.
       setState(pIdx, prev => ({
         ...prev,
         exile: [...prev.exile, { ...card, tapped: false, adventureCast: true }],
@@ -7002,6 +7170,9 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       const advEffects = parseSpellEffects({ ...card, oracle_text: advFace.oracle_text, type_line: advFace.type_line });
       const advTargeted = advEffects.filter(e => ['destroy', 'exile', 'bounce', 'damage', 'boost', 'counter_add', 'fight'].includes(e.type));
       const advNonTargeted = advEffects.filter(e => !['destroy', 'exile', 'bounce', 'damage', 'boost', 'counter_add', 'fight'].includes(e.type));
+
+      // Fallback: if no effects will produce their own sound, play generic spell sound
+      if (advNonTargeted.length === 0 && advTargeted.length === 0) SFX.playSpell();
 
       if (advNonTargeted.length > 0) applyNonTargetedEffects(pIdx, card, advNonTargeted);
 
@@ -7022,7 +7193,6 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     }
 
     if (isSpellCard(card)) {
-      SFX.playSpell();
       // Move spell to graveyard (card already removed from hand/exile on cast)
       setState(pIdx, prev => ({
         ...prev,
@@ -7036,6 +7206,14 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       // Apply non-targeted effects (scry, draw, gain life, etc.) — also for pre-targeted spells
       // NOTE: Non-targeted effects from pendingCast were stored, apply them here
       const ntEffects = stackEntry.nonTargetedEffects || nonTargetedEffects;
+
+      // SFX: Only play generic playSpell() if the spell has NO effects that produce their own sounds.
+      // Effect handlers (applyResolvedTargets, applyNonTargetedEffects, moveCard) each play
+      // context-specific sounds (playerDamage, creatureDeath, toGraveyard, lifeGain, draw, etc.)
+      // Playing playSpell() AND an effect sound causes audible overlap.
+      const hasEffectSounds = ntEffects.length > 0 || targetedEffects.length > 0;
+      if (!hasEffectSounds) SFX.playSpell();
+
       if (ntEffects.length > 0) {
         applyNonTargetedEffects(pIdx, card, ntEffects);
       }
@@ -7060,10 +7238,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     // source zone; moveCard's filter is a no-op since the card is already gone from there.
     const resolveFromZone = fromExile ? 'exile' : 'hand';
     moveCard(pIdx, card, resolveFromZone, 'battlefield');
-    // Play planeswalker entrance sound
-    if (isPlaneswalker(card)) {
-      SFX.planeswalkerEnters();
-    }
+    // NOTE: moveCard already plays the appropriate SFX (planeswalkerEnters, playCreature, etc.)
     const etbEffects = parseETBEffects(card);
 
     // Check battlefield for "whenever another creature enters" triggers (Purphoros, Soul Warden, etc.)
@@ -8930,8 +9105,8 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     }
 
     // Apply damage to defending player
+    // NOTE: SFX is handled below in the unified combat sound block to avoid overlap
     if (damageToDefender > 0) {
-      SFX.playerDamage();
       setState(defendingPlayer, prev => ({ ...prev, life: prev.life - damageToDefender }));
       markDealtDamage(defendingPlayer);
     }
@@ -9066,9 +9241,13 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       }, 800);
     }
 
+    // Unified combat SFX — only ONE sound per combat resolution to avoid overlap.
+    // Priority: creature death > player damage > generic combat hit
     if (killAttacker.length > 0 || killDefender.length > 0) {
       SFX.creatureDeath();
     } else if (damageToDefender > 0) {
+      SFX.playerDamage();
+    } else if (combatPairs.length > 0) {
       SFX.combatDamage();
     }
 
@@ -12325,6 +12504,168 @@ function useGameSocket() {
 
 // MainMenu removed — game is online-only now
 
+// ============ MY DECKS MANAGER (pre-game deck management) ============
+function MyDecksManager({ onBack }) {
+  const [savedDecks, setSavedDecks] = useState(() => getSavedDecks());
+  const [editingId, setEditingId] = useState(null);
+  const [editName, setEditName] = useState('');
+  const [showPaste, setShowPaste] = useState(false);
+  const [pasteText, setPasteText] = useState('');
+  const [pasteName, setPasteName] = useState('');
+  const [confirmDelete, setConfirmDelete] = useState(null);
+  const [notification, setNotification] = useState('');
+
+  const refresh = () => setSavedDecks(getSavedDecks());
+
+  const handleSaveNew = () => {
+    if (!pasteName.trim() || !pasteText.trim()) return;
+    const entries = parseArenaDecklist(pasteText);
+    if (entries.length === 0) { setNotification('No cards detected in decklist'); setTimeout(() => setNotification(''), 2500); return; }
+    const total = entries.reduce((s, e) => s + e.qty, 0);
+    saveDeckToStorage(pasteName.trim(), pasteText.trim());
+    refresh();
+    setShowPaste(false);
+    setPasteText('');
+    setPasteName('');
+    setNotification(`Saved "${pasteName.trim()}" (${total} cards)`);
+    setTimeout(() => setNotification(''), 2500);
+  };
+
+  const handleRename = (id) => {
+    if (!editName.trim()) return;
+    renameDeckInStorage(id, editName.trim());
+    refresh();
+    setEditingId(null);
+  };
+
+  const handleDelete = (id) => {
+    deleteDeckFromStorage(id);
+    refresh();
+    setConfirmDelete(null);
+  };
+
+  const totalPasteCards = (() => {
+    if (!pasteText.trim()) return 0;
+    return parseArenaDecklist(pasteText).reduce((s, e) => s + e.qty, 0);
+  })();
+
+  return (
+    <div className="setup-screen" style={{ maxWidth: 520 }}>
+      <button className="btn text-xs" onClick={onBack} style={{ marginBottom: 8, opacity: 0.6 }}>&#8592; Back</button>
+      <h2 style={{ marginBottom: 4 }}>My Decks</h2>
+      <p className="text-sm opacity-50" style={{ marginBottom: 16 }}>
+        Build and save decks here so they're ready when you join a game.
+      </p>
+
+      {notification && (
+        <div style={{ background: 'rgba(94,186,125,0.1)', border: '1px solid rgba(94,186,125,0.3)', borderRadius: 8, padding: '8px 14px', marginBottom: 12, fontSize: 12, color: '#5eba7d' }}>
+          {notification}
+        </div>
+      )}
+
+      {savedDecks.length === 0 && !showPaste && (
+        <div style={{ textAlign: 'center', padding: '30px 20px' }}>
+          <div style={{ fontSize: 32, marginBottom: 12, opacity: 0.3 }}>&#x1F4BE;</div>
+          <div style={{ fontSize: 14, opacity: 0.5, marginBottom: 8 }}>No saved decks yet</div>
+          <div style={{ fontSize: 12, opacity: 0.3, marginBottom: 16 }}>
+            Create a deck by pasting an Arena-format decklist below.
+          </div>
+        </div>
+      )}
+
+      {!showPaste && savedDecks.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 16 }}>
+          {savedDecks.map(saved => {
+            const entries = parseArenaDecklist(saved.listText);
+            const totalCards = entries.filter(e => !e.inSideboard).reduce((s, e) => s + e.qty, 0);
+            const sbCards = entries.filter(e => e.inSideboard).reduce((s, e) => s + e.qty, 0);
+            const dateStr = new Date(saved.createdAt).toLocaleDateString();
+            return (
+              <div key={saved.id} style={{
+                padding: '12px 16px', borderRadius: 8,
+                background: 'linear-gradient(90deg, rgba(100,180,255,0.06), rgba(100,180,255,0.02))',
+                border: '1px solid rgba(100,180,255,0.12)',
+              }}>
+                {editingId === saved.id ? (
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <input value={editName} onChange={e => setEditName(e.target.value)}
+                      autoFocus maxLength={40}
+                      style={{ flex: 1, padding: '6px 10px', fontSize: 13 }}
+                      onKeyDown={e => { if (e.key === 'Enter') handleRename(saved.id); if (e.key === 'Escape') setEditingId(null); }}
+                    />
+                    <button className="btn btn-gold text-xs" style={{ padding: '6px 12px' }} onClick={() => handleRename(saved.id)}>Save</button>
+                    <button className="btn text-xs" style={{ padding: '6px 8px', opacity: 0.5 }} onClick={() => setEditingId(null)}>Cancel</button>
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div>
+                      <span style={{ fontWeight: 700, fontSize: 14, color: '#7cb8ff' }}>{saved.name}</span>
+                      <div className="text-xs" style={{ opacity: 0.4, marginTop: 2 }}>
+                        {totalCards} cards{sbCards > 0 ? ` + ${sbCards} sideboard` : ''} &middot; {dateStr}
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                      <button className="btn text-xs" style={{ padding: '5px 10px', opacity: 0.5 }}
+                        onClick={() => { setEditingId(saved.id); setEditName(saved.name); }} title="Rename">
+                        &#x270E;
+                      </button>
+                      {confirmDelete === saved.id ? (
+                        <div style={{ display: 'flex', gap: 4 }}>
+                          <button className="btn text-xs" style={{ padding: '5px 10px', background: 'rgba(220,60,60,0.2)', border: '1px solid rgba(220,60,60,0.4)', color: '#e67373' }}
+                            onClick={() => handleDelete(saved.id)}>Delete</button>
+                          <button className="btn text-xs" style={{ padding: '5px 8px', opacity: 0.5 }}
+                            onClick={() => setConfirmDelete(null)}>Cancel</button>
+                        </div>
+                      ) : (
+                        <button className="btn text-xs" style={{ padding: '5px 8px', opacity: 0.4 }}
+                          onClick={() => setConfirmDelete(saved.id)} title="Delete">
+                          &#x2715;
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {showPaste ? (
+        <div style={{ marginTop: 8 }}>
+          <input value={pasteName} onChange={e => setPasteName(e.target.value)}
+            placeholder="Deck name" maxLength={40}
+            style={{ width: '100%', padding: '10px 14px', fontSize: 14, marginBottom: 8, textAlign: 'center' }}
+          />
+          <textarea
+            value={pasteText} onChange={e => setPasteText(e.target.value)}
+            placeholder={"Paste Arena-format decklist, e.g.:\n4 Lightning Bolt\n4 Goblin Guide\n20 Mountain\n\nSideboard\n2 Smash to Smithereens"}
+            style={{
+              width: '100%', height: 220, resize: 'vertical',
+              background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)',
+              borderRadius: 8, padding: 12, color: '#eee', fontFamily: 'monospace', fontSize: 12,
+            }}
+          />
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 8 }}>
+            <span className="text-xs opacity-40">{totalPasteCards > 0 ? `${totalPasteCards} cards detected` : 'No cards detected'}</span>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button className="btn text-xs" style={{ padding: '8px 14px', opacity: 0.5 }} onClick={() => { setShowPaste(false); setPasteText(''); setPasteName(''); }}>Cancel</button>
+              <button className="btn btn-gold" onClick={handleSaveNew} disabled={!pasteName.trim() || totalPasteCards < 1}>
+                Save Deck ({totalPasteCards} cards)
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <button className="btn" style={{ width: '100%', padding: 12, marginTop: 4 }}
+          onClick={() => setShowPaste(true)}>
+          + Create New Deck
+        </button>
+      )}
+    </div>
+  );
+}
+
 function OnlineSetup({ gameSocket, onGameReady, onBack, avatars, avatarLoading }) {
   const [subPhase, setSubPhase] = useState('nickname');
   const [nickname, setNickname] = useState('');
@@ -12336,6 +12677,9 @@ function OnlineSetup({ gameSocket, onGameReady, onBack, avatars, avatarLoading }
   const [gameFormat, setGameFormat] = useState('standard');
   const [matchType, setMatchType] = useState('single'); // 'single' | 'bo3'
   const [selectedAvatar, setSelectedAvatar] = useState(null);
+  const [saveDeckName, setSaveDeckName] = useState('');
+  const [deckSaved, setDeckSaved] = useState(false);
+  const [showSaveDeck, setShowSaveDeck] = useState(false);
 
   const {
     connected, roomInfo, playerIndex, error, setError,
@@ -12469,12 +12813,28 @@ function OnlineSetup({ gameSocket, onGameReady, onBack, avatars, avatarLoading }
           </div>
         </div>
 
+        <div style={{ marginTop: 24, borderTop: '1px solid rgba(255,255,255,0.06)', paddingTop: 16 }}>
+          <button onClick={() => setSubPhase('mydecks')}
+            style={{
+              background: 'rgba(100,180,255,0.06)', border: '1px solid rgba(100,180,255,0.15)',
+              borderRadius: 8, padding: '10px 24px', color: '#7cb8ff', cursor: 'pointer',
+              fontSize: 13, transition: 'all 0.2s',
+            }}>
+            My Decks
+          </button>
+          <div style={{ fontSize: 10, opacity: 0.3, marginTop: 6 }}>Manage saved decks before joining a game</div>
+        </div>
+
         <button onClick={() => setSubPhase('nickname')}
-          style={{ marginTop: 20, background: 'none', border: 'none', color: 'rgba(255,255,255,0.4)', cursor: 'pointer', fontSize: 12 }}>
+          style={{ marginTop: 16, background: 'none', border: 'none', color: 'rgba(255,255,255,0.4)', cursor: 'pointer', fontSize: 12 }}>
           Back
         </button>
       </div>
     );
+  }
+
+  if (subPhase === 'mydecks') {
+    return <MyDecksManager onBack={() => setSubPhase('create-or-join')} />;
   }
 
   if (subPhase === 'joining') {
@@ -12560,6 +12920,56 @@ function OnlineSetup({ gameSocket, onGameReady, onBack, avatars, avatarLoading }
           <h2 style={{ marginBottom: 8 }}>Deck Ready!</h2>
           <p style={{ opacity: 0.5, fontSize: 13, marginBottom: 8 }}>{myDeck.length} cards selected</p>
 
+          {/* Save Deck to My Decks */}
+          {!deckSaved && !showSaveDeck && (
+            <button onClick={() => setShowSaveDeck(true)}
+              style={{
+                background: 'rgba(100,180,255,0.08)', border: '1px solid rgba(100,180,255,0.2)',
+                borderRadius: 8, padding: '8px 16px', color: '#7cb8ff', cursor: 'pointer',
+                fontSize: 12, marginBottom: 16, transition: 'all 0.2s',
+              }}>
+              Save to My Decks
+            </button>
+          )}
+          {showSaveDeck && !deckSaved && (
+            <div style={{
+              background: 'rgba(100,180,255,0.06)', border: '1px solid rgba(100,180,255,0.15)',
+              borderRadius: 8, padding: 12, marginBottom: 16, maxWidth: 340, margin: '0 auto 16px',
+            }}>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <input value={saveDeckName} onChange={e => setSaveDeckName(e.target.value)}
+                  placeholder="Deck name" maxLength={40} autoFocus
+                  style={{ flex: 1, padding: '8px 12px', fontSize: 13, textAlign: 'center' }}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter' && saveDeckName.trim()) {
+                      const text = deckToArenaText(myDeck, mySideboard);
+                      saveDeckToStorage(saveDeckName.trim(), text);
+                      setDeckSaved(true);
+                      setShowSaveDeck(false);
+                    }
+                  }}
+                />
+                <button className="btn btn-gold text-xs" style={{ padding: '8px 14px' }}
+                  disabled={!saveDeckName.trim()}
+                  onClick={() => {
+                    const text = deckToArenaText(myDeck, mySideboard);
+                    saveDeckToStorage(saveDeckName.trim(), text);
+                    setDeckSaved(true);
+                    setShowSaveDeck(false);
+                  }}>
+                  Save
+                </button>
+                <button className="btn text-xs" style={{ padding: '8px 8px', opacity: 0.5 }}
+                  onClick={() => setShowSaveDeck(false)}>Cancel</button>
+              </div>
+            </div>
+          )}
+          {deckSaved && (
+            <div style={{ fontSize: 12, color: '#5eba7d', marginBottom: 16 }}>
+              Deck saved to My Decks
+            </div>
+          )}
+
           {/* Match Type selector */}
           <div style={{ marginBottom: 16, maxWidth: 360, margin: '0 auto 16px' }}>
             <label style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: 1, opacity: 0.35, fontWeight: 600, display: 'block', marginBottom: 6 }}>Match Type</label>
@@ -12606,7 +13016,7 @@ function OnlineSetup({ gameSocket, onGameReady, onBack, avatars, avatarLoading }
             Submit Deck & Ready Up
           </button>
           <br />
-          <button onClick={() => setMyDeck(null)}
+          <button onClick={() => { setMyDeck(null); setDeckSaved(false); setShowSaveDeck(false); setSaveDeckName(''); }}
             style={{ marginTop: 12, background: 'none', border: 'none', color: 'rgba(255,255,255,0.4)', cursor: 'pointer', fontSize: 12 }}>
             Choose different deck
           </button>

@@ -26,17 +26,39 @@ Når du åbner spillet ser du online-lobbyen, hvor du kan oprette eller joine et
 
 ## 2. Vælg et deck
 
-Du har tre muligheder:
+Du har fire muligheder:
 
-- **Preset Decks** — vælg mellem 8 færdige decks i to sværhedsgrader (klik et deck, det loader automatisk fra Scryfall)
+- **Preset Decks** — vælg mellem færdige decks i to sværhedsgrader (klik et deck, det loader automatisk fra Scryfall)
+- **My Decks** — vælg et af dine gemte decks for hurtig adgang (se nedenfor)
 - **Paste Decklist** — indsæt en Arena-format deckliste (f.eks. `4 Lightning Bolt`)
 - **Build Custom Deck** — søg kort på Scryfall og byg dit deck manuelt
+
+### My Decks — gem og genbrug dine decks
+
+For at undgå at din modstander skal vente, mens du bygger et deck, kan du forberede dine decks **inden** du joiner en kamp.
+
+**Gem et deck:**
+1. Vælg et preset, paste en liste, eller byg et custom deck
+2. På bekræftelsesskærmen ("Deck Ready!") klik **Save to My Decks**
+3. Giv det et navn og klik **Save**
+
+**Administrér dine decks inden kampen:**
+1. Fra lobbyen (efter du har indtastet dit navn) klik **My Decks**
+2. Herfra kan du oprette nye decks ved at paste en Arena-deckliste
+3. Du kan omdøbe eller slette eksisterende decks
+
+**Brug et gemt deck i en kamp:**
+1. I deck-vælgeren klik fanebladet **My Decks**
+2. Klik **Load** på det deck du vil bruge
+3. Decket hentes fra Scryfall og er klar til kamp
+
+Dine gemte decks forbliver gemt i din browser (localStorage), så de er tilgængelige næste gang du spiller.
 
 ### Færdige decks
 
 **Level 1** (begyndervenlige): White Knight, Black Devotion, Green Power, Red Aggro, Blue Control
 
-**Level 2** (avancerede): Azorius Control, Boros Burn, Simic Control (Pokemon)
+**Level 2** (avancerede): Azorius Control, Boros Burn, Simic Control (Pokemon), Selesnya Midrange, Rakdos Midrange
 
 Når dit deck er loadet, klik **Submit Deck & Ready Up**. Vent på at modstanderen også er klar.
 
@@ -418,6 +440,9 @@ Hvis en spiller mister forbindelsen:
 
 | Handling | Sådan gør du |
 |---|---|
+| Gem et deck | Deck Ready → Save to My Decks |
+| Administrér decks | Lobbyen → My Decks |
+| Load gemt deck | Deck-vælger → My Decks → Load |
 | Spil kort fra hånd | Venstre-klik |
 | Tap/untap | Venstre-klik på battlefield-kort |
 | Tilføj mana | Klik tappet land |

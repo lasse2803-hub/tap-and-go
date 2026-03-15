@@ -4,7 +4,7 @@
 
 Tap & Go is a digital MTG (Magic: The Gathering) board game that supports both local (hotseat) and online multiplayer. The game auto-handles many card mechanics, but some require manual action via right-click context menus.
 
-There are 8 pre-built decks included, ranging from beginner-friendly (level 1) to advanced (level 2). You can also paste your own decklist or build a custom deck from Scryfall.
+There are pre-built decks included, ranging from beginner-friendly (level 1) to advanced (level 2). You can also paste your own decklist, build a custom deck from Scryfall, or use **My Decks** to save and quickly load your favourite decks across sessions (stored in your browser's localStorage).
 
 ---
 
