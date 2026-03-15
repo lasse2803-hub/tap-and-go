@@ -3905,6 +3905,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       preventCombatDamage,
       modalChoice,
       searchExile,
+      abilityActivated,
     };
     // Bundle any pending log entries into this broadcast
     // (avoids race condition where separate log broadcast triggers throttle
@@ -4090,6 +4091,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     if (onlineState.preventCombatDamage !== undefined) _setPreventCombatDamage(onlineState.preventCombatDamage);
     if (onlineState.modalChoice !== undefined) _setModalChoice(onlineState.modalChoice);
     if (onlineState.searchExile !== undefined) _setSearchExile(onlineState.searchExile);
+    if (onlineState.abilityActivated !== undefined) _setAbilityActivated(onlineState.abilityActivated);
 
     // Receive game log entries from opponent (supports both array and single entry)
     const logEntries = onlineState.__logEntries || (onlineState.__logEntry ? [onlineState.__logEntry] : []);
@@ -4930,8 +4932,15 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       setEtbReminder({ pIdx, card, effects: [{ icon: '💀', text: `Sacrificed ${card.name}: ${ability.text || ability.label}` }] });
     }
     addGameLog(pIdx, '💀', `Sacrificed ${card.name}: ${ability.label}`);
-    setCastError({ pIdx, message: `Sacrificed ${card.name}: ${ability.label}`, background: '#2a1a1a' });
-    setTimeout(() => setCastError(null), 2000);
+    // Broadcast sacrifice ability activation to both players
+    const sacCardImg = card._reskin?.artUrl || card.image_uris?.art_crop || card.image_uris?.small || (card.card_faces?.[0]?.image_uris?.art_crop) || null;
+    setAbilityActivated({
+      pIdx,
+      cardName: card._reskin?.name || card.name,
+      abilityText: `💀 Sacrificed: ${ability.text || ability.label}`,
+      cardImage: sacCardImg,
+    });
+    setTimeout(() => setAbilityActivated(null), 3500);
   };
 
   // ===== PAID ACTIVATED ABILITIES (Midnight Clock, etc.) =====
@@ -5028,8 +5037,15 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       setEtbReminder({ pIdx, card, effects: [{ icon: '⚡', text: `${card.name}: ${ability.text || ability.label}` }] });
     }
     addGameLog(pIdx, '⚡', `${card.name}: ${ability.label}`);
-    setCastError({ pIdx, message: `${card.name}: ${ability.label}`, background: '#1a2a33' });
-    setTimeout(() => setCastError(null), 1500);
+    // Broadcast ability activation to both players (like PW reminder but for creatures/enchantments)
+    const cardImg = card._reskin?.artUrl || card.image_uris?.art_crop || card.image_uris?.small || (card.card_faces?.[0]?.image_uris?.art_crop) || null;
+    setAbilityActivated({
+      pIdx,
+      cardName: card._reskin?.name || card.name,
+      abilityText: ability.text || ability.label,
+      cardImage: cardImg,
+    });
+    setTimeout(() => setAbilityActivated(null), 3500);
   };
 
   // Midnight Clock special trigger: 12th hour counter
@@ -6184,6 +6200,8 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
   const setPwReminder = syncSetter(_setPwReminder);
   const [searchExile, _setSearchExile] = useState(null); // SYNCED — { pIdx, targetPIdx, cardName } — post-counter search & exile (Test of Talents)
   const setSearchExile = syncSetter(_setSearchExile);
+  const [abilityActivated, _setAbilityActivated] = useState(null); // SYNCED — { pIdx, cardName, abilityText, cardImage } — broadcast ability activation
+  const setAbilityActivated = syncSetter(_setAbilityActivated);
   const [ltbReminder, setLtbReminder] = useState(null); // { pIdx, card, effects[] }
 
   // ===== IN-GAME CHAT =====
@@ -7412,9 +7430,15 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     SFX.playSpell();
     const modCounterAmt = data.addCounters ? applyVorinclexModifier(pIdx, data.addCounters.amount) : 0;
     const counterMsg = data.addCounters ? ` (+${modCounterAmt} ${data.addCounters.type} counters)` : '';
-    setCastError({ pIdx, message: `${card.name} becomes a ${power}/${toughness} creature${counterMsg}`, background: '#1a3320' });
-    setTimeout(() => setCastError(null), 1500);
     addGameLog(pIdx, '🏔️', `${getState(pIdx).name} animates ${card.name} → ${power}/${toughness}${counterMsg}`, [card.id]);
+    // Broadcast creature land activation to both players
+    setAbilityActivated({
+      pIdx,
+      cardName: card._reskin?.name || card.name,
+      abilityText: `Becomes a ${power}/${toughness} creature${counterMsg}`,
+      cardImage: card._reskin?.artUrl || card.image_uris?.art_crop || card.image_uris?.small || null,
+    });
+    setTimeout(() => setAbilityActivated(null), 3500);
   };
 
   // Revert animated creature lands back to normal lands
@@ -11150,6 +11174,40 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                   <span style={{ textTransform: 'capitalize' }}>{choice.label}</span>
                 </button>
               ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Ability Activated Notification (visible to BOTH players — creature/enchantment/artifact abilities) */}
+      {abilityActivated && (
+        <div style={{
+          position: 'fixed', top: 80, left: '50%', transform: 'translateX(-50%)',
+          zIndex: 1500, animation: 'fadeIn 0.25s ease',
+          pointerEvents: 'none',
+        }}>
+          <div style={{
+            background: 'linear-gradient(160deg, #1a1830, #14122a)', borderRadius: 12,
+            padding: '12px 20px', display: 'flex', alignItems: 'center', gap: 14,
+            border: '1px solid rgba(100,180,255,0.3)', boxShadow: '0 8px 32px rgba(0,0,0,0.6), 0 0 20px rgba(100,180,255,0.1)',
+            maxWidth: 460,
+          }}>
+            {abilityActivated.cardImage && (
+              <img src={abilityActivated.cardImage} alt=""
+                style={{ width: 48, height: 48, borderRadius: 8, objectFit: 'cover', border: '1px solid rgba(255,255,255,0.15)' }}
+                onError={e => { e.target.style.display = 'none'; }} />
+            )}
+            <div>
+              <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: 1.5, color: 'rgba(100,180,255,0.7)', marginBottom: 4, fontWeight: 700 }}>
+                ⚡ {players[abilityActivated.pIdx]} — {abilityActivated.cardName}
+              </div>
+              <div style={{
+                fontSize: 12, color: '#e8e4dc', lineHeight: 1.4,
+                padding: '4px 10px', borderRadius: 6,
+                background: 'rgba(100,180,255,0.06)', border: '1px solid rgba(100,180,255,0.1)',
+              }}>
+                {abilityActivated.abilityText}
+              </div>
             </div>
           </div>
         </div>
