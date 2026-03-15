@@ -92,11 +92,11 @@ io.on('connection', (socket) => {
   });
 
   // Player submits their deck
-  socket.on('submitDeck', ({ deck, avatar, matchType }, callback) => {
+  socket.on('submitDeck', ({ deck, avatar, matchType, sideboard }, callback) => {
     const room = roomManager.getRoom(socket.roomId);
     if (!room) return callback?.({ error: 'Room not found' });
 
-    const result = room.submitDeck(socket.playerIndex, deck, avatar);
+    const result = room.submitDeck(socket.playerIndex, deck, avatar, sideboard);
     if (result.error) return callback?.({ error: result.error });
 
     // Store matchType from the first submission (host sets it)
@@ -154,6 +154,18 @@ io.on('connection', (socket) => {
         matchScore: [...room.matchScore]
       });
     }
+  });
+
+  // Update deck after sideboard swap (between games in Bo3)
+  socket.on('updateDeck', ({ newDeck, newSideboard }, callback) => {
+    const room = roomManager.getRoom(socket.roomId);
+    if (!room) return callback?.({ error: 'Room not found' });
+    if (room.status !== 'between-games') return callback?.({ error: 'Not between games' });
+
+    const result = room.updateDeck(socket.playerIndex, newDeck, newSideboard);
+    if (result.error) return callback?.({ error: result.error });
+
+    callback?.({ ok: true });
   });
 
   // Loser chooses who goes first in next game

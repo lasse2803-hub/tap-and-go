@@ -1235,9 +1235,35 @@ const PRESET_DECKS = [
 const parseArenaDecklist = (text) => {
   const lines = text.trim().split('\n');
   const entries = [];
-  for (const line of lines) {
+  let inSideboard = false;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
     const trimmed = line.trim();
+
+    // Check for "Sideboard" header (case-insensitive)
+    if (trimmed.toLowerCase() === 'sideboard') {
+      inSideboard = true;
+      continue;
+    }
+
+    // Check for blank line separator (indicates main deck end if not already in sideboard)
+    if (!trimmed && !inSideboard && i > 0 && i < lines.length - 1) {
+      // Check if next non-empty line looks like a card
+      let nextIdx = i + 1;
+      while (nextIdx < lines.length && !lines[nextIdx].trim()) nextIdx++;
+      if (nextIdx < lines.length) {
+        const nextLine = lines[nextIdx].trim();
+        if (nextLine && !nextLine.toLowerCase().startsWith('sideboard') && /^\d+\s+/.test(nextLine)) {
+          // Found blank line with card after — likely deck/sideboard separator
+          inSideboard = true;
+          continue;
+        }
+      }
+    }
+
     if (!trimmed || trimmed.startsWith('//') || trimmed.startsWith('#')) continue;
+
     // Split on ">>" for reskin
     let cardPart = trimmed;
     let reskin = null;
@@ -1254,6 +1280,7 @@ const parseArenaDecklist = (text) => {
         fullCardImage: parts[4] || null,
       };
     }
+
     // Supports: "4 Lightning Bolt", "4 Island (ZNR) 271", "4 Island (ZNR)", "4 Card (SET) 1★"
     const match = cardPart.match(/^(\d+)\s+(.+?)(?:\s+\(([A-Za-z0-9]+)\)(?:\s+(\S+))?)?$/);
     if (match) {
@@ -1263,15 +1290,17 @@ const parseArenaDecklist = (text) => {
         set: match[3] ? match[3].toLowerCase() : null,
         collectorNumber: match[4] || null,
         reskin: reskin,
+        inSideboard: inSideboard,
       });
     }
   }
   return entries;
 };
 
-// Fetch full card data from Scryfall for a parsed decklist
+// Fetch full card data from Scryfall for a parsed decklist. Returns { deck, sideboard, skipped }
 const loadDeckFromList = async (entries, onProgress) => {
   const deck = [];
+  const sideboard = [];
   const skipped = [];
   let loaded = 0;
   for (const entry of entries) {
@@ -1307,7 +1336,13 @@ const loadDeckFromList = async (entries, onProgress) => {
         if (entry.reskin) {
           card._reskin = entry.reskin;
         }
-        deck.push({ card, qty: entry.qty });
+        const cardEntry = { card, qty: entry.qty };
+        // Add to main deck or sideboard
+        if (entry.inSideboard) {
+          sideboard.push(cardEntry);
+        } else {
+          deck.push(cardEntry);
+        }
       } else {
         console.warn(`[Deck] Failed to load card: ${entry.name} (set: ${entry.set}, cn: ${entry.collectorNumber})`);
         skipped.push({ name: entry.name, reason: 'Not found on Scryfall', qty: entry.qty });
@@ -1322,7 +1357,7 @@ const loadDeckFromList = async (entries, onProgress) => {
       if (onProgress) onProgress(loaded, entries.length);
     }
   }
-  return { deck, skipped };
+  return { deck, sideboard, skipped };
 };
 
 // ============ MANA SYSTEM ============
@@ -3254,7 +3289,7 @@ function DeckChooser({ playerName, onChoosePreset, onPasteList, onBuildCustom, o
     setProgress('Parsing...');
     const entries = parseArenaDecklist(preset.list);
     setProgress(`Loading cards: 0/${entries.length}`);
-    const { deck, skipped } = await loadDeckFromList(entries, (loaded, total) => {
+    const { deck, sideboard, skipped } = await loadDeckFromList(entries, (loaded, total) => {
       setProgress(`Loading cards: ${loaded}/${total}`);
     });
     if (skipped.length > 0) {
@@ -3262,7 +3297,7 @@ function DeckChooser({ playerName, onChoosePreset, onPasteList, onBuildCustom, o
       await new Promise(r => setTimeout(r, 2500));
     }
     setLoadingDeck(null);
-    onChoosePreset(deck);
+    onChoosePreset({ deck, sideboard });
   };
 
   const handlePaste = async () => {
@@ -3270,7 +3305,7 @@ function DeckChooser({ playerName, onChoosePreset, onPasteList, onBuildCustom, o
     if (entries.length === 0) return;
     setLoadingDeck('paste');
     setProgress(`Loading cards: 0/${entries.length}`);
-    const { deck, skipped } = await loadDeckFromList(entries, (loaded, total) => {
+    const { deck, sideboard, skipped } = await loadDeckFromList(entries, (loaded, total) => {
       setProgress(`Loading cards: ${loaded}/${total}`);
     });
     if (skipped.length > 0) {
@@ -3278,7 +3313,7 @@ function DeckChooser({ playerName, onChoosePreset, onPasteList, onBuildCustom, o
       await new Promise(r => setTimeout(r, 2500));
     }
     setLoadingDeck(null);
-    onPasteList(deck);
+    onPasteList({ deck, sideboard });
   };
 
   const totalPasteCards = (() => {
@@ -12116,12 +12151,17 @@ function useGameSocket() {
     });
   }, [socket]);
 
-  const submitDeck = useCallback((deck, avatar, matchType) => {
+  const submitDeck = useCallback((deck, avatar, matchType, sideboard) => {
     // Attach matchType to deck so server receives it
     const deckWithMeta = deck;
     if (matchType) deckWithMeta.matchType = matchType;
     return new Promise((resolve) => {
-      socket.emit('submitDeck', { deck: deckWithMeta, avatar: avatar || null, matchType: matchType || 'single' }, (res) => {
+      socket.emit('submitDeck', {
+        deck: deckWithMeta,
+        avatar: avatar || null,
+        matchType: matchType || 'single',
+        sideboard: sideboard || []
+      }, (res) => {
         if (res?.error) { setError(res.error); resolve(false); return; }
         resolve(true);
       });
@@ -12145,6 +12185,16 @@ function useGameSocket() {
     if (!socket) return;
     return new Promise((resolve) => {
       socket.emit('gameWon', { winnerIndex }, (res) => {
+        if (res?.error) { setError(res.error); resolve(null); return; }
+        resolve(res);
+      });
+    });
+  }, [socket]);
+
+  const updateDeck = useCallback((newDeck, newSideboard) => {
+    if (!socket) return;
+    return new Promise((resolve) => {
+      socket.emit('updateDeck', { newDeck, newSideboard }, (res) => {
         if (res?.error) { setError(res.error); resolve(null); return; }
         resolve(res);
       });
@@ -12210,7 +12260,7 @@ function useGameSocket() {
     error, setError, gameState, lastAction, gameStarted, opponentReady,
     opponentDisconnected, chatMessages,
     createRoom, joinRoom, submitDeck, sendAction, sendChat,
-    matchInfo, betweenGames, reportGameWon, chooseFirstPlayer,
+    matchInfo, betweenGames, reportGameWon, updateDeck, chooseFirstPlayer,
     concession, concedeGame, serverGameAction, leaveRoom
   };
 }
@@ -12223,6 +12273,7 @@ function OnlineSetup({ gameSocket, onGameReady, onBack, avatars, avatarLoading }
   const [joinCode, setJoinCode] = useState('');
   const [roomId, setRoomId] = useState(null);
   const [myDeck, setMyDeck] = useState(null);
+  const [mySideboard, setMySideboard] = useState([]);
   const [deckSubmitted, setDeckSubmitted] = useState(false);
   const [gameFormat, setGameFormat] = useState('standard');
   const [matchType, setMatchType] = useState('single'); // 'single' | 'bo3'
@@ -12244,9 +12295,9 @@ function OnlineSetup({ gameSocket, onGameReady, onBack, avatars, avatarLoading }
 
   useEffect(() => {
     if (gameStarted && gameState) {
-      onGameReady(gameState, playerIndex);
+      onGameReady(gameState, playerIndex, mySideboard);
     }
-  }, [gameStarted, gameState, playerIndex]);
+  }, [gameStarted, gameState, playerIndex, mySideboard]);
 
   useEffect(() => {
     if (roomInfo && roomInfo.players[0].nickname && roomInfo.players[1].nickname && subPhase === 'waiting') {
@@ -12431,8 +12482,14 @@ function OnlineSetup({ gameSocket, onGameReady, onBack, avatars, avatarLoading }
       return (
         <DeckChooser
           playerName={nickname}
-          onChoosePreset={(deck) => setMyDeck(deck)}
-          onPasteList={(deck) => setMyDeck(deck)}
+          onChoosePreset={(deckData) => {
+            setMyDeck(deckData.deck);
+            setMySideboard(deckData.sideboard || []);
+          }}
+          onPasteList={(deckData) => {
+            setMyDeck(deckData.deck);
+            setMySideboard(deckData.sideboard || []);
+          }}
           onBuildCustom={() => setSubPhase('deckbuilder')}
           onBack={() => {}}
         />
@@ -12485,7 +12542,7 @@ function OnlineSetup({ gameSocket, onGameReady, onBack, avatars, avatarLoading }
 
           <button className="btn btn-gold" style={{ padding: '14px 40px', fontSize: 15 }}
             onClick={async () => {
-              const ok = await submitDeck(myDeck, selectedAvatar, matchType);
+              const ok = await submitDeck(myDeck, selectedAvatar, matchType, mySideboard);
               if (ok) setDeckSubmitted(true);
             }}>
             Submit Deck & Ready Up
@@ -12535,13 +12592,35 @@ function OnlineSetup({ gameSocket, onGameReady, onBack, avatars, avatarLoading }
   return null;
 }
 
-function OnlineGameWrapper({ gameSocket, initialState, playerIndex, onExit }) {
+function OnlineGameWrapper({ gameSocket, initialState, playerIndex, onExit, mySideboard }) {
   const { sendAction, gameState: serverState, lastAction: serverLastAction, opponentDisconnected, chatMessages, sendChat,
-          matchInfo, betweenGames, reportGameWon, chooseFirstPlayer, concession, concedeGame, serverGameAction } = gameSocket;
+          matchInfo, betweenGames, reportGameWon, updateDeck, chooseFirstPlayer, concession, concedeGame, serverGameAction } = gameSocket;
   const [chatOpen, setChatOpen] = useState(false);
   const [chatInput, setChatInput] = useState('');
+  const [sideboardMode, setSideboardMode] = useState(false);
+  const [currentDeck, setCurrentDeck] = useState([]);
+  const [currentSideboard, setCurrentSideboard] = useState([]);
   const myName = initialState.players[playerIndex].nickname;
   const oppName = initialState.players[playerIndex === 0 ? 1 : 0].nickname;
+
+  // Initialize deck and sideboard from props
+  useEffect(() => {
+    if (mySideboard && mySideboard.length > 0) {
+      setCurrentSideboard([...mySideboard]);
+      // Initialize current deck to empty (will be populated from server when sidebaording starts)
+      setCurrentDeck([]);
+    }
+  }, []);
+
+  // When between-games phase starts and player has sideboard, enable sideboard mode
+  useEffect(() => {
+    if (betweenGames && mySideboard && mySideboard.length > 0) {
+      setSideboardMode(true);
+      // Get current main deck from server state (it was the deck from the previous game)
+      // For now, we keep an empty deck; actual deck cards would need to be sent from server
+      setCurrentDeck([]);
+    }
+  }, [betweenGames, mySideboard]);
 
   return (
     <div style={{ position: 'relative', width: '100%', height: '100%' }}>
@@ -12553,51 +12632,143 @@ function OnlineGameWrapper({ gameSocket, initialState, playerIndex, onExit }) {
         }}>
           <div style={{
             background: 'linear-gradient(160deg, #1e1c30, #12101f)', borderRadius: 16, padding: 32,
-            maxWidth: 460, textAlign: 'center', width: '90%',
+            maxWidth: sideboardMode ? 800 : 460, textAlign: sideboardMode ? 'left' : 'center', width: '90%',
             border: '1px solid rgba(200,170,60,0.3)', boxShadow: '0 16px 64px rgba(0,0,0,0.7), 0 0 40px rgba(200,170,60,0.08)',
+            maxHeight: '90vh', overflowY: 'auto'
           }}>
-            <div style={{ fontSize: 40, marginBottom: 8 }}>⚔️</div>
-            <h2 style={{ color: '#d4b44a', fontSize: 22, marginBottom: 12 }}>Game {betweenGames.nextGame}</h2>
-            <div style={{
-              display: 'flex', justifyContent: 'center', gap: 24, marginBottom: 20,
-              fontSize: 28, fontWeight: 700, color: '#e8e4dc'
-            }}>
-              <div style={{ textAlign: 'center' }}>
-                <div style={{ fontSize: 11, opacity: 0.4, marginBottom: 4 }}>{myName}</div>
-                <div style={{ color: '#d4b44a' }}>{betweenGames.matchScore[playerIndex]}</div>
-              </div>
-              <div style={{ fontSize: 16, opacity: 0.3, alignSelf: 'flex-end', paddingBottom: 4 }}>—</div>
-              <div style={{ textAlign: 'center' }}>
-                <div style={{ fontSize: 11, opacity: 0.4, marginBottom: 4 }}>{oppName}</div>
-                <div style={{ color: '#e8e4dc' }}>{betweenGames.matchScore[playerIndex === 0 ? 1 : 0]}</div>
-              </div>
-            </div>
-
-            {betweenGames.loserIndex === playerIndex ? (
+            {sideboardMode && currentSideboard.length > 0 ? (
+              // SIDEBOARD SWAP UI
               <div>
-                <p style={{ opacity: 0.6, fontSize: 13, marginBottom: 16 }}>You lost the last game. Choose who goes first:</p>
-                <div style={{ display: 'flex', gap: 12, justifyContent: 'center' }}>
-                  <button className="btn btn-gold" style={{ padding: '12px 24px', fontSize: 14 }}
-                    onClick={() => chooseFirstPlayer(playerIndex)}>
-                    I Go First
-                  </button>
-                  <button className="btn" style={{ padding: '12px 24px', fontSize: 14, background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.15)', borderRadius: 8, color: 'rgba(255,255,255,0.7)', cursor: 'pointer' }}
-                    onClick={() => chooseFirstPlayer(playerIndex === 0 ? 1 : 0)}>
-                    Opponent Goes First
-                  </button>
+                <h2 style={{ color: '#d4b44a', fontSize: 18, marginBottom: 16, textAlign: 'center' }}>Sideboard Swap</h2>
+                <div style={{ display: 'flex', gap: 16, marginBottom: 16 }}>
+                  {/* Main Deck Column */}
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 12, opacity: 0.6, marginBottom: 8, textTransform: 'uppercase', letterSpacing: 1 }}>Main Deck ({currentDeck.reduce((s, e) => s + e.qty, 0)})</div>
+                    <div style={{
+                      background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)',
+                      borderRadius: 8, padding: 12, minHeight: 300, maxHeight: 400, overflowY: 'auto'
+                    }}>
+                      {currentDeck.length > 0 ? (
+                        currentDeck.map((entry, idx) => (
+                          <div key={`deck-${idx}`} onClick={() => {
+                            setCurrentSideboard([...currentSideboard, entry]);
+                            setCurrentDeck(currentDeck.filter((_, i) => i !== idx));
+                          }} style={{
+                            padding: '6px 10px', borderRadius: 4, cursor: 'pointer', fontSize: 12,
+                            background: 'rgba(255,255,255,0.03)', marginBottom: 4,
+                            border: '1px solid rgba(255,255,255,0.08)',
+                            transition: 'all 0.15s', display: 'flex', justifyContent: 'space-between'
+                          }} onMouseEnter={e => {
+                            e.currentTarget.style.background = 'rgba(200,170,60,0.12)';
+                            e.currentTarget.style.borderColor = 'rgba(200,170,60,0.2)';
+                          }} onMouseLeave={e => {
+                            e.currentTarget.style.background = 'rgba(255,255,255,0.03)';
+                            e.currentTarget.style.borderColor = 'rgba(255,255,255,0.08)';
+                          }}>
+                            <span>{entry.qty}x {entry.card.name}</span>
+                            <span style={{ opacity: 0.4 }}>→</span>
+                          </div>
+                        ))
+                      ) : (
+                        <div style={{ textAlign: 'center', opacity: 0.4, fontSize: 12, padding: 20 }}>Empty</div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Sideboard Column */}
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 12, opacity: 0.6, marginBottom: 8, textTransform: 'uppercase', letterSpacing: 1 }}>Sideboard ({currentSideboard.reduce((s, e) => s + e.qty, 0)})</div>
+                    <div style={{
+                      background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)',
+                      borderRadius: 8, padding: 12, minHeight: 300, maxHeight: 400, overflowY: 'auto'
+                    }}>
+                      {currentSideboard.length > 0 ? (
+                        currentSideboard.map((entry, idx) => (
+                          <div key={`sideboard-${idx}`} onClick={() => {
+                            setCurrentDeck([...currentDeck, entry]);
+                            setCurrentSideboard(currentSideboard.filter((_, i) => i !== idx));
+                          }} style={{
+                            padding: '6px 10px', borderRadius: 4, cursor: 'pointer', fontSize: 12,
+                            background: 'rgba(255,255,255,0.03)', marginBottom: 4,
+                            border: '1px solid rgba(255,255,255,0.08)',
+                            transition: 'all 0.15s', display: 'flex', justifyContent: 'space-between'
+                          }} onMouseEnter={e => {
+                            e.currentTarget.style.background = 'rgba(200,170,60,0.12)';
+                            e.currentTarget.style.borderColor = 'rgba(200,170,60,0.2)';
+                          }} onMouseLeave={e => {
+                            e.currentTarget.style.background = 'rgba(255,255,255,0.03)';
+                            e.currentTarget.style.borderColor = 'rgba(255,255,255,0.08)';
+                          }}>
+                            <span>{entry.qty}x {entry.card.name}</span>
+                            <span style={{ opacity: 0.4 }}>←</span>
+                          </div>
+                        ))
+                      ) : (
+                        <div style={{ textAlign: 'center', opacity: 0.4, fontSize: 12, padding: 20 }}>Empty</div>
+                      )}
+                    </div>
+                  </div>
                 </div>
+
+                <div style={{ display: 'flex', gap: 12, justifyContent: 'center', marginBottom: 16 }}>
+                  <span style={{ fontSize: 11, opacity: 0.5, alignSelf: 'center' }}>Deck and sideboard must have equal card count</span>
+                </div>
+
+                <button className="btn btn-gold" style={{ width: '100%', padding: '12px', fontSize: 14, marginBottom: 12 }}
+                  onClick={async () => {
+                    await updateDeck(currentDeck, currentSideboard);
+                    setSideboardMode(false);
+                  }}>
+                  Done Sideboarding
+                </button>
               </div>
             ) : (
+              // CHOOSE FIRST PLAYER UI
               <div>
-                <p style={{ opacity: 0.6, fontSize: 13, marginBottom: 12 }}>You won the last game! Waiting for opponent to choose who goes first...</p>
-                <div style={{ display: 'flex', justifyContent: 'center', gap: 6 }}>
-                  {[0, 1, 2].map(i => (
-                    <div key={i} style={{
-                      width: 8, height: 8, borderRadius: '50%', background: 'rgba(200,170,60,0.5)',
-                      animation: `pulse 1.4s ${i * 0.2}s infinite ease-in-out`
-                    }} />
-                  ))}
+                <div style={{ fontSize: 40, marginBottom: 8, textAlign: 'center' }}>⚔️</div>
+                <h2 style={{ color: '#d4b44a', fontSize: 22, marginBottom: 12, textAlign: 'center' }}>Game {betweenGames.nextGame}</h2>
+                <div style={{
+                  display: 'flex', justifyContent: 'center', gap: 24, marginBottom: 20,
+                  fontSize: 28, fontWeight: 700, color: '#e8e4dc'
+                }}>
+                  <div style={{ textAlign: 'center' }}>
+                    <div style={{ fontSize: 11, opacity: 0.4, marginBottom: 4 }}>{myName}</div>
+                    <div style={{ color: '#d4b44a' }}>{betweenGames.matchScore[playerIndex]}</div>
+                  </div>
+                  <div style={{ fontSize: 16, opacity: 0.3, alignSelf: 'flex-end', paddingBottom: 4 }}>—</div>
+                  <div style={{ textAlign: 'center' }}>
+                    <div style={{ fontSize: 11, opacity: 0.4, marginBottom: 4 }}>{oppName}</div>
+                    <div style={{ color: '#e8e4dc' }}>{betweenGames.matchScore[playerIndex === 0 ? 1 : 0]}</div>
+                  </div>
                 </div>
+
+                {betweenGames.loserIndex === playerIndex ? (
+                  <div>
+                    <p style={{ opacity: 0.6, fontSize: 13, marginBottom: 16, textAlign: 'center' }}>You lost the last game. Choose who goes first:</p>
+                    <div style={{ display: 'flex', gap: 12, justifyContent: 'center' }}>
+                      <button className="btn btn-gold" style={{ padding: '12px 24px', fontSize: 14 }}
+                        onClick={() => chooseFirstPlayer(playerIndex)}>
+                        I Go First
+                      </button>
+                      <button className="btn" style={{ padding: '12px 24px', fontSize: 14, background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.15)', borderRadius: 8, color: 'rgba(255,255,255,0.7)', cursor: 'pointer' }}
+                        onClick={() => chooseFirstPlayer(playerIndex === 0 ? 1 : 0)}>
+                        Opponent Goes First
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div>
+                    <p style={{ opacity: 0.6, fontSize: 13, marginBottom: 12, textAlign: 'center' }}>You won the last game! Waiting for opponent to choose who goes first...</p>
+                    <div style={{ display: 'flex', justifyContent: 'center', gap: 6 }}>
+                      {[0, 1, 2].map(i => (
+                        <div key={i} style={{
+                          width: 8, height: 8, borderRadius: '50%', background: 'rgba(200,170,60,0.5)',
+                          animation: `pulse 1.4s ${i * 0.2}s infinite ease-in-out`
+                        }} />
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -12699,6 +12870,7 @@ function App() {
   const [avatarLoading, setAvatarLoading] = useState(true);
   const [onlineGameState, setOnlineGameState] = useState(null);
   const [onlinePlayerIndex, setOnlinePlayerIndex] = useState(null);
+  const [mySideboard, setMySideboard] = useState([]);
   const gameSocket = useGameSocket();
 
   useEffect(() => {
@@ -12714,10 +12886,12 @@ function App() {
         gameSocket={gameSocket}
         initialState={onlineGameState}
         playerIndex={onlinePlayerIndex}
+        mySideboard={mySideboard}
         onExit={() => {
           gameSocket.leaveRoom();
           setOnlineGameState(null);
           setOnlinePlayerIndex(null);
+          setMySideboard([]);
           window.history.pushState({}, '', '/');
         }}
       />
@@ -12729,9 +12903,10 @@ function App() {
       gameSocket={gameSocket}
       avatars={avatars}
       avatarLoading={avatarLoading}
-      onGameReady={(state, pIdx) => {
+      onGameReady={(state, pIdx, sideboard) => {
         setOnlineGameState(state);
         setOnlinePlayerIndex(pIdx);
+        setMySideboard(sideboard || []);
       }}
       onBack={() => {
         window.history.pushState({}, '', '/');

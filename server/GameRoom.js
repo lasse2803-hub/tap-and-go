@@ -21,8 +21,8 @@ class GameRoom {
 
     // Player slots
     this.players = [
-      { nickname: hostNickname, playerId: this.generatePlayerId(), socketId: null, connected: false, deck: null, ready: false, avatar: null },
-      { nickname: null, playerId: null, socketId: null, connected: false, deck: null, ready: false, avatar: null }
+      { nickname: hostNickname, playerId: this.generatePlayerId(), socketId: null, connected: false, deck: null, sideboard: null, ready: false, avatar: null },
+      { nickname: null, playerId: null, socketId: null, connected: false, deck: null, sideboard: null, ready: false, avatar: null }
     ];
     this.hostPlayerId = this.players[0].playerId;
 
@@ -100,16 +100,18 @@ class GameRoom {
   /**
    * Submit a deck for a player
    */
-  submitDeck(playerIndex, deck, avatar) {
+  submitDeck(playerIndex, deck, avatar, sideboard) {
     if (playerIndex < 0 || playerIndex > 1) return { error: 'Invalid player' };
     if (!deck || !Array.isArray(deck) || deck.length === 0) return { error: 'Invalid deck' };
 
     this.players[playerIndex].deck = deck;
+    this.players[playerIndex].sideboard = sideboard || [];
     this.players[playerIndex].ready = true;
     if (avatar) this.players[playerIndex].avatar = avatar;
     this.lastActivity = Date.now();
 
-    console.log(`[GameRoom ${this.id}] Player ${playerIndex} submitted deck (${deck.length} cards)`);
+    const sideboardInfo = this.players[playerIndex].sideboard.length > 0 ? ` + ${this.players[playerIndex].sideboard.length} sideboard` : '';
+    console.log(`[GameRoom ${this.id}] Player ${playerIndex} submitted deck (${deck.length} cards${sideboardInfo})`);
     return { ok: true };
   }
 
@@ -253,6 +255,19 @@ class GameRoom {
     this.status = 'between-games';
     const loserIndex = winnerIndex === 0 ? 1 : 0;
     return { matchOver: false, loser: loserIndex, nextGame: this.matchGame + 1, matchScore: [...this.matchScore] };
+  }
+
+  /**
+   * Update deck after sideboard swap (Bo3 between games)
+   */
+  updateDeck(playerIndex, newDeck, newSideboard) {
+    if (playerIndex < 0 || playerIndex > 1) return { error: 'Invalid player' };
+    if (!newDeck || !Array.isArray(newDeck) || newDeck.length === 0) return { error: 'Invalid deck' };
+    this.players[playerIndex].deck = newDeck;
+    this.players[playerIndex].sideboard = newSideboard || [];
+    this.lastActivity = Date.now();
+    console.log(`[GameRoom ${this.id}] Player ${playerIndex} updated deck after sideboard swap (${newDeck.length} cards)`);
+    return { ok: true };
   }
 
   /**
