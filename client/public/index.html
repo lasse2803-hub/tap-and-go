@@ -13030,55 +13030,7 @@ function OnlineSetup({ gameSocket, onGameReady, onBack, avatars, avatarLoading }
           <h2 style={{ marginBottom: 8 }}>Deck Ready!</h2>
           <p style={{ opacity: 0.5, fontSize: 13, marginBottom: 8 }}>{myDeck.length} cards selected</p>
 
-          {/* Save Deck to My Decks */}
-          {!deckSaved && !showSaveDeck && (
-            <button onClick={() => setShowSaveDeck(true)}
-              style={{
-                background: 'rgba(100,180,255,0.08)', border: '1px solid rgba(100,180,255,0.2)',
-                borderRadius: 8, padding: '8px 16px', color: '#7cb8ff', cursor: 'pointer',
-                fontSize: 12, marginBottom: 16, transition: 'all 0.2s',
-              }}>
-              Save to My Decks
-            </button>
-          )}
-          {showSaveDeck && !deckSaved && (
-            <div style={{
-              background: 'rgba(100,180,255,0.06)', border: '1px solid rgba(100,180,255,0.15)',
-              borderRadius: 8, padding: 12, marginBottom: 16, maxWidth: 340, margin: '0 auto 16px',
-            }}>
-              <div style={{ display: 'flex', gap: 8 }}>
-                <input value={saveDeckName} onChange={e => setSaveDeckName(e.target.value)}
-                  placeholder="Deck name" maxLength={40} autoFocus
-                  style={{ flex: 1, padding: '8px 12px', fontSize: 13, textAlign: 'center' }}
-                  onKeyDown={e => {
-                    if (e.key === 'Enter' && saveDeckName.trim()) {
-                      const text = deckToArenaText(myDeck, mySideboard);
-                      saveDeckToStorage(saveDeckName.trim(), text);
-                      setDeckSaved(true);
-                      setShowSaveDeck(false);
-                    }
-                  }}
-                />
-                <button className="btn btn-gold text-xs" style={{ padding: '8px 14px' }}
-                  disabled={!saveDeckName.trim()}
-                  onClick={() => {
-                    const text = deckToArenaText(myDeck, mySideboard);
-                    saveDeckToStorage(saveDeckName.trim(), text);
-                    setDeckSaved(true);
-                    setShowSaveDeck(false);
-                  }}>
-                  Save
-                </button>
-                <button className="btn text-xs" style={{ padding: '8px 8px', opacity: 0.5 }}
-                  onClick={() => setShowSaveDeck(false)}>Cancel</button>
-              </div>
-            </div>
-          )}
-          {deckSaved && (
-            <div style={{ fontSize: 12, color: '#5eba7d', marginBottom: 16 }}>
-              Deck saved to My Decks
-            </div>
-          )}
+          {/* Save to My Decks removed — belongs in deck builder, not lobby */}
 
           {/* Match Type selector */}
           <div style={{ marginBottom: 16, maxWidth: 360, margin: '0 auto 16px' }}>
