@@ -7247,17 +7247,42 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       etbEffects.push(...otherCreatureETBs);
     }
 
-    // Auto-trigger library search ETB effects (Solemn Simulacrum, Farhaven Elf, etc.)
-    const searchEffect = etbEffects.find(e => e.actionType === 'search_basic_land' || e.actionType === 'search_land');
-    if (searchEffect) {
-      const filter = searchEffect.actionType === 'search_basic_land' ? 'basicLand' : 'land';
-      setTimeout(() => {
-        setLibrarySearch({ pIdx, filter, tapped: searchEffect.tapped || false, source: card.name });
-      }, 300);
-    }
+    // Auto-apply ETB damage to opponent in 1v1 (Viashino Pyromancer, etc.)
+    // In 1v1 there's only one valid target, so auto-deal the damage instead of requiring manual click.
+    const dmgPlayerPwEffect = etbEffects.find(e => e.actionType === 'etb_damage_player_pw');
+    if (dmgPlayerPwEffect) {
+      const oppIdx = pIdx === 0 ? 1 : 0;
+      const oppPWs = getState(oppIdx).battlefield.filter(c => isPlaneswalker(c));
+      if (oppPWs.length === 0) {
+        // No planeswalkers — auto-deal damage to opponent
+        setTimeout(() => {
+          setState(oppIdx, prev => ({ ...prev, life: prev.life - dmgPlayerPwEffect.damage }));
+          markDealtDamage(oppIdx);
+          SFX.playerDamage();
+          addGameLog(pIdx, '🔥', `${card.name} deals ${dmgPlayerPwEffect.damage} damage to ${getState(oppIdx).name}`, [card.id]);
+        }, 500);
+        // Remove this effect from the reminder (keep others if any)
+        const remainingEffects = etbEffects.filter(e => e !== dmgPlayerPwEffect);
+        if (remainingEffects.length > 0) {
+          setEtbReminder({ pIdx, card, effects: remainingEffects });
+        }
+      } else {
+        // Has planeswalkers — show targeting popup so player can choose
+        setEtbReminder({ pIdx, card, effects: etbEffects });
+      }
+    } else {
+      // Auto-trigger library search ETB effects (Solemn Simulacrum, Farhaven Elf, etc.)
+      const searchEffect = etbEffects.find(e => e.actionType === 'search_basic_land' || e.actionType === 'search_land');
+      if (searchEffect) {
+        const filter = searchEffect.actionType === 'search_basic_land' ? 'basicLand' : 'land';
+        setTimeout(() => {
+          setLibrarySearch({ pIdx, filter, tapped: searchEffect.tapped || false, source: card.name });
+        }, 300);
+      }
 
-    if (etbEffects.length > 0) {
-      setEtbReminder({ pIdx, card, effects: etbEffects });
+      if (etbEffects.length > 0) {
+        setEtbReminder({ pIdx, card, effects: etbEffects });
+      }
     }
     checkCastTriggers(pIdx, card);
   };
@@ -8343,8 +8368,9 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     } else {
       const defaultTargets = {};
       combatState.attackers.forEach(id => { defaultTargets[id] = 'player'; });
-      // Go to combat-respond so defender can cast instants/flash before blockers
-      setCombatState(prev => ({ ...prev, phase: 'combat-respond', attackTargets: defaultTargets, blocks: {}, selectedBlocker: null }));
+      // Go to combat-respond so BOTH players can cast instants/flash before blockers
+      // attackerPassed: attacker must pass priority before defender can proceed to blockers
+      setCombatState(prev => ({ ...prev, phase: 'combat-respond', attackTargets: defaultTargets, blocks: {}, selectedBlocker: null, attackerPassed: false }));
     }
 
     // Check for attack triggers on ALL creatures (including creature lands)
@@ -8522,7 +8548,12 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
 
   const confirmPwTargets = () => {
     if (!combatState || combatState.phase !== 'pw-targets') return;
-    setCombatState(prev => ({ ...prev, phase: 'combat-respond', blocks: {}, selectedBlocker: null }));
+    setCombatState(prev => ({ ...prev, phase: 'combat-respond', blocks: {}, selectedBlocker: null, attackerPassed: false }));
+  };
+
+  const passCombatPriority = () => {
+    if (!combatState || combatState.phase !== 'combat-respond') return;
+    setCombatState(prev => ({ ...prev, attackerPassed: true }));
   };
 
   const proceedToBlockers = () => {
@@ -9242,12 +9273,12 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     }
 
     // Unified combat SFX — only ONE sound per combat resolution to avoid overlap.
-    // Priority: creature death > player damage > generic combat hit
+    // Priority: creature death > combat damage (Creatures_Hit.wav for ALL combat)
+    // NOTE: SFX.playerDamage() uses Life_Loss_Spells.wav which sounds like spell damage,
+    // so we use SFX.combatDamage() (Creatures_Hit.wav) for all combat damage instead.
     if (killAttacker.length > 0 || killDefender.length > 0) {
       SFX.creatureDeath();
-    } else if (damageToDefender > 0) {
-      SFX.playerDamage();
-    } else if (combatPairs.length > 0) {
+    } else if (damageToDefender > 0 || combatPairs.length > 0) {
       SFX.combatDamage();
     }
 
@@ -10128,6 +10159,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                 const defendingPlayer = activePlayer === 0 ? 1 : 0;
                 const isDefender = onlineMode && onlinePlayerIndex === defendingPlayer;
                 const isAttacker = onlineMode && onlinePlayerIndex === activePlayer;
+                const attackerHasPassed = combatState.attackerPassed;
                 return (
                   <>
                     {/* In online mode: each player only sees their own respond button */}
@@ -10139,9 +10171,24 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                       <button className="btn" style={{ borderColor: 'rgba(200,170,60,0.3)', color: '#e8c96a', fontSize: 11 }}
                         onClick={() => respondInCombat(activePlayer)}>⚡ {getState(activePlayer).name}: Respond</button>
                     )}
-                    {/* Only defender proceeds to blockers in online mode */}
-                    {(!onlineMode || isDefender) && (
+                    {/* Attacker must pass priority before defender can proceed to blockers (Prowess etc.) */}
+                    {onlineMode && isAttacker && !attackerHasPassed && (
+                      <button className="btn" style={{ padding: '4px 16px', fontSize: 11, borderColor: 'rgba(200,170,60,0.4)', color: '#e8c96a', background: 'rgba(200,170,60,0.08)' }}
+                        onClick={passCombatPriority}>✓ Pass Priority</button>
+                    )}
+                    {onlineMode && isAttacker && attackerHasPassed && (
+                      <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.4)', fontStyle: 'italic', alignSelf: 'center' }}>
+                        Waiting for {getState(defendingPlayer).name} to proceed...
+                      </span>
+                    )}
+                    {/* Defender: Proceed to Blockers — in online mode, only after attacker passes priority */}
+                    {(!onlineMode || (isDefender && attackerHasPassed)) && (
                       <button className="btn btn-primary" onClick={proceedToBlockers}>Proceed to Blockers →</button>
+                    )}
+                    {onlineMode && isDefender && !attackerHasPassed && (
+                      <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.4)', fontStyle: 'italic', alignSelf: 'center' }}>
+                        Waiting for {getState(activePlayer).name} to pass priority...
+                      </span>
                     )}
                   </>
                 );
@@ -10604,11 +10651,15 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       })()}
 
       {/* Instant Casting Overlay — non-active player casts instant/flash */}
-      {instantCasting && (() => {
+      {instantCasting && !spellTargeting && (() => {
         const ip = getState(instantCasting.pIdx);
         const instantCards = ip.hand.filter(c => canCastAtInstantSpeed(c));
         const cyclingCards = ip.hand.filter(c => !canCastAtInstantSpeed(c) && getCyclingCost(c));
         const isRespondingToStack = instantCasting.returnToStack && spellStack.length > 0;
+        // Auto-close if no castable cards in hand
+        if (instantCards.length === 0 && cyclingCards.length === 0) {
+          setTimeout(() => setInstantCasting(null), 1500);
+        }
         return (
           <div style={{
             position: 'fixed', bottom: 10, left: '50%', transform: 'translateX(-50%)',
