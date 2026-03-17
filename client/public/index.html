@@ -10656,10 +10656,6 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         const instantCards = ip.hand.filter(c => canCastAtInstantSpeed(c));
         const cyclingCards = ip.hand.filter(c => !canCastAtInstantSpeed(c) && getCyclingCost(c));
         const isRespondingToStack = instantCasting.returnToStack && spellStack.length > 0;
-        // Auto-close if no castable cards in hand
-        if (instantCards.length === 0 && cyclingCards.length === 0) {
-          setTimeout(() => setInstantCasting(null), 1500);
-        }
         return (
           <div style={{
             position: 'fixed', bottom: 10, left: '50%', transform: 'translateX(-50%)',
