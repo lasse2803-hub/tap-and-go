@@ -13341,6 +13341,20 @@ function App() {
   const [mySideboard, setMySideboard] = useState([]);
   const gameSocket = useGameSocket();
 
+  // Play intro theme on first load
+  useEffect(() => {
+    const introSound = new Audio('sounds/NBA_on_NBC.mp3');
+    introSound.volume = 0.5;
+    introSound.play().catch(() => {
+      // Browser blocks autoplay — play on first user interaction instead
+      const playOnClick = () => {
+        introSound.play().catch(() => {});
+        document.removeEventListener('click', playOnClick);
+      };
+      document.addEventListener('click', playOnClick);
+    });
+  }, []);
+
   useEffect(() => {
     fetchAvatarImages().then(results => {
       setAvatars(results);
