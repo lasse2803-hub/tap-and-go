@@ -91,15 +91,11 @@
   }
   .bf-planeswalkers:empty { display: none; }
 
-  /* Other permanents — sidebar column */
-  .bf-sidebar {
-    display: flex; flex-direction: column; gap: 3px; padding: 3px;
-    min-width: 62px; max-width: 72px; align-items: center; justify-content: flex-start;
-    background: linear-gradient(180deg, rgba(40,60,140,0.05), rgba(40,60,140,0.02));
-    border: 1px solid rgba(60,80,160,0.06); border-radius: 6px;
-    overflow-y: auto;
+  /* Other permanents — enchantments, artifacts, non-creature tokens */
+  .bf-other {
+    background: linear-gradient(180deg, rgba(100,60,180,0.06), rgba(100,60,180,0.02));
+    border: 1px solid rgba(100,60,180,0.08);
   }
-  .bf-sidebar:empty { display: none; }
 
   /* ===== HAND — Arena style with overlap ===== */
   .hand-zone {
@@ -1869,6 +1865,36 @@ const parseSpellEffects = (card) => {
   const eachLoseMatch = allText.match(/each opponent loses (?:that much|(\d+)) life/);
   if (eachLoseMatch || /each opponent loses.*life.*equal/.test(allText)) {
     effects.push({ type: 'each_opponent_loses_life', description: 'Each opponent loses life' });
+  }
+
+  // Create token (e.g. Advent of the Wurm "Create a 5/5 green Wurm creature token with trample")
+  const createTokenMatch = allText.match(/create\s+(?:a|an|two|three|four)\s+(\d+)\/(\d+)\s+([\w\s,/]+?)\s+creature\s+token(?:\s+with\s+([\w\s,]+))?/i);
+  if (createTokenMatch) {
+    const count = /^(two|three|four)/i.test(allText.match(/create\s+(two|three|four)/i)?.[1] || '') ?
+      ({ two: 2, three: 3, four: 4 })[allText.match(/create\s+(two|three|four)/i)[1].toLowerCase()] : 1;
+    const power = parseInt(createTokenMatch[1]);
+    const toughness = parseInt(createTokenMatch[2]);
+    const colorAndType = createTokenMatch[3].trim();
+    const keywordsStr = createTokenMatch[4] || '';
+    const keywords = keywordsStr ? keywordsStr.split(/,\s*| and /).map(k => k.trim()).filter(Boolean) : [];
+    // Extract the token creature type (last word of colorAndType, e.g. "green Wurm" → "Wurm")
+    const parts = colorAndType.split(/\s+/);
+    const tokenTypeName = parts[parts.length - 1];
+    effects.push({
+      type: 'create_token',
+      count,
+      tokenData: {
+        name: tokenTypeName,
+        isToken: true,
+        type_line: `Token Creature — ${tokenTypeName}`,
+        power, toughness,
+        keywords,
+        tapped: false,
+        counters: {},
+        enteredThisTurn: true,
+      },
+      description: `Create ${count > 1 ? count + ' ' : 'a '}${power}/${toughness} ${tokenTypeName} token${keywords.length ? ' with ' + keywords.join(', ') : ''}`,
+    });
   }
 
   return effects;
@@ -7068,6 +7094,20 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
           }
           break;
         }
+        case 'create_token': {
+          const reskin = card._reskin;
+          for (let ti = 0; ti < (effect.count || 1); ti++) {
+            const tokenCard = { ...effect.tokenData, id: uid() };
+            // Apply reskin: customTokenName and customTokenImage override
+            if (reskin?.customTokenName) tokenCard.name = reskin.customTokenName;
+            if (reskin?.customTokenImage) {
+              tokenCard.tokenImageSmall = reskin.customTokenImage;
+              tokenCard.tokenImageNormal = reskin.customTokenImage;
+            }
+            createToken(pIdx, tokenCard, ti === 0); // play sound only on first token
+          }
+          break;
+        }
         default:
           break;
       }
@@ -7731,8 +7771,8 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                     setState(pIdx, prev => ({
                       ...prev,
                       battlefield: prev.battlefield.map(c =>
-                        c.isToken && c.name === creatureType && !c.image_uris
-                          ? { ...c, image_uris: match.image_uris }
+                        c.isToken && c.name === creatureType && !c.tokenImageSmall
+                          ? { ...c, image_uris: match.image_uris, tokenImageSmall: match.image_uris.small, tokenImageNormal: match.image_uris.normal }
                           : c
                       )
                     }));
@@ -8241,7 +8281,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                   setState(pI, prev => ({
                     ...prev,
                     battlefield: prev.battlefield.map(c =>
-                      c.isToken && c.name === tName && !c.image_uris ? { ...c, image_uris: match.image_uris } : c
+                      c.isToken && c.name === tName && !c.tokenImageSmall ? { ...c, image_uris: match.image_uris, tokenImageSmall: match.image_uris.small, tokenImageNormal: match.image_uris.normal } : c
                     )
                   }));
                 }
@@ -8490,7 +8530,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                       setState(pI, prev => ({
                         ...prev,
                         battlefield: prev.battlefield.map(c =>
-                          c.isToken && c.name === tName && !c.image_uris ? { ...c, image_uris: match.image_uris } : c
+                          c.isToken && c.name === tName && !c.tokenImageSmall ? { ...c, image_uris: match.image_uris, tokenImageSmall: match.image_uris.small, tokenImageNormal: match.image_uris.normal } : c
                         )
                       }));
                     }
@@ -9530,18 +9570,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       </div>
     );
 
-    const renderSidebar = () => other.length === 0 ? null : (
-      <div className="bf-sidebar">
-        {other.map(card => (
-          <CardDisplay key={card.id} card={card} size={56}
-            onClick={() => handleCardClick(card, pIdx, 'battlefield')}
-            onContext={(e) => handleContext(e, card, pIdx, 'battlefield')}
-            extraClass={getCombatClass(card)}
-            devotionData={devotion}
-            showPreview />
-        ))}
-      </div>
-    );
+    /* renderSidebar removed — "other" permanents now use renderBfRow like creatures/lands */
 
     const renderPWSidebar = () => planeswalkers.length === 0 ? null : (
       <div className="bf-planeswalkers">
@@ -9570,24 +9599,24 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       </div>
     );
 
-    /* Arena layout: lands near player, creatures near center, PW + other in sidebars on right */
+    /* Arena layout: lands near player, creatures near center, other permanents between them, PW sidebar on right */
     const battlefieldRows = inverted ? (
       <>
         <div className="bf-main">
           {renderBfRow(lands, 'bf-lands')}
+          {other.length > 0 && renderBfRow(other, 'bf-other')}
           {renderBfRow(creatures, 'bf-creatures')}
         </div>
         {renderPWSidebar()}
-        {renderSidebar()}
       </>
     ) : (
       <>
         <div className="bf-main">
           {renderBfRow(creatures, 'bf-creatures')}
+          {other.length > 0 && renderBfRow(other, 'bf-other')}
           {renderBfRow(lands, 'bf-lands')}
         </div>
         {renderPWSidebar()}
-        {renderSidebar()}
       </>
     );
 
@@ -11253,7 +11282,25 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                 <button className="btn-ok" onClick={() => {
                   const entry = pwAbilityOnStack;
                   setPwAbilityOnStack(null);
-                  setPwReminder({ pIdx: entry.pIdx, card: entry.card, ability: entry.ability });
+                  // Auto-apply "until your next turn" attacker debuff (e.g. Jace +1: attackers get -1/-0)
+                  const abText = (entry.ability.text || '').toLowerCase();
+                  const debuffMatch = abText.match(/until your next turn,?\s+whenever a creature an opponent controls attacks,?\s+it gets (-?\d+)\/(-?\d+)/i);
+                  if (debuffMatch) {
+                    const debuffEffect = {
+                      id: uid(), type: 'attacker_debuff',
+                      power: parseInt(debuffMatch[1]), toughness: parseInt(debuffMatch[2]),
+                      sourceName: entry.card.name, ownerIdx: entry.pIdx, registeredTurn: turnCount,
+                    };
+                    setState(entry.pIdx, prev => ({
+                      ...prev,
+                      untilNextTurnEffects: [...(prev.untilNextTurnEffects || []), debuffEffect],
+                    }));
+                    setCastError({ pIdx: entry.pIdx, message: `🛡️ ${entry.card.name}: Attackers get ${debuffMatch[1]}/${debuffMatch[2]} until your next turn` });
+                    setTimeout(() => setCastError(null), 3000);
+                    setPwReminder(null); // No manual step needed
+                  } else {
+                    setPwReminder({ pIdx: entry.pIdx, card: entry.card, ability: entry.ability });
+                  }
                 }}>✓ OK</button>
               )}
               {(!onlineMode || onlinePlayerIndex === (pwAbilityOnStack.pIdx === 0 ? 1 : 0)) && (
@@ -11261,7 +11308,23 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                   const entry = pwAbilityOnStack;
                   const opponentPIdx = entry.pIdx === 0 ? 1 : 0;
                   setPwAbilityOnStack(null);
-                  setPwReminder({ pIdx: entry.pIdx, card: entry.card, ability: entry.ability });
+                  // Auto-apply "until your next turn" attacker debuff before respond
+                  const abText2 = (entry.ability.text || '').toLowerCase();
+                  const debuffMatch2 = abText2.match(/until your next turn,?\s+whenever a creature an opponent controls attacks,?\s+it gets (-?\d+)\/(-?\d+)/i);
+                  if (debuffMatch2) {
+                    const debuffEffect2 = {
+                      id: uid(), type: 'attacker_debuff',
+                      power: parseInt(debuffMatch2[1]), toughness: parseInt(debuffMatch2[2]),
+                      sourceName: entry.card.name, ownerIdx: entry.pIdx, registeredTurn: turnCount,
+                    };
+                    setState(entry.pIdx, prev => ({
+                      ...prev,
+                      untilNextTurnEffects: [...(prev.untilNextTurnEffects || []), debuffEffect2],
+                    }));
+                    setPwReminder(null);
+                  } else {
+                    setPwReminder({ pIdx: entry.pIdx, card: entry.card, ability: entry.ability });
+                  }
                   setInstantCasting({ pIdx: opponentPIdx });
                 }}>⚡ Respond</button>
               )}
@@ -11768,8 +11831,8 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                                   setState(pwReminder.pIdx, prev => ({
                                     ...prev,
                                     battlefield: prev.battlefield.map(c =>
-                                      c.isToken && c.name === td.name && !c.image_uris
-                                        ? { ...c, image_uris: match.image_uris }
+                                      c.isToken && c.name === td.name && !c.tokenImageSmall
+                                        ? { ...c, image_uris: match.image_uris, tokenImageSmall: match.image_uris.small, tokenImageNormal: match.image_uris.normal }
                                         : c
                                     )
                                   }));
