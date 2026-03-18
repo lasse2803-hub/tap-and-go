@@ -9,7 +9,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
 <script src="https://cdn.socket.io/4.7.4/socket.io.min.js"></script>
 <style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
+  * { margin: 0; padding: 0; box-sizing: border-box; cursor: pointer; }
   body {
     font-family: 'Segoe UI', system-ui, sans-serif;
     background: #0a0a14; color: #e8e4dc; overflow: hidden; height: 100vh;
@@ -4005,7 +4005,8 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
   const [instantCasting, _setInstantCasting] = useState(null); // SYNCED — non-active player casting an instant
   const setInstantCasting = syncSetter(_setInstantCasting);
   const [scryView, setScryView] = useState(null); // { pIdx, count, mode: 'scry'|'surveil' }
-  const [lookTopView, setLookTopView] = useState(null); // { pIdx, cards: [], toHand: N, selected: Set }
+  const [lookTopView, _setLookTopView] = useState(null); // SYNCED — { pIdx, cards: [], toHand: N, selected: Set }
+  const setLookTopView = syncSetter(_setLookTopView);
   const [librarySearch, _setLibrarySearch] = useState(null); // SYNCED — { pIdx, filter, tapped, source }
   const setLibrarySearch = syncSetter(_setLibrarySearch);
   const [endOfTurnRespond, _setEndOfTurnRespond] = useState(false); // SYNCED — waiting for opponent to respond
@@ -4285,6 +4286,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
 
     // Sync library search state (Solemn Simulacrum etc.)
     if (onlineState.librarySearch !== undefined) _setLibrarySearch(onlineState.librarySearch);
+    if (onlineState.lookTopView !== undefined) _setLookTopView(onlineState.lookTopView);
 
     // Sync spell stack (so opponent sees spells being cast)
     if (onlineState.spellStack !== undefined) _setSpellStack(onlineState.spellStack);
@@ -4811,7 +4813,6 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
   };
 
   const drawCard = (pIdx) => {
-    if (onlineMode && pIdx !== onlinePlayerIndex) return;
     const p = getState(pIdx);
     if (p.library.length === 0) {
       // Drawing from empty library = lose the game
@@ -4830,7 +4831,6 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
   };
 
   const shuffleLibrary = (pIdx) => {
-    if (onlineMode && pIdx !== onlinePlayerIndex) return;
     SFX.shuffle();
     setState(pIdx, prev => ({ ...prev, library: shuffle(prev.library) }));
   };
@@ -6062,6 +6062,29 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
           const ueCost = ueMatch ? ueMatch[1] : '?';
           actions.push({ label: `🔄 Unearth (${ueCost})`, fn: () => {
             moveCard(pIdx, card, 'graveyard', 'battlefield');
+          }});
+        }
+        if (cardKws.includes('blitz') || cardOracle.includes('blitz')) {
+          const blitzMatch = cardOracle.match(/blitz\s*((?:\{[^}]+\})+)/);
+          const blitzCost = blitzMatch ? blitzMatch[1] : '?';
+          actions.push({ label: `⚡ Blitz (${blitzCost}) — gains Haste`, fn: () => {
+            setState(pIdx, prev => {
+              const cardInGY = prev.graveyard.find(c => c.id === card.id);
+              if (!cardInGY) return prev;
+              const blitzCard = { ...cardInGY, blitzCast: true };
+              if (!blitzCard.keywords?.some(k => k.toLowerCase() === 'haste')) {
+                blitzCard.keywords = [...(blitzCard.keywords || []), 'Haste'];
+              }
+              return {
+                ...prev,
+                graveyard: prev.graveyard.filter(c => c.id !== card.id),
+                battlefield: [...prev.battlefield, blitzCard],
+              };
+            });
+            SFX.playSpell();
+            addGameLog(pIdx, '⚡', `${card.name} cast with Blitz — gains Haste`, [card.id]);
+            setCastError({ pIdx, message: `⚡ ${card.name} Blitz! (Haste, sacrifice at end of turn, draw on death)` });
+            setTimeout(() => setCastError(null), 3000);
           }});
         }
         if (actions.length > 0 && (cardKws.includes('flashback') || cardKws.includes('jump-start') || cardKws.includes('escape') || cardKws.includes('disturb') || cardKws.includes('unearth'))) {
@@ -9812,7 +9835,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
               </button>
             )}
             <button className="btn text-xs" style={(!isActive || (onlineMode && pIdx !== onlinePlayerIndex)) ? { opacity: 0.5 } : {}}
-              onClick={() => { if (isActive && !(onlineMode && pIdx !== onlinePlayerIndex)) setShowLibrarySearch(pIdx); }}
+              onClick={() => { if (onlineMode && pIdx !== onlinePlayerIndex) return; drawCard(pIdx); }}
               onContextMenu={(e) => {
                 e.preventDefault();
                 // Online mode: disable library context menu for opponent
@@ -9851,11 +9874,11 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                   setTimeout(() => setCastError(null), 2500);
                 }});
                 actions.push({ sep: true });
-                actions.push({ label: '🤚 Draw 1', fn: () => drawCards(pIdx, 1) });
+                actions.push({ label: '🤚 Draw 1', fn: () => drawCard(pIdx) });
                 actions.push({ label: '🤚 Draw X...', fn: () => {
                   const x = prompt('How many cards to draw?');
                   const n = parseInt(x);
-                  if (!isNaN(n) && n > 0) drawCards(pIdx, n);
+                  if (!isNaN(n) && n > 0) { for (let di = 0; di < n; di++) drawCard(pIdx); }
                 }});
                 actions.push({ label: '💀 Mill 1', fn: () => millCards(pIdx, 1) });
                 actions.push({ label: '💀 Mill X...', fn: () => {
