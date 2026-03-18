@@ -4113,6 +4113,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       modalChoice,
       searchExile,
       abilityActivated,
+      lookTopView,
     };
     // Bundle any pending log entries into this broadcast
     // (avoids race condition where separate log broadcast triggers throttle
@@ -4274,7 +4275,15 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     }
     if (onlineState.currentPhase) _setCurrentPhase(onlineState.currentPhase);
     if (onlineState.turnNumber) _setTurnCount(onlineState.turnNumber);
-    if (onlineState.combatState !== undefined) _setCombatState(onlineState.combatState);
+    if (onlineState.combatState !== undefined) {
+      const incomingVer = onlineState.combatState?._v || 0;
+      const currentVer = combatStateVersionRef.current;
+      // Only accept if incoming version is newer (prevents stale overwrites)
+      if (incomingVer >= currentVer) {
+        combatStateVersionRef.current = incomingVer;
+        _setCombatState(onlineState.combatState);
+      }
+    }
 
     // Sync mulligan state (RAW setters — no broadcast trigger)
     if (onlineState.mulliganPhase !== undefined) _setMulliganPhase(onlineState.mulliganPhase);
@@ -8040,9 +8049,23 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
   const setTurnCount = syncSetter(_setTurnCount);
   const setCurrentPhase = syncSetter(_setCurrentPhase);
 
-  // Combat system state
-  const [combatState, _setCombatState] = useState(null); // SYNCED
-  const setCombatState = syncSetter(_setCombatState);
+  // Combat system state — versioned to prevent stale sync overwrites
+  const [combatState, __setCombatState] = useState(null); // SYNCED
+  const combatStateVersionRef = useRef(0);
+  const _setCombatState = (v) => __setCombatState(v); // raw setter for receiving
+  const setCombatState = (v) => {
+    combatStateVersionRef.current++;
+    const ver = combatStateVersionRef.current;
+    if (typeof v === 'function') {
+      __setCombatState(prev => {
+        const next = v(prev);
+        return next ? { ...next, _v: ver } : null;
+      });
+    } else {
+      __setCombatState(v ? { ...v, _v: ver } : null);
+    }
+    if (onlineMode && onlineSyncNeededRef) onlineSyncNeededRef.current = true;
+  };
   const combatStateRef = useRef(combatState);
   combatStateRef.current = combatState;
   const [combatLog, setCombatLog] = useState(null);
