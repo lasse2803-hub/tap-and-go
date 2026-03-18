@@ -9785,6 +9785,14 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                 </div>
               );
             })()}
+            {/* Graveyard counter — always visible for Drown in the Loch, mill tracking */}
+            {p.graveyard.length > 0 && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 3, fontSize: 10, padding: '1px 6px', borderRadius: 4, background: p.graveyard.length >= 8 ? 'rgba(180,60,220,0.12)' : 'rgba(255,255,255,0.03)', border: p.graveyard.length >= 8 ? '1px solid rgba(180,60,220,0.25)' : '1px solid rgba(255,255,255,0.04)', transition: 'all 0.3s' }}
+                title={`${p.graveyard.length} cards in graveyard${p.graveyard.length >= 8 ? ' — Drown in the Loch / Rogues threshold met!' : ''}`}>
+                <span style={{ fontSize: 9, opacity: 0.5, fontWeight: 600, letterSpacing: 0.5 }}>GY</span>
+                <span style={{ fontWeight: 700, fontSize: 11, color: p.graveyard.length >= 8 ? '#c080e0' : 'rgba(255,255,255,0.6)' }}>{p.graveyard.length}</span>
+              </div>
+            )}
           </div>
           <div className="flex gap-1">
             {isActive && isCommander && p.commandZone.length > 0 && (
