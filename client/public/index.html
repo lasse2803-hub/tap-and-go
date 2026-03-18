@@ -6067,24 +6067,12 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         if (cardKws.includes('blitz') || cardOracle.includes('blitz')) {
           const blitzMatch = cardOracle.match(/blitz\s*((?:\{[^}]+\})+)/);
           const blitzCost = blitzMatch ? blitzMatch[1] : '?';
-          actions.push({ label: `⚡ Blitz (${blitzCost}) — gains Haste`, fn: () => {
-            setState(pIdx, prev => {
-              const cardInGY = prev.graveyard.find(c => c.id === card.id);
-              if (!cardInGY) return prev;
-              const blitzCard = { ...cardInGY, blitzCast: true };
-              if (!blitzCard.keywords?.some(k => k.toLowerCase() === 'haste')) {
-                blitzCard.keywords = [...(blitzCard.keywords || []), 'Haste'];
-              }
-              return {
-                ...prev,
-                graveyard: prev.graveyard.filter(c => c.id !== card.id),
-                battlefield: [...prev.battlefield, blitzCard],
-              };
-            });
+          actions.push({ label: `⚡ Blitz (${blitzCost})`, fn: () => {
+            moveCard(pIdx, card, 'graveyard', 'battlefield');
             SFX.playSpell();
-            addGameLog(pIdx, '⚡', `${card.name} cast with Blitz — gains Haste`, [card.id]);
-            setCastError({ pIdx, message: `⚡ ${card.name} Blitz! (Haste, sacrifice at end of turn, draw on death)` });
-            setTimeout(() => setCastError(null), 3000);
+            addGameLog(pIdx, '⚡', `${card.name} cast with Blitz — remember: give Haste via buff, sacrifice at end of turn, draw on death`, [card.id]);
+            setCastError({ pIdx, message: `⚡ ${card.name} Blitz! Give Haste via right-click → Temp Buff. Sacrifice at end of turn. Draw a card when it dies.` });
+            setTimeout(() => setCastError(null), 5000);
           }});
         }
         if (actions.length > 0 && (cardKws.includes('flashback') || cardKws.includes('jump-start') || cardKws.includes('escape') || cardKws.includes('disturb') || cardKws.includes('unearth'))) {
