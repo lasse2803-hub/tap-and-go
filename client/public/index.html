@@ -6185,6 +6185,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
   const [etbReminder, setEtbReminder] = useState(null); // { pIdx, card, effects[] }
   const [modalChoice, _setModalChoice] = useState(null); // SYNCED — { pIdx, card, triggerType, choices: [{ label, icon, action }] }
   const setModalChoice = syncSetter(_setModalChoice);
+  const [farewellChoice, setFarewellChoice] = useState(null); // { pIdx, card, categories, selected: Set } — Farewell "choose one or more" modal
   const [cardInfoOverlay, setCardInfoOverlay] = useState(null); // { card } — shows card info & rulings overlay
   const [discardChoice, setDiscardChoice] = useState(null); // { pIdx, selected: [cardId, ...] } — cleanup step discard to hand size
 
@@ -6980,56 +6981,9 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
           break;
         }
         case 'farewell': {
-          // Farewell-style: show a modal to choose which categories to exile
+          // Farewell-style: open in-game modal to choose one or more categories
           const categories = effect.categories || [];
-          const choices = categories.map(c => c.charAt(0).toUpperCase() + c.slice(1)).join(', ');
-          const selected = prompt(`Choose which to exile (comma-separated):\nAvailable: ${choices}\n\nType e.g. "creatures, enchantments" or "all":`);
-          if (selected) {
-            const sel = selected.toLowerCase();
-            const doAll = sel.includes('all');
-            let totalExiled = 0;
-
-            if (doAll || sel.includes('creature')) {
-              [0, 1].forEach(pi => {
-                setState(pi, prev => {
-                  const toExile = prev.battlefield.filter(c => isCreature(c));
-                  totalExiled += toExile.length;
-                  return { ...prev, battlefield: prev.battlefield.filter(c => !isCreature(c)), exile: [...prev.exile, ...toExile.map(c => ({ ...c, tapped: false }))] };
-                });
-              });
-            }
-            if (doAll || sel.includes('artifact')) {
-              [0, 1].forEach(pi => {
-                setState(pi, prev => {
-                  const toExile = prev.battlefield.filter(c => isArtifact(c) && !isCreature(c)); // avoid double-exile of artifact creatures
-                  totalExiled += toExile.length;
-                  return { ...prev, battlefield: prev.battlefield.filter(c => !(isArtifact(c) && !isCreature(c))), exile: [...prev.exile, ...toExile.map(c => ({ ...c, tapped: false }))] };
-                });
-              });
-            }
-            if (doAll || sel.includes('enchantment')) {
-              [0, 1].forEach(pi => {
-                setState(pi, prev => {
-                  const toExile = prev.battlefield.filter(c => isEnchantment(c));
-                  totalExiled += toExile.length;
-                  return { ...prev, battlefield: prev.battlefield.filter(c => !isEnchantment(c)), exile: [...prev.exile, ...toExile.map(c => ({ ...c, tapped: false }))] };
-                });
-              });
-            }
-            if (doAll || sel.includes('graveyard')) {
-              [0, 1].forEach(pi => {
-                setState(pi, prev => {
-                  totalExiled += prev.graveyard.length;
-                  return { ...prev, exile: [...prev.exile, ...prev.graveyard], graveyard: [] };
-                });
-              });
-            }
-
-            SFX.toExile();
-            setCastError({ pIdx, message: `Farewell: Exiled ${totalExiled} card(s)` });
-            setTimeout(() => setCastError(null), 2500);
-            setTimeout(() => cleanupAttachments([0, 1]), 50);
-          }
+          setFarewellChoice({ pIdx, card, categories, selected: new Set() });
           break;
         }
         case 'prevent_combat_damage':
@@ -7173,6 +7127,57 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
 
   // Check if a card is an adventure card with two faces
   const isAdventure = (card) => card.layout === 'adventure' && card.card_faces && card.card_faces.length >= 2;
+  // Execute Farewell modal choice — exile selected categories
+  const executeFarewellChoice = () => {
+    if (!farewellChoice || farewellChoice.selected.size === 0) return;
+    const { pIdx, selected } = farewellChoice;
+    let totalExiled = 0;
+
+    if (selected.has('creatures')) {
+      [0, 1].forEach(pi => {
+        setState(pi, prev => {
+          const toExile = prev.battlefield.filter(c => isCreature(c));
+          totalExiled += toExile.length;
+          return { ...prev, battlefield: prev.battlefield.filter(c => !isCreature(c)), exile: [...prev.exile, ...toExile.map(c => ({ ...c, tapped: false }))] };
+        });
+      });
+    }
+    if (selected.has('artifacts')) {
+      [0, 1].forEach(pi => {
+        setState(pi, prev => {
+          const toExile = prev.battlefield.filter(c => isArtifact(c) && !isCreature(c));
+          totalExiled += toExile.length;
+          return { ...prev, battlefield: prev.battlefield.filter(c => !(isArtifact(c) && !isCreature(c))), exile: [...prev.exile, ...toExile.map(c => ({ ...c, tapped: false }))] };
+        });
+      });
+    }
+    if (selected.has('enchantments')) {
+      [0, 1].forEach(pi => {
+        setState(pi, prev => {
+          const toExile = prev.battlefield.filter(c => isEnchantment(c));
+          totalExiled += toExile.length;
+          return { ...prev, battlefield: prev.battlefield.filter(c => !isEnchantment(c)), exile: [...prev.exile, ...toExile.map(c => ({ ...c, tapped: false }))] };
+        });
+      });
+    }
+    if (selected.has('graveyards')) {
+      [0, 1].forEach(pi => {
+        setState(pi, prev => {
+          totalExiled += prev.graveyard.length;
+          return { ...prev, exile: [...prev.exile, ...prev.graveyard], graveyard: [] };
+        });
+      });
+    }
+
+    SFX.toExile();
+    const chosen = [...selected].map(s => s.charAt(0).toUpperCase() + s.slice(1)).join(', ');
+    addGameLog(pIdx, '💫', `Farewell: Exiled ${chosen} (${totalExiled} cards)`);
+    setCastError({ pIdx, message: `Farewell: Exiled ${chosen} — ${totalExiled} card(s)` });
+    setTimeout(() => setCastError(null), 3000);
+    setTimeout(() => cleanupAttachments([0, 1]), 50);
+    setFarewellChoice(null);
+  };
+
   const getAdventureFace = (card) => card.card_faces?.[1]; // The adventure (instant/sorcery) face
   const getCreatureFace = (card) => card.card_faces?.[0]; // The creature face
 
@@ -11589,6 +11594,74 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                   <span style={{ textTransform: 'capitalize' }}>{choice.label}</span>
                 </button>
               ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Farewell "Choose One or More" Modal */}
+      {farewellChoice && (!onlineMode || onlinePlayerIndex === farewellChoice.pIdx) && (
+        <div style={{
+          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+          background: 'rgba(0,0,0,0.7)', zIndex: 1600,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          animation: 'fadeIn 0.2s ease',
+        }}>
+          <div style={{
+            background: 'linear-gradient(160deg, #1a1830, #14122a)', borderRadius: 16, padding: '20px 28px',
+            border: '1px solid rgba(255,180,40,0.4)', boxShadow: '0 12px 48px rgba(0,0,0,0.8), 0 0 30px rgba(255,180,40,0.1)',
+            maxWidth: 420, width: '90%', textAlign: 'center',
+          }}>
+            <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: 2, color: 'rgba(255,180,40,0.6)', marginBottom: 4, fontWeight: 700 }}>
+              💫 {getDisplayName(farewellChoice.card)}
+            </div>
+            <div style={{ fontSize: 15, fontWeight: 700, color: '#e8d8a0', marginBottom: 6 }}>
+              Choose One or More
+            </div>
+            <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.35)', marginBottom: 16, fontStyle: 'italic' }}>
+              Select which categories to exile, then confirm.
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 16 }}>
+              {farewellChoice.categories.map(cat => {
+                const isOn = farewellChoice.selected.has(cat);
+                const icons = { artifacts: '⚙️', creatures: '🐉', enchantments: '✨', graveyards: '💀' };
+                const labels = { artifacts: 'Exile all artifacts', creatures: 'Exile all creatures', enchantments: 'Exile all enchantments', graveyards: 'Exile all graveyards' };
+                return (
+                  <button key={cat} className="btn" style={{
+                    padding: '10px 16px', fontSize: 13, fontWeight: 600,
+                    background: isOn ? 'rgba(255,180,40,0.2)' : 'rgba(255,180,40,0.04)',
+                    border: isOn ? '2px solid rgba(255,180,40,0.6)' : '1px solid rgba(255,180,40,0.15)',
+                    borderRadius: 8, color: isOn ? '#ffd060' : '#e8e4dc',
+                    cursor: 'pointer', transition: 'all 0.15s ease', textAlign: 'left',
+                    display: 'flex', alignItems: 'center', gap: 10,
+                  }}
+                  onClick={() => {
+                    setFarewellChoice(prev => {
+                      const next = new Set(prev.selected);
+                      if (next.has(cat)) next.delete(cat); else next.add(cat);
+                      return { ...prev, selected: next };
+                    });
+                  }}>
+                    <span style={{ fontSize: 20 }}>{icons[cat] || '📦'}</span>
+                    <span>{labels[cat] || cat}</span>
+                    {isOn && <span style={{ marginLeft: 'auto', fontSize: 16 }}>✓</span>}
+                  </button>
+                );
+              })}
+            </div>
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'center' }}>
+              <button className="btn btn-gold" style={{ padding: '8px 24px', fontSize: 13 }}
+                disabled={farewellChoice.selected.size === 0}
+                onClick={executeFarewellChoice}>
+                ✦ Confirm ({farewellChoice.selected.size} selected)
+              </button>
+              <button className="btn" style={{ padding: '8px 16px', fontSize: 11 }}
+                onClick={() => {
+                  // Select all
+                  setFarewellChoice(prev => ({ ...prev, selected: new Set(prev.categories) }));
+                }}>
+                Select All
+              </button>
             </div>
           </div>
         </div>
