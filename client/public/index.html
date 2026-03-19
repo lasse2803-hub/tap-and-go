@@ -7490,7 +7490,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
           { label: `Overload (${overloadCostStr})${!canAffordOverload ? ' — Not enough mana' : ''}`, icon: '🌊', action: 'overload_mode', modeText: 'overload', costStr: overloadCostStr,
             disabled: !canAffordOverload },
         ];
-        pendingSpellModalRef.current = { pIdx, card, asAdventure: false, fromExile: false, displayName, spellToCheck: card };
+        pendingSpellModalRef.current = { pIdx, card, asAdventure: false, fromExile: false, displayName, spellToCheck: card, originalManaPool: { ...p.manaPool } };
         setModalChoice({ pIdx, card, triggerType: 'spell', choices });
         return;
       }
@@ -7560,7 +7560,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
             if (/return/i.test(text)) icon = '↩️';
             return { label: text, icon, action: 'spell_mode', modeText: text };
           });
-          pendingSpellModalRef.current = { pIdx, card, asAdventure, fromExile: isFromExile, displayName, spellToCheck };
+          pendingSpellModalRef.current = { pIdx, card, asAdventure, fromExile: isFromExile, displayName, spellToCheck, originalManaPool: { ...p.manaPool } };
           setModalChoice({ pIdx, card: spellToCheck, triggerType: 'spell', choices });
           addGameLog(pIdx, '🃏', `${getState(pIdx).name} casts ${displayName}`);
           SFX.playSpell();
@@ -7575,6 +7575,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
 
       if (overloadMode) {
         // Overload mode — skip targeting, goes directly on stack as mass effect
+        setInstantCasting(null); // Safe to clear now — spell is going on stack
         setSpellStack(prev => [...prev, { pIdx, card, asAdventure, fromExile: isFromExile, displayName, overloadMode: true }]);
         addGameLog(pIdx, '🌊', `${getState(pIdx).name} casts ${displayName} with OVERLOAD`);
         return;
@@ -7582,7 +7583,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
 
       if (targetedEffects.length > 0 && (targetMode === 'battlefield' || targetedEffects.some(e => e.type === 'damage'))) {
         // Spell needs targeting — show targeting UI to the CASTER before putting on stack
-        pendingCastRef.current = { pIdx, card, asAdventure, fromExile: isFromExile, displayName, nonTargetedEffects };
+        pendingCastRef.current = { pIdx, card, asAdventure, fromExile: isFromExile, displayName, nonTargetedEffects, originalManaPool: { ...p.manaPool } };
         setSpellTargeting({ pIdx, card: spellToCheck, effects: targetedEffects, targetMode });
         setCastError({ pIdx, message: `${displayName}: Choose a target` });
         addGameLog(pIdx, '🃏', `${getState(pIdx).name} casts ${displayName}`);
@@ -7591,6 +7592,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     }
 
     // No targeting needed — put directly on the stack
+    setInstantCasting(null); // Safe to clear now — spell is going on stack
     setSpellStack(prev => [...prev, { pIdx, card, asAdventure, fromExile: isFromExile, displayName }]);
     addGameLog(pIdx, '🃏', `${getState(pIdx).name} casts ${displayName}`);
   };
@@ -7749,7 +7751,14 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       setTimeout(() => setCastError(null), 2000);
       return;
     }
-    setInstantCasting(null); // Close the instant casting overlay
+    // NOTE: Do NOT clear instantCasting here! It must stay set until the spell is
+    // fully on the stack (or targeting is cancelled). Clearing it prematurely causes
+    // the endOfTurnRespond overlay to flash on both clients, blocking targeting UI
+    // and causing state desync between players. instantCasting is cleared in:
+    // - castCard() when spell goes on stack (no targeting / overload)
+    // - Pre-cast targeting completion (creature/player target selected)
+    // - cancelSpellTargeting()
+    // - Modal spell mode handlers
     // Adventure cards with instant adventure face: ALWAYS cast as adventure at instant speed
     // (e.g. Bonecrusher Giant → Stomp). Note: can't use !isInstant(card) because the combined
     // type_line includes "Instant" from the adventure face, making isInstant() return true.
@@ -7949,6 +7958,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
           const pc = pendingCastRef.current;
           pendingCastRef.current = null;
           setSpellTargeting(null);
+          setInstantCasting(null); // Safe to clear now — spell is going on stack
           setSpellStack(prev => [...prev, {
             ...pc, resolvedTargets: { type: 'creature', pIdx, cardId: card.id, cardName: card.name },
           }]);
@@ -7999,6 +8009,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       const pc = pendingCastRef.current;
       pendingCastRef.current = null;
       setSpellTargeting(null);
+      setInstantCasting(null); // Safe to clear now — spell is going on stack
       const dmgEffects = spellTargeting.effects.filter(e => e.type === 'damage');
       const dmg = dmgEffects.length > 0 ? (dmgEffects[0].amount || 0) : 0;
       setSpellStack(prev => [...prev, {
@@ -8033,11 +8044,12 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       setState(pc.pIdx, prev => ({
         ...prev,
         [fromZone]: [...prev[fromZone], pc.card],
-        // We can't easily restore the exact mana pool — just return the card
-        // The player will need to retap lands. This is simpler and avoids mana pool state bugs.
+        // Restore the original mana pool from before payment (if stored)
+        manaPool: pc.originalManaPool || prev.manaPool,
       }));
       addGameLog(pc.pIdx, '↩️', `${getState(pc.pIdx).name} cancels casting ${pc.displayName}`);
     }
+    setInstantCasting(null); // Clear instant casting state (was kept alive during targeting)
     setSpellTargeting(null);
     setCastError(null);
   };
@@ -8388,17 +8400,19 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
 
       if (targetedEffects.length > 0 && (targetMode === 'battlefield' || targetedEffects.some(e => e.type === 'damage'))) {
         // Targeted mode (fight, damage, etc.) — show targeting UI
-        pendingCastRef.current = { pIdx: pending.pIdx, card: pending.card, asAdventure: pending.asAdventure, fromExile: pending.fromExile, displayName: pending.displayName, nonTargetedEffects, chosenMode: choice.modeText };
+        pendingCastRef.current = { pIdx: pending.pIdx, card: pending.card, asAdventure: pending.asAdventure, fromExile: pending.fromExile, displayName: pending.displayName, nonTargetedEffects, chosenMode: choice.modeText, originalManaPool: pending.originalManaPool };
         setSpellTargeting({ pIdx: pending.pIdx, card: modeCard, effects: targetedEffects, targetMode });
         setCastError({ pIdx: pending.pIdx, message: `${pending.displayName}: Choose a target` });
       } else if (effects.some(e => e.type === 'counter_spell')) {
         // Counter mode — put on stack as counterspell
+        setInstantCasting(null); // Safe to clear now — spell is going on stack
         setSpellStack(prev => [...prev, {
           pIdx: pending.pIdx, card: pending.card, asAdventure: pending.asAdventure,
           fromExile: pending.fromExile, displayName: pending.displayName, chosenMode: 'counter',
         }]);
       } else {
         // Other mode — put on stack
+        setInstantCasting(null); // Safe to clear now — spell is going on stack
         setSpellStack(prev => [...prev, {
           pIdx: pending.pIdx, card: pending.card, asAdventure: pending.asAdventure,
           fromExile: pending.fromExile, displayName: pending.displayName, chosenMode: choice.modeText,
@@ -10535,8 +10549,8 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       })()}
 
       {/* End of Turn — opponent can respond before turn passes */}
-      {/* IMPORTANT: Hide when spellStack is active — stack overlay must take priority so spells resolve first */}
-      {endOfTurnRespond && !instantCasting && spellStack.length === 0 && (() => {
+      {/* IMPORTANT: Hide when spellStack/targeting/modals are active — those overlays must take priority */}
+      {endOfTurnRespond && !instantCasting && spellStack.length === 0 && !spellTargeting && !modalChoice && (() => {
         const opponentIdx = activePlayer === 0 ? 1 : 0;
         const opponentName = getState(opponentIdx).name;
         const activeName = getState(activePlayer).name;
