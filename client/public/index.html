@@ -1679,6 +1679,10 @@ const parseSpellEffects = (card) => {
     const num = numWords[drawMatch[1]] || parseInt(drawMatch[1]) || 1;
     effects.push({ type: 'draw', amount: num, description: `Draw ${num} card${num > 1 ? 's' : ''}` });
   }
+  // "You may put a land card from your hand onto the battlefield" (Growth Spiral, Explore)
+  if (/you may put a land card from your hand onto the battlefield/.test(allText)) {
+    effects.push({ type: 'extra_land_drop', description: 'You may put a land onto the battlefield' });
+  }
   // Scry / Surveil / Look at top
   const scryMatch = allText.match(/scry (\d+)/);
   if (scryMatch) {
@@ -1703,7 +1707,10 @@ const parseSpellEffects = (card) => {
     const hw = { one: 1, two: 2, three: 3 };
     if (toBattlefieldMatch) {
       const toField = hw[toBattlefieldMatch[1]] || parseInt(toBattlefieldMatch[1]) || 1;
-      effects.push({ type: 'look_top_battlefield', count: lookCount, toField, description: `Look at top ${lookCount === -1 ? 'X' : lookCount}, put ${toField} onto battlefield` });
+      // Collected Company filter: "creature cards with mana value 3 or less"
+      const creatureMVMatch = allText.match(/creature cards? with (?:mana value|converted mana cost) (\d+) or less/);
+      const selectFilter = creatureMVMatch ? { type: 'creature', maxMV: parseInt(creatureMVMatch[1]) } : null;
+      effects.push({ type: 'look_top_battlefield', count: lookCount, toField, selectFilter, description: `Look at top ${lookCount === -1 ? 'X' : lookCount}, put ${toField} onto battlefield` });
     } else {
       let toHand = 1;
       if (putMatch) {
@@ -6625,6 +6632,12 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         case 'draw':
           for (let i = 0; i < (effect.amount || 1); i++) drawCard(pIdx);
           break;
+        case 'extra_land_drop':
+          // Growth Spiral / Explore: allow an extra land play this turn (reset the flag)
+          setState(pIdx, prev => ({ ...prev, landPlayedThisTurn: false }));
+          setCastError({ pIdx, message: '🌿 You may play an additional land this turn' });
+          setTimeout(() => setCastError(null), 3000);
+          break;
         case 'scry': {
           // Collect remaining effects after scry to run on complete
           const remainingEffects = hasScryBeforeDraw ? effects.slice(ei + 1) : [];
@@ -7062,7 +7075,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
           const lib2 = getState(pIdx).library;
           const topCards2 = lib2.slice(0, Math.min(lookCount2, lib2.length));
           if (topCards2.length > 0) {
-            setLookTopView({ pIdx, cards: topCards2, toHand: effect.toField || 2, selected: new Set(), toBattlefield: true });
+            setLookTopView({ pIdx, cards: topCards2, toHand: effect.toField || 2, selected: new Set(), toBattlefield: true, selectFilter: effect.selectFilter || null });
           } else {
             setCastError({ pIdx, message: 'Library is empty!' });
             setTimeout(() => setCastError(null), 1500);
@@ -10619,8 +10632,16 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
 
       {/* Look at Top X — choose cards for hand (Memory Deluge, Dig Through Time, etc.) — only visible to choosing player */}
       {lookTopView && (!onlineMode || onlinePlayerIndex === lookTopView.pIdx) && (() => {
-        const { pIdx: ltPIdx, cards: ltCards, toHand, selected, toBattlefield, etaliMode, etaliLabel } = lookTopView;
+        const { pIdx: ltPIdx, cards: ltCards, toHand, selected, toBattlefield, etaliMode, etaliLabel, selectFilter } = lookTopView;
         const selectedSet = selected instanceof Set ? selected : new Set(selected);
+        // Collected Company filter: only creature cards with mana value ≤ N are selectable
+        const isSelectable = (card) => {
+          if (!selectFilter) return true;
+          if (selectFilter.type === 'creature' && !isCreature(card)) return false;
+          if (selectFilter.maxMV !== undefined && (card.cmc || 0) > selectFilter.maxMV) return false;
+          return true;
+        };
+        const filterLabel = selectFilter ? ` (creatures with MV ≤ ${selectFilter.maxMV} only)` : '';
         return (
           <div style={{
             position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.88)',
@@ -10628,10 +10649,10 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
             zIndex: 10000, animation: 'fadeIn 0.2s ease',
           }}>
             <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: 2, color: etaliMode ? 'rgba(220,160,60,0.8)' : 'rgba(60,200,160,0.8)', marginBottom: 6, fontWeight: 700 }}>
-              {etaliMode ? `⚔️ ${etaliLabel || 'Cast for free or leave in exile'}` : `🔍 Look at Top ${ltCards.length} — Choose ${toHand} for your ${toBattlefield ? 'battlefield' : 'hand'}`}
+              {etaliMode ? `⚔️ ${etaliLabel || 'Cast for free or leave in exile'}` : `🔍 Look at Top ${ltCards.length} — Choose up to ${toHand} for your ${toBattlefield ? 'battlefield' : 'hand'}${filterLabel}`}
             </div>
             <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.35)', marginBottom: 14, fontStyle: 'italic' }}>
-              {etaliMode ? 'Click cards to cast them for free onto the battlefield. Unselected cards stay in exile.' : 'Click cards to select them. Rest go to bottom of library in random order.'}
+              {etaliMode ? 'Click cards to cast them for free onto the battlefield. Unselected cards stay in exile.' : `Click cards to select them.${selectFilter ? ' Greyed-out cards cannot be selected.' : ''} Rest go to bottom of library in random order.`}
             </div>
             <div style={{ fontSize: 10, color: 'rgba(60,200,160,0.6)', marginBottom: 14 }}>
               Selected: {selectedSet.size} / {toHand}
@@ -10639,14 +10660,16 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
             <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', justifyContent: 'center', maxWidth: '80vw', marginBottom: 20 }}>
               {ltCards.map((card) => {
                 const isSelected = selectedSet.has(card.id);
+                const canSelect = isSelectable(card);
                 return (
-                  <div key={card.id} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, cursor: 'pointer' }}
+                  <div key={card.id} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, cursor: canSelect ? 'pointer' : 'not-allowed' }}
                     onClick={() => {
+                      if (!canSelect && !isSelected) return; // can't select ineligible cards
                       setLookTopView(prev => {
                         const newSelected = new Set(prev.selected);
                         if (newSelected.has(card.id)) {
                           newSelected.delete(card.id);
-                        } else if (newSelected.size < toHand) {
+                        } else if (newSelected.size < toHand && canSelect) {
                           newSelected.add(card.id);
                         }
                         return { ...prev, selected: newSelected };
@@ -10656,12 +10679,15 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                       style={{
                         height: 240, borderRadius: 10,
                         boxShadow: isSelected ? '0 0 20px rgba(60,200,160,0.8)' : '0 4px 16px rgba(0,0,0,0.5)',
-                        border: isSelected ? '3px solid rgba(60,200,160,0.9)' : '3px solid transparent',
+                        border: isSelected ? '3px solid rgba(60,200,160,0.9)' : canSelect ? '3px solid transparent' : '3px solid rgba(255,60,60,0.3)',
                         transition: 'all 0.15s ease',
-                        opacity: isSelected ? 1 : 0.7,
+                        opacity: isSelected ? 1 : canSelect ? 0.7 : 0.3,
                       }} />
                     {isSelected && (
-                      <div style={{ fontSize: 10, color: etaliMode ? '#e0a040' : '#3cc8a0', fontWeight: 700 }}>{etaliMode ? '✓ Cast Free' : '✓ To Hand'}</div>
+                      <div style={{ fontSize: 10, color: etaliMode ? '#e0a040' : '#3cc8a0', fontWeight: 700 }}>{etaliMode ? '✓ Cast Free' : toBattlefield ? '✓ To Battlefield' : '✓ To Hand'}</div>
+                    )}
+                    {!canSelect && !isSelected && (
+                      <div style={{ fontSize: 9, color: 'rgba(255,100,100,0.6)', fontWeight: 600 }}>Ineligible</div>
                     )}
                   </div>
                 );
