@@ -346,6 +346,7 @@ class GameRoom {
           if (u.emblems) s.emblems = u.emblems;
           if (u.commandZone) s.commandZone = u.commandZone;
           if (u.commanderDamageReceived) s.commanderDamageReceived = u.commanderDamageReceived;
+          if (u.untilNextTurnEffects) s.untilNextTurnEffects = u.untilNextTurnEffects;
           // Library must be public so spell resolution (e.g. Light Up the Stage exile-from-library)
           // can be applied by the resolving player (opponent), not just the owning player.
           if (u.library) s.library = u.library;
@@ -386,6 +387,9 @@ class GameRoom {
       if (update.pwReminder !== undefined) this.gameState.pwReminder = update.pwReminder;
       if (update.preventCombatDamage !== undefined) this.gameState.preventCombatDamage = update.preventCombatDamage;
       if (update.modalChoice !== undefined) this.gameState.modalChoice = update.modalChoice;
+      if (update.searchExile !== undefined) this.gameState.searchExile = update.searchExile;
+      if (update.abilityActivated !== undefined) this.gameState.abilityActivated = update.abilityActivated;
+      if (update.lookTopView !== undefined) this.gameState.lookTopView = update.lookTopView;
 
       // Forward game log entries from one player to the other
       if (update.__logEntries) this.gameState.__logEntries = update.__logEntries;

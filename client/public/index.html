@@ -10154,6 +10154,10 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
             if (combatState || endOfTurnRespond) return;
             if (onlineMode && activePlayer !== onlinePlayerIndex) return;
             // Show end-of-turn priority window so opponent can respond with instants
+            // Safety: clear any lingering overlay state that would block the end-of-turn overlay
+            setSpellTargeting(null);
+            setModalChoice(null);
+            setInstantCasting(null);
             setEndOfTurnRespond(true);
             setCurrentPhase('end');
           }}>Pass Turn</button>
