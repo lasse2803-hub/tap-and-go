@@ -60,11 +60,11 @@
   .player-area.top { flex-direction: column-reverse; }
 
   /* ===== BATTLEFIELD — Arena layout ===== */
-  .battlefield { display: flex; gap: 3px; flex: 1; min-height: 0; }
-  .bf-main { display: flex; flex-direction: column; gap: 2px; flex: 1; min-height: 0; }
+  .battlefield { display: flex; gap: 4px; flex: 1; min-height: 0; }
+  .bf-main { display: flex; flex-direction: column; gap: 3px; flex: 1; min-height: 0; }
 
   .bf-row {
-    display: flex; flex-wrap: wrap; gap: 4px; min-height: 36px; padding: 3px 8px;
+    display: flex; flex-wrap: wrap; gap: 8px; min-height: 36px; padding: 4px 10px;
     border-radius: 6px; align-items: flex-start; flex: 1;
     position: relative; justify-content: center;
   }
@@ -95,6 +95,7 @@
   .bf-other {
     background: linear-gradient(180deg, rgba(100,60,180,0.06), rgba(100,60,180,0.02));
     border: 1px solid rgba(100,60,180,0.08);
+    min-height: 40px; padding: 5px 10px;
   }
 
   /* ===== HAND — Arena style with overlap ===== */
@@ -450,6 +451,7 @@
     background: rgba(0,0,0,0.75);
     display: flex; align-items: center; justify-content: center;
     animation: fadeIn 0.2s ease;
+    overflow-y: auto; padding: 20px 0;
   }
   .spell-stack-card {
     display: flex; flex-direction: column; align-items: center; gap: 16px;
@@ -460,11 +462,12 @@
     to { transform: translateY(0) scale(1); opacity: 1; }
   }
   .spell-stack-card > .spell-stack-main-card {
-    width: 280px; border-radius: 12px;
+    width: 280px; height: auto; border-radius: 12px;
     box-shadow: 0 0 40px rgba(200,170,60,0.3), 0 8px 32px rgba(0,0,0,0.5);
+    object-fit: contain; max-height: 60vh;
   }
   .spell-stack-card img {
-    border-radius: 8px;
+    border-radius: 8px; object-fit: contain;
   }
   .spell-stack-caster {
     font-size: 13px; color: rgba(255,255,255,0.7);
@@ -3204,7 +3207,7 @@ function CardDisplay({ card, size = 60, onClick, onContext, showPreview, extraCl
           </div>
         )
       ) : (
-        <CardImg card={card} size="small"
+        <CardImg card={card} size="normal"
           className={`card-img${tappedClass}${ec}`}
           alt={getDisplayName(card)}
           style={{ height: size * 1.4, width: size }}
@@ -7744,9 +7747,18 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     }));
   };
 
+  // Check if a player has the sorcery-flash effect (Teferi +1: cast sorceries as though they had flash)
+  const hasSorceryFlash = (pIdx) => {
+    const effects = getState(pIdx).untilNextTurnEffects || [];
+    return effects.some(e => e.type === 'sorcery_flash');
+  };
+
   // Cast an instant (or flash) from hand — works for both active and non-active player
   const castInstantFromHand = (pIdx, card) => {
-    if (!canCastAtInstantSpeed(card)) {
+    // Allow sorcery-speed cards if player has sorcery_flash effect (e.g. Teferi, Time Raveler +1)
+    const isSorcery = (card.type_line || '').toLowerCase().includes('sorcery');
+    const canCastViaSorceryFlash = isSorcery && hasSorceryFlash(pIdx);
+    if (!canCastAtInstantSpeed(card) && !canCastViaSorceryFlash) {
       setCastError({ pIdx, message: 'Can only cast instants or flash cards at instant speed' });
       setTimeout(() => setCastError(null), 2000);
       return;
@@ -9027,6 +9039,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     }
 
     SFX.tap();
+    combatDamageResolvedRef.current = false; // Reset re-entry guard for this new combat
     setCombatState(prev => ({ ...prev, phase: 'damage' }));
     // Resolve damage after a short delay (extra delay if block triggers need processing)
     const damageDelay = blockTriggers.length > 0 ? 800 : 500;
@@ -9041,10 +9054,15 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     }, damageDelay);
   };
 
+  const combatDamageResolvedRef = useRef(false);
+
   const resolveCombatDamage = () => {
     // Use refs for latest state to avoid stale closure from setTimeout
     const cs = combatStateRef.current;
     if (!cs) return;
+    // Re-entry guard: prevent double damage from multiple callers (auto-setTimeout, safety retry, Force Resolve, online handler)
+    if (combatDamageResolvedRef.current) return;
+    combatDamageResolvedRef.current = true;
     const attackingPlayer = activePlayer;
     const defendingPlayer = activePlayer === 0 ? 1 : 0;
 
@@ -9824,7 +9842,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
             {isActive && !(onlineMode && pIdx !== onlinePlayerIndex) && <button className="btn text-xs" onClick={() => shuffleLibrary(pIdx)}>Shuffle</button>}
             {!(onlineMode && pIdx !== onlinePlayerIndex) && <button className="btn text-xs btn-gold" onClick={() => setShowTokenCreator(pIdx)}>+ Token</button>}
             {!(onlineMode && pIdx !== onlinePlayerIndex) && <button className="btn text-xs" onClick={() => millCards(pIdx, 1)}>Mill</button>}
-            {!isActive && !(onlineMode && pIdx !== onlinePlayerIndex) && p.hand.some(c => canCastAtInstantSpeed(c) || getCyclingCost(c)) && (
+            {!isActive && !(onlineMode && pIdx !== onlinePlayerIndex) && p.hand.some(c => canCastAtInstantSpeed(c) || getCyclingCost(c) || ((c.type_line || '').toLowerCase().includes('sorcery') && hasSorceryFlash(pIdx))) && (
               <button className="btn text-xs" style={{ borderColor: 'rgba(60,180,220,0.4)', color: '#60c8e8', background: 'rgba(60,180,220,0.08)' }}
                 onClick={() => setInstantCasting({ pIdx })}>
                 ⚡ Instant
@@ -10759,8 +10777,9 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       {/* Instant Casting Overlay — non-active player casts instant/flash */}
       {instantCasting && !spellTargeting && (() => {
         const ip = getState(instantCasting.pIdx);
-        const instantCards = ip.hand.filter(c => canCastAtInstantSpeed(c));
-        const cyclingCards = ip.hand.filter(c => !canCastAtInstantSpeed(c) && getCyclingCost(c));
+        const sfFlash = hasSorceryFlash(instantCasting.pIdx);
+        const instantCards = ip.hand.filter(c => canCastAtInstantSpeed(c) || (sfFlash && (c.type_line || '').toLowerCase().includes('sorcery')));
+        const cyclingCards = ip.hand.filter(c => !canCastAtInstantSpeed(c) && !(sfFlash && (c.type_line || '').toLowerCase().includes('sorcery')) && getCyclingCost(c));
         const isRespondingToStack = instantCasting.returnToStack && spellStack.length > 0;
         return (
           <div style={{
@@ -11771,6 +11790,10 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
               // "Until your next turn, prevent all damage" detection (Kiora's +1)
               const isPreventDamage = /until your next turn,?\s+prevent all damage/i.test(abilityText);
 
+              // "Until your next turn, you may cast sorcery spells as though they had flash" (Teferi, Time Raveler +1)
+              const isSorceryFlash = /until your next turn.*cast sorcery spells as though they had flash/i.test(abilityText) ||
+                                     /you may cast sorcery spells as though they had flash/i.test(abilityText);
+
               // Chandra-style: "Exile the top card of your library. You may cast that card. If you don't, [PW] deals N damage to each opponent."
               const exileCastOrDmgMatch = abilityText.match(/exile the top card of your library.*you may cast.*(?:if you don'?t|otherwise).*deals?\s+(\d+)\s+damage/);
               const isExileCastOrDamage = !!exileCastOrDmgMatch;
@@ -11804,7 +11827,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                 pwTokenData = { name: tokenName, power: tokenPower, toughness: tokenToughness, type_line: `Creature Token — ${creatureType}`, colors, keywords, qty };
               }
 
-              if (pwEffects.length > 0 || isEmblem || isUntilNextTurn || pwTokenData || isExileCastOrDamage || isPreventDamage) {
+              if (pwEffects.length > 0 || isEmblem || isUntilNextTurn || pwTokenData || isExileCastOrDamage || isPreventDamage || isSorceryFlash) {
                 return (
                   <div style={{ display: 'flex', gap: 8, justifyContent: 'center', flexWrap: 'wrap' }}>
                     {isExileCastOrDamage && !pwReminder.exiledCard && (
@@ -11961,6 +11984,28 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                           setPwReminder(null);
                         }}>
                         🛡️ Activate Effect
+                      </button>
+                    )}
+                    {isSorceryFlash && (
+                      <button className="btn btn-gold" style={{ padding: '6px 16px', fontSize: 12 }}
+                        onClick={() => {
+                          const effect = {
+                            id: uid(),
+                            type: 'sorcery_flash',
+                            sourceName: pwReminder.card.name,
+                            ownerIdx: pwReminder.pIdx,
+                            registeredTurn: turnCount,
+                          };
+                          setState(pwReminder.pIdx, prev => ({
+                            ...prev,
+                            untilNextTurnEffects: [...(prev.untilNextTurnEffects || []), effect],
+                          }));
+                          addGameLog(pwReminder.pIdx, '⚡', `${pwReminder.card.name}: Sorceries can be cast as though they had flash until next turn`);
+                          setCastError({ pIdx: pwReminder.pIdx, message: `⚡ ${pwReminder.card.name}: You may cast sorcery spells as though they had flash until your next turn` });
+                          setTimeout(() => setCastError(null), 3000);
+                          setPwReminder(null);
+                        }}>
+                        ⚡ Activate Sorcery Flash
                       </button>
                     )}
                     {isPreventDamage && (() => {
