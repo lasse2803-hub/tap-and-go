@@ -4123,6 +4123,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       preventCombatDamage,
       modalChoice,
       searchExile,
+      spellResolveRequest,
       abilityActivated,
       lookTopView,
     };
@@ -4319,6 +4320,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     if (onlineState.preventCombatDamage !== undefined) _setPreventCombatDamage(onlineState.preventCombatDamage);
     if (onlineState.modalChoice !== undefined) _setModalChoice(onlineState.modalChoice);
     if (onlineState.searchExile !== undefined) _setSearchExile(onlineState.searchExile);
+    if (onlineState.spellResolveRequest !== undefined) _setSpellResolveRequest(onlineState.spellResolveRequest);
     if (onlineState.abilityActivated !== undefined) _setAbilityActivated(onlineState.abilityActivated);
 
     // Receive game log entries from opponent (supports both array and single entry)
@@ -4403,6 +4405,23 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       processUpkeepTriggers(myIdx);
     }, 300);
   });
+
+  // Online mode: when opponent clicks "Resolve" on our spell, they send a spellResolveRequest.
+  // We (the caster) run the actual resolution here because we have our own library/hand data.
+  // The opponent's client can't resolve because the server hides our library (empty array).
+  useEffect(() => {
+    if (!onlineMode || !spellResolveRequest) return;
+    if (spellResolveHandledRef.current === spellResolveRequest.timestamp) return; // already handled
+    if (spellStack.length === 0) return;
+    const topSpell = spellStack[spellStack.length - 1];
+    // Only the caster should resolve (the one whose library is available locally)
+    if (topSpell.pIdx !== onlinePlayerIndex) return;
+    spellResolveHandledRef.current = spellResolveRequest.timestamp;
+    // Clear the request signal
+    setSpellResolveRequest(null);
+    // Now resolve on our client where we have full library data
+    resolveTopOfStack();
+  }, [spellResolveRequest, onlineMode, spellStack]);
 
   // Wire up star P/T resolution to access game state
   _starPTStateGetter = getState;
@@ -4838,6 +4857,11 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       // Drawing from empty library = lose the game
       const opponent = getState(pIdx === 0 ? 1 : 0);
       if (!gameOver) {
+        // Clear any overlays that would stack on top of the game-over screen
+        setEndOfTurnRespond(false);
+        setInstantCasting(null);
+        setSpellTargeting(null);
+        setModalChoice(null);
         setGameOver({ winner: opponent.name, loser: p.name, reason: `${p.name} tried to draw from an empty library` });
       }
       return;
@@ -6438,6 +6462,9 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
   const setPwReminder = syncSetter(_setPwReminder);
   const [searchExile, _setSearchExile] = useState(null); // SYNCED — { pIdx, targetPIdx, cardName } — post-counter search & exile (Test of Talents)
   const setSearchExile = syncSetter(_setSearchExile);
+  const [spellResolveRequest, _setSpellResolveRequest] = useState(null); // SYNCED — { timestamp } — opponent signals caster to resolve top spell
+  const setSpellResolveRequest = syncSetter(_setSpellResolveRequest);
+  const spellResolveHandledRef = useRef(null); // track which resolve request we already processed
   const [abilityActivated, _setAbilityActivated] = useState(null); // SYNCED — { pIdx, cardName, abilityText, cardImage } — broadcast ability activation
   const setAbilityActivated = syncSetter(_setAbilityActivated);
   const [ltbReminder, setLtbReminder] = useState(null); // { pIdx, card, effects[] }
@@ -8147,11 +8174,13 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       const opponent = getState(i === 0 ? 1 : 0);
       if (p.life <= 0) {
         const winner = opponent.name, loser = p.name, reason = `${p.name} reached ${p.life} life`;
+        setEndOfTurnRespond(false); setInstantCasting(null); setSpellTargeting(null); setModalChoice(null);
         const timer = setTimeout(() => setGameOver({ winner, loser, reason }), 2000);
         return () => clearTimeout(timer);
       }
       if (p.poison >= GAME_CONSTANTS.POISON_LETHAL) {
         const winner = opponent.name, loser = p.name, reason = `${p.name} reached ${p.poison} poison counters`;
+        setEndOfTurnRespond(false); setInstantCasting(null); setSpellTargeting(null); setModalChoice(null);
         const timer = setTimeout(() => setGameOver({ winner, loser, reason }), 2000);
         return () => clearTimeout(timer);
       }
@@ -8507,9 +8536,15 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     } else {
       const defaultTargets = {};
       combatState.attackers.forEach(id => { defaultTargets[id] = 'player'; });
-      // Go to combat-respond so BOTH players can cast instants/flash before blockers
-      // attackerPassed: attacker must pass priority before defender can proceed to blockers
-      setCombatState(prev => ({ ...prev, phase: 'combat-respond', attackTargets: defaultTargets, blocks: {}, selectedBlocker: null, attackerPassed: false }));
+      // Check if defender has any untapped creatures to block with
+      const defenderCreatures = getState(defendingPlayer).battlefield.filter(c => isCreature(c) && !c.tapped);
+      if (defenderCreatures.length === 0) {
+        // No blockers possible — skip to combat-respond (attacker priority before damage)
+        setCombatState(prev => ({ ...prev, phase: 'combat-respond', attackTargets: defaultTargets, blocks: {}, selectedBlocker: null }));
+      } else {
+        // Go to blockers phase
+        setCombatState(prev => ({ ...prev, phase: 'blockers', attackTargets: defaultTargets, blocks: {}, selectedBlocker: null }));
+      }
     }
 
     // Check for attack triggers on ALL creatures (including creature lands)
@@ -8687,34 +8722,30 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
 
   const confirmPwTargets = () => {
     if (!combatState || combatState.phase !== 'pw-targets') return;
-    setCombatState(prev => ({ ...prev, phase: 'combat-respond', blocks: {}, selectedBlocker: null, attackerPassed: false }));
-  };
-
-  const passCombatPriority = () => {
-    if (!combatState || combatState.phase !== 'combat-respond') return;
-    setCombatState(prev => ({ ...prev, attackerPassed: true }));
-  };
-
-  const proceedToBlockers = () => {
-    if (!combatState || combatState.phase !== 'combat-respond') return;
-    // Skip blockers phase if defender has no untapped creatures
     const defendingPlayer = activePlayer === 0 ? 1 : 0;
     const defenderCreatures = getState(defendingPlayer).battlefield.filter(c => isCreature(c) && !c.tapped);
     if (defenderCreatures.length === 0) {
-      // No blockers possible — go straight to damage
-      setCombatState(prev => ({ ...prev, phase: 'damage', blocks: {} }));
-      setTimeout(() => {
-        resolveCombatDamage();
-        // Safety retry: if combat is still in damage phase after 2s, try again
-        setTimeout(() => {
-          if (combatStateRef.current && combatStateRef.current.phase === 'damage') {
-            resolveCombatDamage();
-          }
-        }, 2000);
-      }, 500);
-      return;
+      // No blockers possible — skip to combat-respond (attacker priority before damage)
+      setCombatState(prev => ({ ...prev, phase: 'combat-respond', blocks: {}, selectedBlocker: null }));
+    } else {
+      setCombatState(prev => ({ ...prev, phase: 'blockers', blocks: {}, selectedBlocker: null }));
     }
-    setCombatState(prev => ({ ...prev, phase: 'blockers', blocks: {}, selectedBlocker: null }));
+  };
+
+  // Attacker clicks "Proceed to Damage" after optional combat tricks post-blockers
+  const proceedToDamage = () => {
+    if (!combatState || combatState.phase !== 'combat-respond') return;
+    combatDamageResolvedRef.current = false; // Reset re-entry guard
+    setCombatState(prev => ({ ...prev, phase: 'damage' }));
+    setTimeout(() => {
+      resolveCombatDamage();
+      // Safety retry: if combat is still in damage phase after 2s, try again
+      setTimeout(() => {
+        if (combatStateRef.current && combatStateRef.current.phase === 'damage') {
+          resolveCombatDamage();
+        }
+      }, 2000);
+    }, 500);
   };
 
   const respondInCombat = (pIdx) => {
@@ -9057,19 +9088,9 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     }
 
     SFX.tap();
-    combatDamageResolvedRef.current = false; // Reset re-entry guard for this new combat
-    setCombatState(prev => ({ ...prev, phase: 'damage' }));
-    // Resolve damage after a short delay (extra delay if block triggers need processing)
-    const damageDelay = blockTriggers.length > 0 ? 800 : 500;
-    setTimeout(() => {
-      resolveCombatDamage();
-      // Safety retry: if combat is still in damage phase after 2s, try again
-      setTimeout(() => {
-        if (combatStateRef.current && combatStateRef.current.phase === 'damage') {
-          resolveCombatDamage();
-        }
-      }, 2000);
-    }, damageDelay);
+    // After blockers are declared, go to combat-respond so attacker gets priority
+    // (can cast combat tricks like Giant Growth knowing which creatures are blocked/unblocked)
+    setCombatState(prev => ({ ...prev, phase: 'combat-respond' }));
   };
 
   const combatDamageResolvedRef = useRef(false);
@@ -10216,8 +10237,8 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
               <span className="combat-label">
                 {combatState.phase === 'attackers' ? '⚔ Declare Attackers' :
                  combatState.phase === 'pw-targets' ? '🎯 Assign Attack Targets' :
-                 combatState.phase === 'combat-respond' ? '⚡ Respond to Attack' :
                  combatState.phase === 'blockers' ? '🛡 Declare Blockers' :
+                 combatState.phase === 'combat-respond' ? '⚡ Before Damage' :
                  combatState.phase === 'damage' ? '💥 Resolving Damage...' : 'Combat'}
               </span>
               {combatState.phase === 'damage' && (!onlineMode || activePlayer === onlinePlayerIndex) && (
@@ -10238,12 +10259,12 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                   ? `${getState(activePlayer).name}: Click creatures to attack (${combatState.attackers.length} selected)`
                   : combatState.phase === 'pw-targets'
                   ? `Choose target for each attacker: opponent or their Planeswalker`
-                  : combatState.phase === 'combat-respond'
-                  ? `${getState(activePlayer === 0 ? 1 : 0).name}: Cast instants/flash before blockers?`
                   : combatState.phase === 'blockers'
                   ? combatState.selectedBlocker
                     ? `Now click an attacker to block it`
                     : `${getState(activePlayer === 0 ? 1 : 0).name}: Click your creature to block with, then the attacker`
+                  : combatState.phase === 'combat-respond'
+                  ? `${getState(activePlayer).name}: Cast spells before damage, or proceed`
                   : ''}
               </span>
               {combatState.phase === 'attackers' && (!onlineMode || activePlayer === onlinePlayerIndex) && (
@@ -10305,35 +10326,26 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                 const defendingPlayer = activePlayer === 0 ? 1 : 0;
                 const isDefender = onlineMode && onlinePlayerIndex === defendingPlayer;
                 const isAttacker = onlineMode && onlinePlayerIndex === activePlayer;
-                const attackerHasPassed = combatState.attackerPassed;
                 return (
                   <>
-                    {/* In online mode: each player only sees their own respond button */}
+                    {/* Attacker has priority after blockers — can cast combat tricks */}
+                    {(!onlineMode || isAttacker) && (
+                      <button className="btn" style={{ borderColor: 'rgba(200,170,60,0.3)', color: '#e8c96a', fontSize: 11 }}
+                        onClick={() => respondInCombat(activePlayer)}>⚡ {getState(activePlayer).name}: Cast Spell</button>
+                    )}
+                    {/* Defender can also respond to attacker's spells */}
                     {(!onlineMode || isDefender) && (
                       <button className="btn" style={{ borderColor: 'rgba(100,200,255,0.4)', color: '#6cf', fontSize: 11 }}
                         onClick={() => respondInCombat(defendingPlayer)}>⚡ {getState(defendingPlayer).name}: Respond</button>
                     )}
+                    {/* Attacker controls the flow: Proceed to Damage */}
                     {(!onlineMode || isAttacker) && (
-                      <button className="btn" style={{ borderColor: 'rgba(200,170,60,0.3)', color: '#e8c96a', fontSize: 11 }}
-                        onClick={() => respondInCombat(activePlayer)}>⚡ {getState(activePlayer).name}: Respond</button>
+                      <button className="btn btn-primary" onClick={proceedToDamage}>Proceed to Damage →</button>
                     )}
-                    {/* Attacker must pass priority before defender can proceed to blockers (Prowess etc.) */}
-                    {onlineMode && isAttacker && !attackerHasPassed && (
-                      <button className="btn" style={{ padding: '4px 16px', fontSize: 11, borderColor: 'rgba(200,170,60,0.4)', color: '#e8c96a', background: 'rgba(200,170,60,0.08)' }}
-                        onClick={passCombatPriority}>✓ Pass Priority</button>
-                    )}
-                    {onlineMode && isAttacker && attackerHasPassed && (
+                    {/* Defender sees waiting message */}
+                    {onlineMode && isDefender && (
                       <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.4)', fontStyle: 'italic', alignSelf: 'center' }}>
-                        Waiting for {getState(defendingPlayer).name} to proceed...
-                      </span>
-                    )}
-                    {/* Defender: Proceed to Blockers — in online mode, only after attacker passes priority */}
-                    {(!onlineMode || (isDefender && attackerHasPassed)) && (
-                      <button className="btn btn-primary" onClick={proceedToBlockers}>Proceed to Blockers →</button>
-                    )}
-                    {onlineMode && isDefender && !attackerHasPassed && (
-                      <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.4)', fontStyle: 'italic', alignSelf: 'center' }}>
-                        Waiting for {getState(activePlayer).name} to pass priority...
+                        Waiting for {getState(activePlayer).name} to proceed to damage...
                       </span>
                     )}
                   </>
@@ -10590,7 +10602,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
 
       {/* End of Turn — opponent can respond before turn passes */}
       {/* IMPORTANT: Hide when spellStack/targeting/modals are active — those overlays must take priority */}
-      {endOfTurnRespond && !instantCasting && spellStack.length === 0 && !spellTargeting && !modalChoice && (() => {
+      {endOfTurnRespond && !instantCasting && spellStack.length === 0 && !spellTargeting && !modalChoice && !gameOver && (() => {
         const opponentIdx = activePlayer === 0 ? 1 : 0;
         const opponentName = getState(opponentIdx).name;
         const activeName = getState(activePlayer).name;
@@ -11009,7 +11021,14 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
             <div className="spell-stack-buttons">
               {(!onlineMode || onlinePlayerIndex === (stackTop.pIdx === 0 ? 1 : 0)) && (
                 <button className="btn-resolve" onClick={() => {
-                  resolveTopOfStack();
+                  if (onlineMode) {
+                    // In online mode, signal the CASTER's client to resolve the spell.
+                    // The caster has full access to their own library/hand data.
+                    // The opponent's client can't resolve because the caster's library is hidden.
+                    setSpellResolveRequest({ timestamp: Date.now() });
+                  } else {
+                    resolveTopOfStack();
+                  }
                 }}>✓ Resolve</button>
               )}
               {(!onlineMode || onlinePlayerIndex === (stackTop.pIdx === 0 ? 1 : 0)) && (

@@ -388,6 +388,7 @@ class GameRoom {
       if (update.preventCombatDamage !== undefined) this.gameState.preventCombatDamage = update.preventCombatDamage;
       if (update.modalChoice !== undefined) this.gameState.modalChoice = update.modalChoice;
       if (update.searchExile !== undefined) this.gameState.searchExile = update.searchExile;
+      if (update.spellResolveRequest !== undefined) this.gameState.spellResolveRequest = update.spellResolveRequest;
       if (update.abilityActivated !== undefined) this.gameState.abilityActivated = update.abilityActivated;
       if (update.lookTopView !== undefined) this.gameState.lookTopView = update.lookTopView;
 
