@@ -6280,6 +6280,23 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         actions.push({ label: `▶ Cast ${cFace.name} (${cFace.mana_cost})`, fn: () => castAdventureFromExile(pIdx, card) });
         actions.push({ sep: true });
       }
+      // Jace -8 ultimate: Cast for free from exile
+      // castFree without castFreeFor = own exile (owner casts). castFreeFor = opponent's exile (specified player casts).
+      // In local mode (!onlineMode), always allow since one person controls both sides.
+      const canCastFree = card.castFree && (!onlineMode || (isOwner ? !card.castFreeFor : card.castFreeFor === onlinePlayerIndex));
+      if (canCastFree) {
+        const castingPIdx = card.castFreeFor !== undefined ? card.castFreeFor : pIdx;
+        if (isSpellCard(card)) {
+          actions.push({ label: `💫 Cast FREE (${card.name})`, fn: () => {
+            castCard(castingPIdx, card, false, '{0}');
+          }});
+        } else {
+          actions.push({ label: `💫 Play FREE to Battlefield`, fn: () => {
+            moveCard(castingPIdx, card, 'exile', 'battlefield');
+          }});
+        }
+        actions.push({ sep: true });
+      }
       // Light Up the Stage / Act on Impulse — cast from exile
       if (card.exilePlayable && card.exilePlayableBy === pIdx) {
         const expired = card.exilePlayableTurn !== undefined && turnCount > card.exilePlayableTurn;
@@ -11932,7 +11949,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       )}
 
       {/* Modal Choice Overlay (Elder Gargaroth "choose one" etc.) */}
-      {modalChoice && (!onlineMode || onlinePlayerIndex === modalChoice.pIdx) && (
+      {modalChoice && modalChoice.type !== 'fact_or_fiction' && modalChoice.type !== 'jace_ultimate_opp_search' && (!onlineMode || onlinePlayerIndex === modalChoice.pIdx) && (
         <div style={{
           position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
           background: 'rgba(0,0,0,0.6)', zIndex: 1600,
@@ -11973,6 +11990,250 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
           </div>
         </div>
       )}
+
+      {/* Fact or Fiction Modal (Jace -2) — opponent splits cards into 2 piles, then caster picks a pile */}
+      {modalChoice && modalChoice.type === 'fact_or_fiction' && (() => {
+        const fof = modalChoice;
+        const isOpponentSplitting = fof.phase === 'opponent_split';
+        const isCasterPicking = fof.phase === 'caster_pick';
+        // In opponent_split phase: opponent (1 - pIdx) interacts. In caster_pick: caster (pIdx) interacts.
+        const interactingPlayer = isOpponentSplitting ? (1 - fof.pIdx) : fof.pIdx;
+        const canInteract = !onlineMode || onlinePlayerIndex === interactingPlayer;
+        // Both players should see the modal (as spectators if not their turn to act)
+        return (
+          <div style={{
+            position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+            background: 'rgba(0,0,0,0.7)', zIndex: 1600,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            animation: 'fadeIn 0.2s ease',
+          }}>
+            <div style={{
+              background: 'linear-gradient(160deg, #0a1628, #14122a)', borderRadius: 16, padding: '20px 28px',
+              border: '1px solid rgba(100,160,255,0.4)', boxShadow: '0 12px 48px rgba(0,0,0,0.8), 0 0 30px rgba(100,160,255,0.15)',
+              maxWidth: 600, width: '95%', textAlign: 'center',
+            }}>
+              <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: 2, color: 'rgba(100,160,255,0.7)', marginBottom: 4, fontWeight: 700 }}>
+                🔮 {fof.source}
+              </div>
+              <div style={{ fontSize: 15, fontWeight: 700, color: '#a8c8ff', marginBottom: 6 }}>
+                {isOpponentSplitting ? 'Separate Into Two Piles' : 'Choose a Pile'}
+              </div>
+              <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.4)', marginBottom: 16, fontStyle: 'italic' }}>
+                {isOpponentSplitting
+                  ? (canInteract ? 'Click cards to move between piles, then confirm.' : 'Opponent is separating cards into two piles...')
+                  : (canInteract ? 'Pick a pile to put into your hand. The other goes to bottom of library.' : 'Opponent is choosing a pile...')}
+              </div>
+
+              {/* Show the two piles side by side */}
+              <div style={{ display: 'flex', gap: 16, justifyContent: 'center', marginBottom: 16 }}>
+                {/* Pile 1 */}
+                <div style={{
+                  flex: 1, background: 'rgba(100,200,100,0.08)', border: '1px solid rgba(100,200,100,0.3)',
+                  borderRadius: 12, padding: '10px 8px', minHeight: 120,
+                }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: '#8cd88c', marginBottom: 8, textTransform: 'uppercase', letterSpacing: 1 }}>
+                    Pile 1 ({fof.pile1.length})
+                  </div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, justifyContent: 'center' }}>
+                    {fof.cards.filter(c => fof.pile1.includes(c.id)).map(card => (
+                      <div key={card.id} style={{
+                        cursor: isOpponentSplitting && canInteract ? 'pointer' : 'default',
+                        transition: 'transform 0.15s ease',
+                      }}
+                      onClick={() => {
+                        if (!isOpponentSplitting || !canInteract) return;
+                        // Move card from pile1 to pile2
+                        setModalChoice(prev => ({
+                          ...prev,
+                          pile1: prev.pile1.filter(id => id !== card.id),
+                          pile2: [...prev.pile2, card.id],
+                        }));
+                      }}
+                      onMouseOver={e => { if (isOpponentSplitting && canInteract) e.currentTarget.style.transform = 'scale(1.08)'; }}
+                      onMouseOut={e => { e.currentTarget.style.transform = 'scale(1)'; }}>
+                        <img src={`https://api.scryfall.com/cards/named?exact=${encodeURIComponent(card.name)}&format=image&version=small`}
+                          alt={card.name}
+                          style={{ width: 80, height: 112, borderRadius: 6, border: '2px solid rgba(100,200,100,0.5)' }}
+                          onError={e => { e.target.style.display='none'; e.target.insertAdjacentHTML('afterend', `<div style="width:80px;height:112px;background:#1a2a1a;border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:9px;color:#8cd88c;text-align:center;padding:4px;border:2px solid rgba(100,200,100,0.5)">${card.name}</div>`); }}
+                        />
+                      </div>
+                    ))}
+                    {fof.pile1.length === 0 && (
+                      <div style={{ color: 'rgba(100,200,100,0.3)', fontSize: 11, padding: '30px 10px', fontStyle: 'italic' }}>Empty</div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Pile 2 */}
+                <div style={{
+                  flex: 1, background: 'rgba(200,100,100,0.08)', border: '1px solid rgba(200,100,100,0.3)',
+                  borderRadius: 12, padding: '10px 8px', minHeight: 120,
+                }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: '#d88c8c', marginBottom: 8, textTransform: 'uppercase', letterSpacing: 1 }}>
+                    Pile 2 ({fof.pile2.length})
+                  </div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, justifyContent: 'center' }}>
+                    {fof.cards.filter(c => fof.pile2.includes(c.id)).map(card => (
+                      <div key={card.id} style={{
+                        cursor: isOpponentSplitting && canInteract ? 'pointer' : 'default',
+                        transition: 'transform 0.15s ease',
+                      }}
+                      onClick={() => {
+                        if (!isOpponentSplitting || !canInteract) return;
+                        // Move card from pile2 to pile1
+                        setModalChoice(prev => ({
+                          ...prev,
+                          pile2: prev.pile2.filter(id => id !== card.id),
+                          pile1: [...prev.pile1, card.id],
+                        }));
+                      }}
+                      onMouseOver={e => { if (isOpponentSplitting && canInteract) e.currentTarget.style.transform = 'scale(1.08)'; }}
+                      onMouseOut={e => { e.currentTarget.style.transform = 'scale(1)'; }}>
+                        <img src={`https://api.scryfall.com/cards/named?exact=${encodeURIComponent(card.name)}&format=image&version=small`}
+                          alt={card.name}
+                          style={{ width: 80, height: 112, borderRadius: 6, border: '2px solid rgba(200,100,100,0.5)' }}
+                          onError={e => { e.target.style.display='none'; e.target.insertAdjacentHTML('afterend', `<div style="width:80px;height:112px;background:#2a1a1a;border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:9px;color:#d88c8c;text-align:center;padding:4px;border:2px solid rgba(200,100,100,0.5)">${card.name}</div>`); }}
+                        />
+                      </div>
+                    ))}
+                    {fof.pile2.length === 0 && (
+                      <div style={{ color: 'rgba(200,100,100,0.3)', fontSize: 11, padding: '30px 10px', fontStyle: 'italic' }}>Empty</div>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Action buttons */}
+              <div style={{ display: 'flex', gap: 10, justifyContent: 'center' }}>
+                {isOpponentSplitting && canInteract && (
+                  <button className="btn btn-gold" style={{ padding: '8px 24px', fontSize: 13 }}
+                    onClick={() => {
+                      // Opponent confirms the split — transition to caster_pick phase
+                      setModalChoice(prev => ({ ...prev, phase: 'caster_pick' }));
+                      addGameLog(1 - fof.pIdx, '🔮', `Separated cards: Pile 1 (${fof.pile1.length}) / Pile 2 (${fof.pile2.length})`);
+                    }}>
+                    ✓ Confirm Split
+                  </button>
+                )}
+                {isCasterPicking && canInteract && (
+                  <>
+                    <button className="btn" style={{
+                      padding: '8px 20px', fontSize: 13, fontWeight: 600,
+                      background: 'rgba(100,200,100,0.15)', border: '1px solid rgba(100,200,100,0.4)',
+                      borderRadius: 8, color: '#8cd88c',
+                    }}
+                    onClick={() => {
+                      // Caster picks Pile 1 → hand. Pile 2 → bottom of library.
+                      const handCards = fof.cards.filter(c => fof.pile1.includes(c.id));
+                      const bottomCards = fof.cards.filter(c => fof.pile2.includes(c.id));
+                      setState(fof.pIdx, prev => ({
+                        ...prev,
+                        hand: [...prev.hand, ...handCards],
+                        library: [...prev.library, ...bottomCards],
+                      }));
+                      addGameLog(fof.pIdx, '🔮', `Chose Pile 1 (${handCards.length} to hand, ${bottomCards.length} to bottom of library)`);
+                      setModalChoice(null);
+                    }}>
+                      Take Pile 1 ({fof.pile1.length} cards)
+                    </button>
+                    <button className="btn" style={{
+                      padding: '8px 20px', fontSize: 13, fontWeight: 600,
+                      background: 'rgba(200,100,100,0.15)', border: '1px solid rgba(200,100,100,0.4)',
+                      borderRadius: 8, color: '#d88c8c',
+                    }}
+                    onClick={() => {
+                      // Caster picks Pile 2 → hand. Pile 1 → bottom of library.
+                      const handCards = fof.cards.filter(c => fof.pile2.includes(c.id));
+                      const bottomCards = fof.cards.filter(c => fof.pile1.includes(c.id));
+                      setState(fof.pIdx, prev => ({
+                        ...prev,
+                        hand: [...prev.hand, ...handCards],
+                        library: [...prev.library, ...bottomCards],
+                      }));
+                      addGameLog(fof.pIdx, '🔮', `Chose Pile 2 (${handCards.length} to hand, ${bottomCards.length} to bottom of library)`);
+                      setModalChoice(null);
+                    }}>
+                      Take Pile 2 ({fof.pile2.length} cards)
+                    </button>
+                  </>
+                )}
+                {!canInteract && (
+                  <div style={{ padding: '8px 20px', fontSize: 12, color: 'rgba(255,255,255,0.4)', fontStyle: 'italic' }}>
+                    ⏳ Waiting for {isOpponentSplitting ? 'opponent' : 'caster'} to decide...
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Jace -8 Ultimate: Opponent picks a nonland card from their own library to exile (online mode) */}
+      {modalChoice && modalChoice.type === 'jace_ultimate_opp_search' && (() => {
+        const jaceUlt = modalChoice;
+        const canInteract = !onlineMode || onlinePlayerIndex === jaceUlt.oppPIdx;
+        const myLibrary = getState(jaceUlt.oppPIdx).library;
+        const nonlands = myLibrary.filter(c => !isLand(c));
+        return (
+          <div style={{
+            position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+            background: 'rgba(0,0,0,0.7)', zIndex: 1600,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            animation: 'fadeIn 0.2s ease',
+          }}>
+            <div style={{
+              background: 'linear-gradient(160deg, #1a0a28, #14122a)', borderRadius: 16, padding: '20px 28px',
+              border: '1px solid rgba(180,100,255,0.4)', boxShadow: '0 12px 48px rgba(0,0,0,0.8), 0 0 30px rgba(180,100,255,0.15)',
+              maxWidth: 600, width: '95%', textAlign: 'center',
+            }}>
+              <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: 2, color: 'rgba(180,100,255,0.7)', marginBottom: 4, fontWeight: 700 }}>
+                💫 {jaceUlt.source} — Ultimate
+              </div>
+              <div style={{ fontSize: 15, fontWeight: 700, color: '#c8a8ff', marginBottom: 6 }}>
+                {canInteract ? 'Choose a nonland card from your library to exile' : 'Opponent is choosing a card from their library...'}
+              </div>
+              {canInteract && (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, justifyContent: 'center', maxHeight: 300, overflowY: 'auto', marginBottom: 12 }}>
+                  {nonlands.map(card => (
+                    <button key={card.id} className="btn" style={{ padding: '4px 10px', fontSize: 10, maxWidth: 150,
+                      background: 'rgba(180,100,255,0.08)', border: '1px solid rgba(180,100,255,0.25)', borderRadius: 6, color: '#e8e4dc',
+                    }}
+                    onMouseOver={e => { e.currentTarget.style.background = 'rgba(180,100,255,0.2)'; }}
+                    onMouseOut={e => { e.currentTarget.style.background = 'rgba(180,100,255,0.08)'; }}
+                    onClick={() => {
+                      // Exile chosen card from own library, marked castFree for opponent (the caster)
+                      setState(jaceUlt.oppPIdx, prev => ({
+                        ...prev,
+                        library: prev.library.filter(c => c.id !== card.id),
+                        exile: [...prev.exile, { ...card, castFree: true, castFreeFor: jaceUlt.casterPIdx }],
+                      }));
+                      shuffleLibrary(jaceUlt.oppPIdx);
+                      addGameLog(jaceUlt.casterPIdx, '💫', `${jaceUlt.source}: Exiled ${getDisplayName(card)} from opponent's library`);
+                      setModalChoice(null);
+                    }}>
+                      {getDisplayName(card)}
+                    </button>
+                  ))}
+                  {nonlands.length === 0 && (
+                    <button className="btn" style={{ padding: '6px 16px', fontSize: 11 }}
+                      onClick={() => {
+                        addGameLog(jaceUlt.casterPIdx, '💫', `${jaceUlt.source}: No nonland cards in opponent's library`);
+                        setModalChoice(null);
+                      }}>
+                      No nonlands — Skip
+                    </button>
+                  )}
+                </div>
+              )}
+              {!canInteract && (
+                <div style={{ padding: '20px', fontSize: 12, color: 'rgba(255,255,255,0.4)', fontStyle: 'italic' }}>
+                  ⏳ Waiting for opponent to choose...
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Farewell "Choose One or More" Modal */}
       {farewellChoice && (!onlineMode || onlinePlayerIndex === farewellChoice.pIdx) && (
@@ -12305,7 +12566,33 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                 pwTokenData = { name: tokenName, power: tokenPower, toughness: tokenToughness, type_line: `Creature Token — ${creatureType}`, colors, keywords, qty };
               }
 
-              if (pwEffects.length > 0 || isEmblem || isUntilNextTurn || pwTokenData || isExileCastOrDamage || isPreventDamage || isSorceryFlash) {
+              // Draw a card detection (Teferi Hero +1, Kiora -1)
+              const hasDrawCard = /draw a card/i.test(abilityText);
+              // "You may play an additional land this turn" / "put a land from your hand onto the battlefield" (Kiora -1)
+              const hasExtraLand = /(?:play an additional land|put a land.*onto the battlefield)/i.test(abilityText);
+              // "Add {mana}" detection (Chandra +1: "Add {R}{R}")
+              const addManaMatch = abilityText.match(/add\s+(\{[wubrgc]\}(?:\{[wubrgc]\})*)/i);
+              // "Target player loses N life" / "each opponent loses N life" (Liliana +1)
+              const loseLifeMatch = abilityText.match(/(?:target player|each opponent) loses? (\d+) life/i);
+              // "Target creature gets +X/+X" (Garruk +1) — auto-buff with targeting
+              const pwBuffMatch = abilityText.match(/target creature gets? ([+-]\d+\/[+-]\d+)/i);
+              const pwBuffKeywords = abilityText.match(/gains? (trample|lifelink|flying|first strike|deathtouch|vigilance|haste|menace|hexproof|indestructible)/gi);
+              // "Put target nonland permanent into its owner's library third from the top" (Teferi Hero -3)
+              const isTuckToLibrary = /put target.*(?:nonland )?permanent.*(?:owner'?s )?library.*(?:third|second) from the top/i.test(abilityText);
+              // "Reveal the top N cards" / "Fact or Fiction" style (Jace -2)
+              const revealTopMatch = abilityText.match(/reveal the top (\w+) cards? of your library/i);
+              const isFactOrFiction = !!revealTopMatch && /opponent.*separat|pile/i.test(abilityText);
+              // "Return target creature...from your graveyard to the battlefield" (Ajani -2)
+              const isGraveyardReturn = /return target creature.*from your graveyard to (?:the battlefield|your hand)/i.test(abilityText);
+              // "Exile target tapped creature" (Wandering Emperor -2)
+              const isExileTapped = /exile target tapped creature/i.test(abilityText);
+              const exileTappedLifeMatch = abilityText.match(/you gain (\d+) life/i);
+              // "For each player, search that player's library for a nonland card and exile it" (Jace -8 ultimate)
+              const isLibraryExileUltimate = /search.*library.*nonland card.*exile/i.test(abilityText) && /cast.*without paying/i.test(abilityText);
+
+              const hasNewPatterns = hasDrawCard || hasExtraLand || addManaMatch || loseLifeMatch || pwBuffMatch || isTuckToLibrary || isFactOrFiction || isGraveyardReturn || isExileTapped || isLibraryExileUltimate;
+
+              if (pwEffects.length > 0 || isEmblem || isUntilNextTurn || pwTokenData || isExileCastOrDamage || isPreventDamage || isSorceryFlash || hasNewPatterns) {
                 return (
                   <div style={{ display: 'flex', gap: 8, justifyContent: 'center', flexWrap: 'wrap' }}>
                     {isExileCastOrDamage && !pwReminder.exiledCard && (
@@ -12486,6 +12773,328 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                         ⚡ Activate Sorcery Flash
                       </button>
                     )}
+                    {/* Draw a card (Teferi Hero +1, Kiora -1 first part) */}
+                    {hasDrawCard && (
+                      <button className="btn btn-gold" style={{ padding: '6px 16px', fontSize: 12 }}
+                        onClick={() => {
+                          drawCard(pwReminder.pIdx);
+                          addGameLog(pwReminder.pIdx, '📖', `${pwReminder.card.name}: Drew a card`);
+                          // If also has extra land, keep reminder open for land choice
+                          if (hasExtraLand) {
+                            const playerHand = getState(pwReminder.pIdx).hand;
+                            const landsInHand = playerHand.filter(c => isLand(c));
+                            if (landsInHand.length > 0) {
+                              setPutLandFromHand({ pIdx: pwReminder.pIdx, source: pwReminder.card.name });
+                            } else {
+                              setCastError({ pIdx: pwReminder.pIdx, message: '🌿 No land cards in hand to put onto the battlefield' });
+                              setTimeout(() => setCastError(null), 2500);
+                            }
+                            setPwReminder(null);
+                          } else if (!hasExtraLand) {
+                            // Teferi Hero: untap reminder after draw
+                            setCastError({ pIdx: pwReminder.pIdx, message: `📖 Drew a card. Untap up to two lands manually at end step.` });
+                            setTimeout(() => setCastError(null), 4000);
+                            setPwReminder(null);
+                          }
+                        }}>
+                        📖 Draw a Card{hasExtraLand ? ' + Put Land' : ''}
+                      </button>
+                    )}
+                    {/* Add mana (Chandra +1: "Add {R}{R}") */}
+                    {addManaMatch && (
+                      <button className="btn btn-gold" style={{ padding: '6px 16px', fontSize: 12 }}
+                        onClick={() => {
+                          const manaStr = addManaMatch[1].toUpperCase();
+                          const manaSymbols = manaStr.match(/\{([WUBRGC])\}/g) || [];
+                          setState(pwReminder.pIdx, prev => {
+                            const newPool = { ...prev.manaPool };
+                            manaSymbols.forEach(s => {
+                              const color = s.slice(1, -1);
+                              newPool[color] = (newPool[color] || 0) + 1;
+                            });
+                            return { ...prev, manaPool: newPool };
+                          });
+                          addGameLog(pwReminder.pIdx, '🔥', `${pwReminder.card.name}: Added ${manaStr}`);
+                          setCastError({ pIdx: pwReminder.pIdx, message: `🔥 Added ${manaStr} to mana pool` });
+                          setTimeout(() => setCastError(null), 2000);
+                          setPwReminder(null);
+                        }}>
+                        🔥 Add {addManaMatch[1].toUpperCase()}
+                      </button>
+                    )}
+                    {/* Target player loses life (Liliana +1) */}
+                    {loseLifeMatch && (
+                      <button className="btn btn-gold" style={{ padding: '6px 16px', fontSize: 12 }}
+                        onClick={() => {
+                          const amount = parseInt(loseLifeMatch[1]);
+                          const oppIdx = pwReminder.pIdx === 0 ? 1 : 0;
+                          setState(oppIdx, prev => ({ ...prev, life: prev.life - amount }));
+                          markDealtDamage(oppIdx);
+                          SFX.lifeLoss();
+                          addGameLog(pwReminder.pIdx, '💀', `${pwReminder.card.name}: ${getState(oppIdx).name} loses ${amount} life`);
+                          setPwReminder(null);
+                        }}>
+                        💀 Opponent loses {loseLifeMatch[1]} life
+                      </button>
+                    )}
+                    {/* Target creature gets +X/+X and gains keyword (Garruk +1) */}
+                    {pwBuffMatch && (() => {
+                      const buffStr = pwBuffMatch[1];
+                      const bm = buffStr.match(/([+-]\d+)\/([+-]\d+)/);
+                      const pMod = bm ? parseInt(bm[1]) : 0;
+                      const tMod = bm ? parseInt(bm[2]) : 0;
+                      const kws = pwBuffKeywords ? pwBuffKeywords.map(k => k.replace(/gains?\s+/i, '').trim().toLowerCase()) : [];
+                      const myCreatures = getState(pwReminder.pIdx).battlefield.filter(c => isCreature(c));
+                      return myCreatures.map(creature => (
+                        <button key={creature.id} className="btn btn-gold" style={{ padding: '5px 12px', fontSize: 11, maxWidth: 200 }}
+                          onClick={() => {
+                            setState(pwReminder.pIdx, prev => ({
+                              ...prev,
+                              battlefield: prev.battlefield.map(c => {
+                                if (c.id !== creature.id) return c;
+                                const existing = c.tempBuffs || { power: 0, toughness: 0, keywords: [] };
+                                const keywords = [...(existing.keywords || []), ...kws.filter(k => !(existing.keywords || []).includes(k))];
+                                return { ...c, tempBuffs: { ...existing, power: (existing.power || 0) + pMod, toughness: (existing.toughness || 0) + tMod, keywords } };
+                              })
+                            }));
+                            addGameLog(pwReminder.pIdx, '⚡', `${pwReminder.card.name}: ${creature.name} gets ${buffStr}${kws.length > 0 ? ' and gains ' + kws.join(', ') : ''}`);
+                            setPwReminder(null);
+                          }}>
+                          ⚡ {creature.name} {buffStr}
+                        </button>
+                      ));
+                    })()}
+                    {/* Exile target tapped creature + gain life (Wandering Emperor -2) */}
+                    {isExileTapped && (() => {
+                      const oppIdx = pwReminder.pIdx === 0 ? 1 : 0;
+                      const tappedCreatures = getState(oppIdx).battlefield.filter(c => isCreature(c) && c.tapped);
+                      const lifeGain = exileTappedLifeMatch ? parseInt(exileTappedLifeMatch[1]) : 0;
+                      if (tappedCreatures.length === 0) {
+                        return (
+                          <div style={{ fontSize: 11, color: 'rgba(255,100,100,0.8)', fontStyle: 'italic' }}>
+                            No tapped creatures to exile.
+                          </div>
+                        );
+                      }
+                      return tappedCreatures.map(creature => (
+                        <button key={creature.id} className="btn btn-gold" style={{ padding: '5px 12px', fontSize: 11, maxWidth: 200 }}
+                          onClick={() => {
+                            moveCard(oppIdx, creature, 'battlefield', 'exile');
+                            if (lifeGain > 0) {
+                              setState(pwReminder.pIdx, prev => ({ ...prev, life: prev.life + lifeGain }));
+                              SFX.lifeGain();
+                            }
+                            addGameLog(pwReminder.pIdx, '🚫', `${pwReminder.card.name}: Exiled ${creature.name}${lifeGain > 0 ? `, gained ${lifeGain} life` : ''}`);
+                            setPwReminder(null);
+                          }}>
+                          🚫 Exile {creature.name}{lifeGain > 0 ? ` (+${lifeGain} life)` : ''}
+                        </button>
+                      ));
+                    })()}
+                    {/* Return creature from graveyard (Ajani -2) */}
+                    {isGraveyardReturn && (() => {
+                      const gy = getState(pwReminder.pIdx).graveyard.filter(c => isCreature(c));
+                      const mvLimit = abilityText.match(/mana value (\d+) or less/i);
+                      const maxMV = mvLimit ? parseInt(mvLimit[1]) : 999;
+                      const validCards = gy.filter(c => (c.cmc || c.card_faces?.[0]?.cmc || 0) <= maxMV);
+                      if (validCards.length === 0) {
+                        return <div style={{ fontSize: 11, color: 'rgba(255,100,100,0.8)', fontStyle: 'italic' }}>No valid creatures in graveyard{maxMV < 999 ? ` (MV ≤ ${maxMV})` : ''}.</div>;
+                      }
+                      const toBf = /to the battlefield/i.test(abilityText);
+                      return validCards.map(card => (
+                        <button key={card.id} className="btn btn-gold" style={{ padding: '5px 12px', fontSize: 11, maxWidth: 200 }}
+                          onClick={() => {
+                            moveCard(pwReminder.pIdx, card, 'graveyard', toBf ? 'battlefield' : 'hand');
+                            addGameLog(pwReminder.pIdx, '✦', `${pwReminder.card.name}: Returned ${card.name} to ${toBf ? 'battlefield' : 'hand'}`);
+                            setPwReminder(null);
+                          }}>
+                          ✦ {card.name} (MV {card.cmc || '?'}) → {toBf ? 'Battlefield' : 'Hand'}
+                        </button>
+                      ));
+                    })()}
+                    {/* Teferi Hero -3: Tuck target nonland permanent into library 3rd from top */}
+                    {isTuckToLibrary && (() => {
+                      const oppIdx = pwReminder.pIdx === 0 ? 1 : 0;
+                      // Can target any nonland permanent on either side
+                      const allNonlands = [
+                        ...getState(oppIdx).battlefield.filter(c => !isLand(c)).map(c => ({ ...c, ownerIdx: oppIdx })),
+                        ...getState(pwReminder.pIdx).battlefield.filter(c => !isLand(c)).map(c => ({ ...c, ownerIdx: pwReminder.pIdx })),
+                      ];
+                      if (allNonlands.length === 0) {
+                        return <div style={{ fontSize: 11, color: 'rgba(255,100,100,0.8)', fontStyle: 'italic' }}>No nonland permanents to target.</div>;
+                      }
+                      return (
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, justifyContent: 'center', maxHeight: 200, overflowY: 'auto' }}>
+                          {allNonlands.map(perm => (
+                            <button key={perm.id} className="btn btn-gold" style={{ padding: '4px 10px', fontSize: 10, maxWidth: 180 }}
+                              onClick={() => {
+                                const ownerIdx = perm.ownerIdx;
+                                // Remove from battlefield
+                                setState(ownerIdx, prev => ({
+                                  ...prev,
+                                  battlefield: prev.battlefield.filter(c => c.id !== perm.id),
+                                }));
+                                // Insert into library 3rd from top (index 2)
+                                setState(ownerIdx, prev => {
+                                  const lib = [...prev.library];
+                                  const cleanCard = { ...perm, tapped: false, counters: {}, tempBuffs: null, damagePrevented: undefined };
+                                  delete cleanCard.ownerIdx;
+                                  const insertIdx = Math.min(2, lib.length);
+                                  lib.splice(insertIdx, 0, cleanCard);
+                                  return { ...prev, library: lib };
+                                });
+                                addGameLog(pwReminder.pIdx, '📚', `${pwReminder.card.name}: Put ${perm.name} into ${getState(ownerIdx).name}'s library 3rd from top`);
+                                setCastError({ pIdx: pwReminder.pIdx, message: `📚 ${perm.name} tucked 3rd from top of library` });
+                                setTimeout(() => setCastError(null), 2500);
+                                setTimeout(() => cleanupAttachments([ownerIdx]), 50);
+                                setPwReminder(null);
+                              }}>
+                              📚 {perm.name} ({perm.ownerIdx === oppIdx ? 'Opp' : 'Own'})
+                            </button>
+                          ))}
+                        </div>
+                      );
+                    })()}
+                    {/* Jace -2: Fact or Fiction — reveal top 3, opponent splits, caster picks */}
+                    {isFactOrFiction && (() => {
+                      const wordToNum = { one: 1, two: 2, three: 3, four: 4, five: 5 };
+                      const numCards = wordToNum[(revealTopMatch[1] || '').toLowerCase()] || parseInt(revealTopMatch[1]) || 3;
+                      return (
+                        <button className="btn btn-gold" style={{ padding: '6px 16px', fontSize: 12 }}
+                          onClick={() => {
+                            const pIdx = pwReminder.pIdx;
+                            const st = getState(pIdx);
+                            const topCards = st.library.slice(0, numCards);
+                            if (topCards.length === 0) {
+                              setCastError({ pIdx, message: '⚠️ Library is empty!' });
+                              setTimeout(() => setCastError(null), 2000);
+                              setPwReminder(null);
+                              return;
+                            }
+                            // Remove cards from library
+                            setState(pIdx, prev => ({ ...prev, library: prev.library.slice(numCards) }));
+                            // Use modalChoice for the split — opponent assigns cards to piles
+                            setModalChoice({
+                              type: 'fact_or_fiction',
+                              pIdx,
+                              cards: topCards,
+                              pile1: [],
+                              pile2: topCards.map(c => c.id), // Default: all in pile 2
+                              source: pwReminder.card.name,
+                              phase: 'opponent_split', // opponent splits, then caster picks
+                            });
+                            addGameLog(pIdx, '🔮', `${pwReminder.card.name}: Revealed top ${topCards.length} cards`);
+                            setPwReminder(null);
+                          }}>
+                          🔮 Reveal Top {numCards} Cards
+                        </button>
+                      );
+                    })()}
+                    {isLibraryExileUltimate && (() => {
+                      // Jace -8: Search each player's library for a nonland card, exile it, cast free
+                      const pIdx = pwReminder.pIdx;
+                      const oppIdx = pIdx === 0 ? 1 : 0;
+                      const step = pwReminder.ultimateStep || 'own'; // 'own' → 'opp' → 'done'
+                      if (step === 'own') {
+                        // Step 1: Search your own library
+                        const ownNonlands = getState(pIdx).library.filter(c => !isLand(c));
+                        return (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'center' }}>
+                            <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.5)', marginBottom: 2 }}>Step 1: Choose a nonland card from YOUR library to exile</div>
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, justifyContent: 'center', maxHeight: 200, overflowY: 'auto' }}>
+                              {ownNonlands.map(card => (
+                                <button key={card.id} className="btn" style={{ padding: '4px 10px', fontSize: 10, maxWidth: 150 }}
+                                  onClick={() => {
+                                    // Exile chosen card from own library
+                                    setState(pIdx, prev => ({
+                                      ...prev,
+                                      library: prev.library.filter(c => c.id !== card.id),
+                                      exile: [...prev.exile, { ...card, castFree: true }],
+                                    }));
+                                    shuffleLibrary(pIdx);
+                                    addGameLog(pIdx, '💫', `${pwReminder.card.name}: Exiled ${getDisplayName(card)} from own library (cast free)`);
+                                    // Move to step 2
+                                    setPwReminder(prev => ({ ...prev, ultimateStep: 'opp' }));
+                                  }}>
+                                  {getDisplayName(card)}
+                                </button>
+                              ))}
+                            </div>
+                            {ownNonlands.length === 0 && (
+                              <button className="btn" style={{ padding: '4px 12px', fontSize: 10 }}
+                                onClick={() => {
+                                  addGameLog(pIdx, '💫', `${pwReminder.card.name}: No nonland cards in own library`);
+                                  setPwReminder(prev => ({ ...prev, ultimateStep: 'opp' }));
+                                }}>
+                                Skip (no nonlands)
+                              </button>
+                            )}
+                          </div>
+                        );
+                      } else if (step === 'opp') {
+                        // Step 2: Search opponent's library
+                        // In online mode, caster can't see opponent's library (server hides it).
+                        // So we use a modalChoice to let the OPPONENT pick from their own library.
+                        if (onlineMode) {
+                          return (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'center' }}>
+                              <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.5)', marginBottom: 2 }}>Step 2: Opponent must choose a nonland card from their library to exile</div>
+                              <button className="btn btn-gold" style={{ padding: '6px 16px', fontSize: 12 }}
+                                onClick={() => {
+                                  // Signal opponent to pick a card — use modalChoice with special type
+                                  setModalChoice({
+                                    type: 'jace_ultimate_opp_search',
+                                    casterPIdx: pIdx,
+                                    oppPIdx: oppIdx,
+                                    source: pwReminder.card.name,
+                                  });
+                                  setPwReminder(null);
+                                  setCastError({ pIdx, message: '⏳ Waiting for opponent to choose a card from their library...' });
+                                  setTimeout(() => setCastError(null), 4000);
+                                }}>
+                                💫 Ask Opponent to Choose
+                              </button>
+                            </div>
+                          );
+                        }
+                        // Local mode: caster has full access to opponent's library
+                        const oppNonlands = getState(oppIdx).library.filter(c => !isLand(c));
+                        return (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'center' }}>
+                            <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.5)', marginBottom: 2 }}>Step 2: Choose a nonland card from OPPONENT's library to exile</div>
+                            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, justifyContent: 'center', maxHeight: 200, overflowY: 'auto' }}>
+                              {oppNonlands.map(card => (
+                                <button key={card.id} className="btn" style={{ padding: '4px 10px', fontSize: 10, maxWidth: 150 }}
+                                  onClick={() => {
+                                    setState(oppIdx, prev => ({
+                                      ...prev,
+                                      library: prev.library.filter(c => c.id !== card.id),
+                                      exile: [...prev.exile, { ...card, castFree: true }],
+                                    }));
+                                    shuffleLibrary(oppIdx);
+                                    addGameLog(pIdx, '💫', `${pwReminder.card.name}: Exiled ${getDisplayName(card)} from opponent's library (cast free)`);
+                                    setPwReminder(null);
+                                    setCastError({ pIdx, message: '💫 Jace ultimate complete! Exiled cards can be cast from exile for free.' });
+                                    setTimeout(() => setCastError(null), 3500);
+                                  }}>
+                                  {getDisplayName(card)}
+                                </button>
+                              ))}
+                            </div>
+                            {oppNonlands.length === 0 && (
+                              <button className="btn" style={{ padding: '4px 12px', fontSize: 10 }}
+                                onClick={() => {
+                                  addGameLog(pIdx, '💫', `${pwReminder.card.name}: No nonland cards in opponent's library`);
+                                  setPwReminder(null);
+                                }}>
+                                Skip (no nonlands)
+                              </button>
+                            )}
+                          </div>
+                        );
+                      }
+                      return null;
+                    })()}
                     {isPreventDamage && (() => {
                       // Kiora's +1: optionally target any permanent an opponent controls
                       // Player can also choose no target (just for the loyalty counter)
