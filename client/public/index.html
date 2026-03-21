@@ -4020,6 +4020,8 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
   const setLookTopView = syncSetter(_setLookTopView);
   const [librarySearch, _setLibrarySearch] = useState(null); // SYNCED — { pIdx, filter, tapped, source }
   const setLibrarySearch = syncSetter(_setLibrarySearch);
+  const [putLandFromHand, _setPutLandFromHand] = useState(null); // SYNCED — { pIdx, source } — "you may put a land from your hand onto the battlefield"
+  const setPutLandFromHand = syncSetter(_setPutLandFromHand);
   const [endOfTurnRespond, _setEndOfTurnRespond] = useState(false); // SYNCED — waiting for opponent to respond
   const setEndOfTurnRespond = syncSetter(_setEndOfTurnRespond);
 
@@ -4126,6 +4128,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       spellResolveRequest,
       abilityActivated,
       lookTopView,
+      putLandFromHand,
     };
     // Bundle any pending log entries into this broadcast
     // (avoids race condition where separate log broadcast triggers throttle
@@ -4322,6 +4325,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     if (onlineState.searchExile !== undefined) _setSearchExile(onlineState.searchExile);
     if (onlineState.spellResolveRequest !== undefined) _setSpellResolveRequest(onlineState.spellResolveRequest);
     if (onlineState.abilityActivated !== undefined) _setAbilityActivated(onlineState.abilityActivated);
+    if (onlineState.putLandFromHand !== undefined) _setPutLandFromHand(onlineState.putLandFromHand);
 
     // Receive game log entries from opponent (supports both array and single entry)
     const logEntries = onlineState.__logEntries || (onlineState.__logEntry ? [onlineState.__logEntry] : []);
@@ -6795,10 +6799,19 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
           for (let i = 0; i < (effect.amount || 1); i++) drawCard(pIdx);
           break;
         case 'extra_land_drop':
-          // Growth Spiral / Explore: allow an extra land play this turn (reset the flag)
-          setState(pIdx, prev => ({ ...prev, landPlayedThisTurn: false }));
-          setCastError({ pIdx, message: '🌿 You may play an additional land this turn' });
-          setTimeout(() => setCastError(null), 3000);
+          // Growth Spiral / Explore: "you may put a land card from your hand onto the battlefield"
+          // This is a spell EFFECT (not a land play action), so it works even when it's not your turn.
+          // Show a modal to let the player pick a land from their hand.
+          {
+            const playerHand = getState(pIdx).hand;
+            const landsInHand = playerHand.filter(c => isLand(c));
+            if (landsInHand.length > 0) {
+              setPutLandFromHand({ pIdx, source: card.name || 'Spell' });
+            } else {
+              setCastError({ pIdx, message: '🌿 No land cards in hand to put onto the battlefield' });
+              setTimeout(() => setCastError(null), 2500);
+            }
+          }
           break;
         case 'scry': {
           // Collect remaining effects after scry to run on complete
@@ -8956,6 +8969,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     setAbilityTargeting(null);
     setModalChoice(null);
     setStackMinimized(false);
+    setPutLandFromHand(null);
     SFX.passTurn();
     revertCreatureLands(0);
     revertCreatureLands(1);
@@ -11487,6 +11501,96 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                 borderRadius: 8, padding: '8px 20px', color: 'rgba(255,255,255,0.5)', cursor: 'pointer', fontSize: 11,
               }}>
                 Decline (shuffle only)
+              </button>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Put Land From Hand Overlay (Growth Spiral, Explore — "you may put a land onto the battlefield") */}
+      {putLandFromHand && (!onlineMode || onlinePlayerIndex === putLandFromHand.pIdx) && (() => {
+        const { pIdx: landPIdx, source } = putLandFromHand;
+        const playerHand = getState(landPIdx).hand;
+        const landsInHand = playerHand.filter(c => isLand(c));
+        // Deduplicate by name for display
+        const uniqueLands = [...new Map(landsInHand.map(c => [c.name, c])).values()];
+        return (
+          <div style={{
+            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.9)',
+            display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+            zIndex: 10002, animation: 'fadeIn 0.2s ease',
+          }}>
+            <div style={{
+              background: 'linear-gradient(160deg, #1a2a1a, #122014)', borderRadius: 14, padding: '20px 28px',
+              border: '1px solid rgba(80,200,80,0.4)', boxShadow: '0 8px 40px rgba(0,0,0,0.7), 0 0 30px rgba(80,200,80,0.1)',
+              maxWidth: 600, textAlign: 'center', maxHeight: '80vh', overflow: 'auto',
+            }}>
+              <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: 2, color: 'rgba(80,200,80,0.8)', marginBottom: 6, fontWeight: 700 }}>
+                {source}
+              </div>
+              <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.6)', marginBottom: 14 }}>
+                You may put a land card from your hand onto the battlefield. ({landsInHand.length} land{landsInHand.length !== 1 ? 's' : ''} in hand)
+              </div>
+              {landsInHand.length > 0 ? (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, justifyContent: 'center', marginBottom: 14 }}>
+                  {uniqueLands.map((card, i) => {
+                    const count = landsInHand.filter(c => c.name === card.name).length;
+                    const imgUrl = card.image_uris?.small || card.card_faces?.[0]?.image_uris?.small;
+                    return (
+                      <button key={i} onClick={() => {
+                        const target = playerHand.find(c => c.name === card.name && isLand(c));
+                        if (!target) return;
+                        // Move land from hand to battlefield (this is an effect, not a "land play")
+                        moveCard(landPIdx, target, 'hand', 'battlefield');
+                        SFX.playLand();
+                        addGameLog(landPIdx, '🌿', `${source}: Put ${card.name} onto the battlefield from hand`);
+                        setCastError({ pIdx: landPIdx, message: `🌿 ${card.name} enters the battlefield via ${source}`, background: '#1a3320' });
+                        setTimeout(() => setCastError(null), 2000);
+                        setPutLandFromHand(null);
+                        // Trigger landfall
+                        setTimeout(() => {
+                          const st = getState(landPIdx);
+                          const landfallTriggers = [];
+                          for (const bf of st.battlefield) {
+                            const oracle = [bf.oracle_text || '', ...(bf.card_faces || []).map(f => f.oracle_text || '')].join(' ').toLowerCase();
+                            const kw = (bf.keywords || []).map(k => k.toLowerCase());
+                            if (kw.includes('landfall') || oracle.includes('whenever a land enters the battlefield')) {
+                              const triggerMatch = oracle.match(/whenever a land enters the battlefield[^,.]*, ([^.]+)/);
+                              const effectText = triggerMatch ? triggerMatch[1].trim() : 'landfall trigger';
+                              landfallTriggers.push({ name: bf.name, effect: effectText });
+                            }
+                          }
+                          if (landfallTriggers.length > 0) {
+                            setEtbReminder({ pIdx: landPIdx, card: landfallTriggers[0], effects: landfallTriggers.map(t => ({ icon: '🌿', text: `${t.name}: ${t.effect}` })) });
+                          }
+                        }, 200);
+                      }} style={{
+                        background: 'linear-gradient(180deg, #2a4a2a, #1a3a1a)', border: '1px solid rgba(80,200,80,0.3)',
+                        borderRadius: 8, padding: '8px 14px', color: '#e8e4dc', cursor: 'pointer', fontSize: 12,
+                        transition: 'all 0.15s', minWidth: 100, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6,
+                      }}
+                      onMouseOver={e => e.currentTarget.style.borderColor = 'rgba(80,200,80,0.8)'}
+                      onMouseOut={e => e.currentTarget.style.borderColor = 'rgba(80,200,80,0.3)'}
+                      >
+                        {imgUrl && <img src={imgUrl} alt={card.name} style={{ width: 80, height: 'auto', borderRadius: 4 }} />}
+                        <span>{card.name} {count > 1 ? `(x${count})` : ''}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.4)', marginBottom: 14, fontStyle: 'italic' }}>
+                  No land cards in hand.
+                </div>
+              )}
+              <button onClick={() => {
+                addGameLog(landPIdx, '🌿', `${source}: Chose not to put a land onto the battlefield`);
+                setPutLandFromHand(null);
+              }} style={{
+                background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.2)',
+                borderRadius: 8, padding: '8px 20px', color: 'rgba(255,255,255,0.5)', cursor: 'pointer', fontSize: 11,
+              }}>
+                Decline
               </button>
             </div>
           </div>

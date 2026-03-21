@@ -391,6 +391,7 @@ class GameRoom {
       if (update.spellResolveRequest !== undefined) this.gameState.spellResolveRequest = update.spellResolveRequest;
       if (update.abilityActivated !== undefined) this.gameState.abilityActivated = update.abilityActivated;
       if (update.lookTopView !== undefined) this.gameState.lookTopView = update.lookTopView;
+      if (update.putLandFromHand !== undefined) this.gameState.putLandFromHand = update.putLandFromHand;
 
       // Forward game log entries from one player to the other
       if (update.__logEntries) this.gameState.__logEntries = update.__logEntries;
