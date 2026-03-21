@@ -5630,6 +5630,21 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
   // ===== PLANESWALKER ABILITY ACTIVATION =====
   const activatePlaneswalkerAbility = (pIdx, card, ability) => {
     if (onlineMode && pIdx !== onlinePlayerIndex) return;
+
+    // PW abilities can only be activated at sorcery speed: main phase, stack empty, your turn
+    if (pIdx === activePlayer) {
+      if (currentPhase !== 'main1' && currentPhase !== 'main2') {
+        setCastError({ pIdx, message: `⚠️ Planeswalker abilities can only be activated during your main phase` });
+        setTimeout(() => setCastError(null), 2500);
+        return;
+      }
+      if (spellStack.length > 0) {
+        setCastError({ pIdx, message: `⚠️ Cannot activate planeswalker ability while spells are on the stack` });
+        setTimeout(() => setCastError(null), 2500);
+        return;
+      }
+    }
+
     const costNum = parseInt(ability.cost);
     const currentLoyalty = (card.counters && card.counters['loyalty']) || 0;
 
@@ -11078,7 +11093,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       })()}
 
       {/* Instant Casting Overlay — non-active player casts instant/flash */}
-      {instantCasting && !spellTargeting && (() => {
+      {instantCasting && !spellTargeting && !modalChoice && (() => {
         const ip = getState(instantCasting.pIdx);
         const sfFlash = hasSorceryFlash(instantCasting.pIdx);
         const instantCards = ip.hand.filter(c => canCastAtInstantSpeed(c) || (sfFlash && (c.type_line || '').toLowerCase().includes('sorcery')));
@@ -12467,7 +12482,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       })()}
 
       {/* PW Ability Reminder (after overlay closes) */}
-      {pwReminder && (!onlineMode || onlinePlayerIndex === pwReminder.pIdx) && (
+      {pwReminder && !modalChoice && (!onlineMode || onlinePlayerIndex === pwReminder.pIdx) && (
         <div style={{
           position: 'fixed', bottom: 80, left: '50%', transform: 'translateX(-50%)',
           zIndex: 1500, animation: 'fadeIn 0.2s ease',
@@ -12915,10 +12930,10 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                     {/* Teferi Hero -3: Tuck target nonland permanent into library 3rd from top */}
                     {isTuckToLibrary && (() => {
                       const oppIdx = pwReminder.pIdx === 0 ? 1 : 0;
-                      // Can target any nonland permanent on either side
+                      // Can target any nonland permanent on either side (exclude tokens — they cease to exist)
                       const allNonlands = [
-                        ...getState(oppIdx).battlefield.filter(c => !isLand(c)).map(c => ({ ...c, ownerIdx: oppIdx })),
-                        ...getState(pwReminder.pIdx).battlefield.filter(c => !isLand(c)).map(c => ({ ...c, ownerIdx: pwReminder.pIdx })),
+                        ...getState(oppIdx).battlefield.filter(c => !isLand(c) && !c.isToken).map(c => ({ ...c, ownerIdx: oppIdx })),
+                        ...getState(pwReminder.pIdx).battlefield.filter(c => !isLand(c) && !c.isToken).map(c => ({ ...c, ownerIdx: pwReminder.pIdx })),
                       ];
                       if (allNonlands.length === 0) {
                         return <div style={{ fontSize: 11, color: 'rgba(255,100,100,0.8)', fontStyle: 'italic' }}>No nonland permanents to target.</div>;
@@ -13069,7 +13084,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                                     setState(oppIdx, prev => ({
                                       ...prev,
                                       library: prev.library.filter(c => c.id !== card.id),
-                                      exile: [...prev.exile, { ...card, castFree: true }],
+                                      exile: [...prev.exile, { ...card, castFree: true, castFreeFor: pIdx }],
                                     }));
                                     shuffleLibrary(oppIdx);
                                     addGameLog(pIdx, '💫', `${pwReminder.card.name}: Exiled ${getDisplayName(card)} from opponent's library (cast free)`);
