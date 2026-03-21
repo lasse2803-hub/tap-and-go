@@ -5312,7 +5312,8 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     // If ability needs a target, enter targeting mode BEFORE paying costs
     if (ability.needsTarget) {
       setAbilityTargeting({ pIdx, card, ability });
-      setStackMinimized(true); // minimize stack so player can see battlefield
+      // Only minimize spell stack if there IS a spell on stack; otherwise the targeting bar handles UI
+      if (spellStack.length > 0) setStackMinimized(true);
       setCastError({ pIdx, message: `🎯 Select target creature for ${card.name}'s ability`, background: '#1a2a3a' });
       return;
     }
@@ -5374,16 +5375,31 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       setCastError({ pIdx, message: `${targetInfo.cardName} gets ${ability.label}`, background: '#2a2a1a' });
       setTimeout(() => setCastError(null), 2000);
     } else if (ability.type === 'damageTarget' && targetInfo) {
-      // Deal damage to target creature
-      setState(targetInfo.pIdx, prev => ({
-        ...prev,
-        battlefield: prev.battlefield.map(c => {
-          if (c.id !== targetInfo.cardId) return c;
-          return { ...c, damage: (c.damage || 0) + ability.amount };
-        })
-      }));
-      setCastError({ pIdx, message: `${sourceCard.name} deals ${ability.amount} damage to ${targetInfo.cardName}`, background: '#3a1a1a' });
-      setTimeout(() => setCastError(null), 2000);
+      // Deal damage to target creature — check lethal
+      const targetCard = getState(targetInfo.pIdx).battlefield.find(c => c.id === targetInfo.cardId);
+      if (targetCard && isCreature(targetCard)) {
+        const toughness = getEffectiveToughness(targetCard);
+        if (ability.amount >= toughness) {
+          // Lethal — move to graveyard
+          moveCard(targetInfo.pIdx, targetCard, 'battlefield', 'graveyard');
+          setCastError({ pIdx, message: `${sourceCard.name} deals ${ability.amount} damage to ${targetInfo.cardName} — destroyed!`, background: '#3a1a1a' });
+        } else {
+          // Survives — track damage
+          setState(targetInfo.pIdx, prev => ({
+            ...prev,
+            battlefield: prev.battlefield.map(c => {
+              if (c.id !== targetInfo.cardId) return c;
+              return { ...c, damage: (c.damage || 0) + ability.amount };
+            })
+          }));
+          SFX.playerDamage();
+          setCastError({ pIdx, message: `${sourceCard.name} deals ${ability.amount} damage to ${targetInfo.cardName} (survives: ${toughness} toughness)`, background: '#3a1a1a' });
+        }
+      } else {
+        // Non-creature target or not found — just show message
+        setCastError({ pIdx, message: `${sourceCard.name} deals ${ability.amount} damage to ${targetInfo.cardName}`, background: '#3a1a1a' });
+      }
+      setTimeout(() => setCastError(null), 2500);
     } else if (ability.type === 'draw') {
       for (let i = 0; i < ability.count; i++) {
         setTimeout(() => drawCard(pIdx), i * 100);
@@ -8174,6 +8190,15 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
           setTimeout(() => setCastError(null), 2000);
           return;
         }
+        // Protection from color check
+        if (isOpponent) {
+          const protColor = hasProtectionFrom(card, abilityTargeting.card);
+          if (protColor) {
+            setCastError({ pIdx: abilityTargeting.pIdx, message: `❌ ${card.name} has protection from ${protColor}!`, background: '#4a1a1a' });
+            setTimeout(() => setCastError(null), 2000);
+            return;
+          }
+        }
         // Valid target — pay costs and execute
         const targetInfo = { pIdx, cardId: card.id, cardName: card.name };
         const { pIdx: srcPIdx, card: srcCard, ability } = abilityTargeting;
@@ -10775,7 +10800,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
 
       {/* End of Turn — opponent can respond before turn passes */}
       {/* IMPORTANT: Hide when spellStack/targeting/modals are active — those overlays must take priority */}
-      {endOfTurnRespond && !instantCasting && spellStack.length === 0 && !spellTargeting && !modalChoice && !gameOver && (() => {
+      {endOfTurnRespond && !instantCasting && spellStack.length === 0 && !spellTargeting && !abilityTargeting && !modalChoice && !gameOver && (() => {
         const opponentIdx = activePlayer === 0 ? 1 : 0;
         const opponentName = getState(opponentIdx).name;
         const activeName = getState(activePlayer).name;
