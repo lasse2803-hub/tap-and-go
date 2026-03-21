@@ -8759,15 +8759,8 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     } else {
       const defaultTargets = {};
       combatState.attackers.forEach(id => { defaultTargets[id] = 'player'; });
-      // Check if defender has any untapped creatures to block with
-      const defenderCreatures = getState(defendingPlayer).battlefield.filter(c => isCreature(c) && !c.tapped);
-      if (defenderCreatures.length === 0) {
-        // No blockers possible — skip to combat-respond (attacker priority before damage)
-        setCombatState(prev => ({ ...prev, phase: 'combat-respond', attackTargets: defaultTargets, blocks: {}, selectedBlocker: null }));
-      } else {
-        // Go to blockers phase
-        setCombatState(prev => ({ ...prev, phase: 'blockers', attackTargets: defaultTargets, blocks: {}, selectedBlocker: null }));
-      }
+      // Priority window after attackers declared — both players can cast instants/cycle before blockers
+      setCombatState(prev => ({ ...prev, phase: 'post-attackers', attackTargets: defaultTargets, blocks: {}, selectedBlocker: null }));
     }
 
     // Check for attack triggers on ALL creatures (including creature lands)
@@ -8945,7 +8938,15 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
 
   const confirmPwTargets = () => {
     if (!combatState || combatState.phase !== 'pw-targets') return;
+    // Priority window after PW targets — both players can cast instants/cycle before blockers
+    setCombatState(prev => ({ ...prev, phase: 'post-attackers', blocks: {}, selectedBlocker: null }));
+  };
+
+  // After post-attackers priority window, proceed to blockers (or skip if no untapped creatures)
+  const proceedToBlockers = () => {
+    if (!combatState || combatState.phase !== 'post-attackers') return;
     const defendingPlayer = activePlayer === 0 ? 1 : 0;
+    // Re-check untapped creatures — new tokens (e.g. Shark Typhoon) may have entered since attackers were declared
     const defenderCreatures = getState(defendingPlayer).battlefield.filter(c => isCreature(c) && !c.tapped);
     if (defenderCreatures.length === 0) {
       // No blockers possible — skip to combat-respond (attacker priority before damage)
@@ -10508,6 +10509,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
               <span className="combat-label">
                 {combatState.phase === 'attackers' ? '⚔ Declare Attackers' :
                  combatState.phase === 'pw-targets' ? '🎯 Assign Attack Targets' :
+                 combatState.phase === 'post-attackers' ? '⚡ After Attackers — Priority' :
                  combatState.phase === 'blockers' ? '🛡 Declare Blockers' :
                  combatState.phase === 'combat-respond' ? '⚡ Before Damage' :
                  combatState.phase === 'damage' ? '💥 Resolving Damage...' : 'Combat'}
@@ -10530,6 +10532,8 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                   ? `${getState(activePlayer).name}: Click creatures to attack (${combatState.attackers.length} selected)`
                   : combatState.phase === 'pw-targets'
                   ? `Choose target for each attacker: opponent or their Planeswalker`
+                  : combatState.phase === 'post-attackers'
+                  ? `Both players may cast instants or activate abilities before blockers`
                   : combatState.phase === 'blockers'
                   ? combatState.selectedBlocker
                     ? `Now click an attacker to block it`
@@ -10591,6 +10595,34 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                       <button className="btn btn-gold" onClick={confirmPwTargets}>Confirm Targets</button>
                     </div>
                   </div>
+                );
+              })()}
+              {combatState.phase === 'post-attackers' && (() => {
+                const defendingPlayer = activePlayer === 0 ? 1 : 0;
+                const isDefender = onlineMode && onlinePlayerIndex === defendingPlayer;
+                const isAttacker = onlineMode && onlinePlayerIndex === activePlayer;
+                return (
+                  <>
+                    {/* Both players can cast instants/cycle after attackers, before blockers */}
+                    {(!onlineMode || isAttacker) && (
+                      <button className="btn" style={{ borderColor: 'rgba(200,170,60,0.3)', color: '#e8c96a', fontSize: 11 }}
+                        onClick={() => respondInCombat(activePlayer)}>⚡ {getState(activePlayer).name}: Cast Spell</button>
+                    )}
+                    {(!onlineMode || isDefender) && (
+                      <button className="btn" style={{ borderColor: 'rgba(100,200,255,0.4)', color: '#6cf', fontSize: 11 }}
+                        onClick={() => respondInCombat(defendingPlayer)}>⚡ {getState(defendingPlayer).name}: Cast/Cycle</button>
+                    )}
+                    {/* Defender controls the flow: Proceed to Blockers */}
+                    {(!onlineMode || isDefender) && (
+                      <button className="btn btn-primary" onClick={proceedToBlockers}>Proceed to Blockers →</button>
+                    )}
+                    {/* Attacker sees waiting message */}
+                    {onlineMode && isAttacker && (
+                      <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.4)', fontStyle: 'italic', alignSelf: 'center' }}>
+                        Waiting for {getState(defendingPlayer).name} to declare blockers...
+                      </span>
+                    )}
+                  </>
                 );
               })()}
               {combatState.phase === 'combat-respond' && (() => {
