@@ -5632,7 +5632,10 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     if (onlineMode && pIdx !== onlinePlayerIndex) return;
 
     // PW abilities can only be activated at sorcery speed: main phase, stack empty, your turn
-    if (pIdx === activePlayer) {
+    // Exception: Wandering Emperor (and similar) — "you may activate loyalty abilities any time you could cast an instant"
+    const oracleText = getOracleText(card);
+    const hasInstantSpeedLoyalty = card.enteredThisTurn && /activate.*loyalty.*any time.*instant/i.test(oracleText);
+    if (!hasInstantSpeedLoyalty) {
       if (currentPhase !== 'main1' && currentPhase !== 'main2') {
         setCastError({ pIdx, message: `⚠️ Planeswalker abilities can only be activated during your main phase` });
         setTimeout(() => setCastError(null), 2500);
