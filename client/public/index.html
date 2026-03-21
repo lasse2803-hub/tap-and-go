@@ -6454,8 +6454,13 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
   const [spellStack, _setSpellStack] = useState([]); // SYNCED — LIFO stack: [{ pIdx, card, asAdventure, fromExile, displayName, resolvedTargets? }, ...]
   const setSpellStack = syncSetter(_setSpellStack);
   const stackTop = spellStack.length > 0 ? spellStack[spellStack.length - 1] : null;
+  const [stackMinimized, setStackMinimized] = useState(false); // LOCAL — temporarily minimize spell stack overlay to interact with battlefield (e.g. sacrifice Cursecatcher)
   const [sacCounterChoice, _setSacCounterChoice] = useState(null); // SYNCED — { sacPIdx, sacCard, targetEntry, payAmount } — "counter unless pays" choice
   const setSacCounterChoice = syncSetter(_setSacCounterChoice);
+  // Auto-restore full stack overlay when stack empties or sacCounter overlay appears
+  useEffect(() => {
+    if (spellStack.length === 0 || sacCounterChoice) setStackMinimized(false);
+  }, [spellStack.length, sacCounterChoice]);
   const [pwAbilityOnStack, _setPwAbilityOnStack] = useState(null); // SYNCED — { pIdx, card, ability: { cost, text } }
   const setPwAbilityOnStack = syncSetter(_setPwAbilityOnStack);
   const [pwReminder, _setPwReminder] = useState(null); // SYNCED — { pIdx, card, ability, exiledCard?, exileCastDmg? }
@@ -8773,6 +8778,10 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     }
 
     setEndOfTurnRespond(false);
+    setInstantCasting(null);
+    setSpellTargeting(null);
+    setModalChoice(null);
+    setStackMinimized(false);
     SFX.passTurn();
     revertCreatureLands(0);
     revertCreatureLands(1);
@@ -10983,7 +10992,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         );
       })()}
 
-      {spellStack.length > 0 && !instantCasting && (
+      {spellStack.length > 0 && !instantCasting && !stackMinimized && (
         <div className="spell-stack-overlay">
           <div className="spell-stack-card">
             {/* Show full stack (newest on top) */}
@@ -11035,7 +11044,12 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                 <button className="btn-respond" onClick={() => {
                   const opponentPIdx = stackTop.pIdx === 0 ? 1 : 0;
                   setInstantCasting({ pIdx: opponentPIdx, returnToStack: true });
-                }}>⚡ Respond</button>
+                }}>⚡ Respond (Hand)</button>
+              )}
+              {(!onlineMode || onlinePlayerIndex === (stackTop.pIdx === 0 ? 1 : 0)) && (
+                <button className="btn-respond" style={{ borderColor: 'rgba(220,160,60,0.5)', color: '#e0a040' }} onClick={() => {
+                  setStackMinimized(true);
+                }}>🎯 Respond (Ability)</button>
               )}
               {onlineMode && onlinePlayerIndex === stackTop.pIdx && (
                 <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.4)', padding: '6px 0', fontStyle: 'italic' }}>
@@ -11054,6 +11068,22 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
               </div>
             )}
           </div>
+        </div>
+      )}
+
+      {/* Minimized spell stack bar — shown when user clicks "Respond (Ability)" to interact with battlefield */}
+      {spellStack.length > 0 && stackMinimized && !instantCasting && (
+        <div style={{
+          position: 'fixed', top: 10, left: '50%', transform: 'translateX(-50%)',
+          background: 'rgba(10,12,20,0.95)', border: '2px solid rgba(220,160,60,0.5)', borderRadius: 10,
+          padding: '8px 20px', zIndex: 10000, display: 'flex', alignItems: 'center', gap: 12,
+          boxShadow: '0 4px 24px rgba(0,0,0,0.6), 0 0 20px rgba(220,160,60,0.1)',
+        }}>
+          <span style={{ fontSize: 11, color: '#e0a040', fontWeight: 700 }}>
+            ⚡ {stackTop.displayName} on stack — Right-click a creature to use its ability
+          </span>
+          <button className="btn" style={{ fontSize: 10, padding: '4px 12px', borderColor: 'rgba(200,170,60,0.4)', color: '#e8c96a' }}
+            onClick={() => setStackMinimized(false)}>Back to Stack</button>
         </div>
       )}
 
