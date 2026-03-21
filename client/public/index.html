@@ -4861,6 +4861,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         setEndOfTurnRespond(false);
         setInstantCasting(null);
         setSpellTargeting(null);
+        setAbilityTargeting(null);
         setModalChoice(null);
         setGameOver({ winner: opponent.name, loser: p.name, reason: `${p.name} tried to draw from an empty library` });
       }
@@ -5193,51 +5194,104 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     setTimeout(() => setAbilityActivated(null), 3500);
   };
 
-  // ===== PAID ACTIVATED ABILITIES (Midnight Clock, etc.) =====
+  // ===== ACTIVATED ABILITIES (Midnight Clock, Heliod, creatures/artifacts/enchantments) =====
   const getPaidAbilities = (card) => {
     if (isLand(card)) return [];
     const allText = getOracleText(card);
     const abilities = [];
-    // Match "{cost}: effect" but NOT "{T}: Add mana" (handled by toggleTap)
-    // and NOT "Sacrifice" abilities (handled above)
     const lines = allText.split('\n');
     for (const line of lines) {
-      // Skip if it's a sacrifice ability
-      if (/sacrifice/i.test(line)) continue;
-      // Skip if it's tap-for-mana
-      if (/^\{t\}:\s*add\s/i.test(line.trim())) continue;
-      // Match "{cost}: effect" or "{cost}, {T}: effect"
-      const abilityMatch = line.match(/^((?:\{[^}]+\}(?:,\s*)?)+)(?:,\s*\{t\})?\s*:\s*(.+)/i);
+      const trimmed = line.trim();
+      // Skip sacrifice abilities (handled by getSacrificeAbilities)
+      if (/sacrifice/i.test(trimmed)) continue;
+      // Skip tap-for-mana abilities (handled by toggleTap / mana buttons)
+      if (/^\{t\}\s*:\s*add\s/i.test(trimmed)) continue;
+      // Skip keyword ability words that look like "cost:" but aren't (e.g., "Equip {2}")
+      if (/^(?:equip|crew|fortify|reconfigure)\s/i.test(trimmed)) continue;
+      // Pattern 1: {T}: effect (tap-only, no mana cost)
+      // Pattern 2: {mana}: effect (mana-only, no tap)
+      // Pattern 3: {mana}, {T}: effect (mana + tap)
+      // Pattern 4: {T}, {mana}: effect (tap then mana — less common but valid)
+      // General regex: optional mana symbols and/or {T} separated by commas, then ": effect"
+      const abilityMatch = trimmed.match(/^((?:\{[^}]+\}(?:,\s*)?)+)\s*:\s*(.+)/i);
       if (!abilityMatch) continue;
-      const costPart = abilityMatch[1].trim();
+      const fullCostPart = abilityMatch[1].trim();
       const effectText = abilityMatch[2].trim();
-      const requiresTap = /,\s*\{t\}/i.test(abilityMatch[0].split(':')[0]);
       // Skip if the effect is just adding mana
       if (/^add\s/i.test(effectText)) continue;
-      // Parse mana cost
-      const manaCost = parseManaCost(costPart);
-      let costStr = costPart;
-      if (requiresTap) costStr += ', {T}';
-      // Parse effect
+      // Determine if {T} is in the cost
+      const requiresTap = /\{t\}/i.test(fullCostPart);
+      // Strip {T} from cost to get just the mana portion
+      const manaPart = fullCostPart.replace(/\{t\}/gi, '').replace(/^,\s*/, '').replace(/,\s*$/, '').trim();
+      const manaCost = manaPart ? parseManaCost(manaPart) : null;
+      // Build display cost string
+      let costStr = '';
+      if (manaPart && requiresTap) costStr = manaPart + ', {T}';
+      else if (requiresTap) costStr = '{T}';
+      else costStr = fullCostPart;
+      // Detect if ability needs a target creature
+      const needsTarget = /target\s+creature/i.test(effectText);
+      const needsTargetAny = /(?:any target|target\s+(?:creature|player|opponent))/i.test(effectText);
+      // Parse effect type
       let effect;
-      if (/put\s+(?:a|an|one)\s+(\w+)\s+counter/i.test(effectText)) {
+      // Keyword-granting: "target creature gains [keyword] until end of turn" or "another target creature gains [keyword]"
+      const keywordGrantMatch = effectText.match(/(?:target\s+)?(?:another\s+)?(?:target\s+)?creature\s+gains?\s+(lifelink|deathtouch|flying|trample|vigilance|menace|first strike|double strike|hexproof|indestructible|reach|haste)\s+until\s+end\s+of\s+turn/i);
+      if (keywordGrantMatch) {
+        const keyword = keywordGrantMatch[1].toLowerCase();
+        effect = { type: 'grantKeyword', keyword, label: `Grant ${keyword} until end of turn`, needsTarget: true };
+      // +X/+X buff: "target creature gets +X/+X until end of turn"
+      } else if (/(?:target\s+)?(?:another\s+)?(?:target\s+)?creature\s+gets?\s+([+-]\d+)\/([+-]\d+)\s+until\s+end\s+of\s+turn/i.test(effectText)) {
+        const buffMatch = effectText.match(/gets?\s+([+-]\d+)\/([+-]\d+)/i);
+        const pMod = parseInt(buffMatch[1]);
+        const tMod = parseInt(buffMatch[2]);
+        effect = { type: 'buff', power: pMod, toughness: tMod, label: `${pMod >= 0 ? '+' : ''}${pMod}/${tMod >= 0 ? '+' : ''}${tMod} until end of turn`, needsTarget };
+      // Put a counter on target/another creature
+      } else if (/put\s+(?:a|an|one)\s+(\w+)\s+counter\s+on\s+(?:target|another)/i.test(effectText)) {
+        const counterType = effectText.match(/put\s+(?:a|an|one)\s+(\w+)\s+counter/i)[1];
+        effect = { type: 'addCounterTarget', counterType, label: `Add ${counterType} counter to target`, needsTarget: true };
+      // Put a counter on self (~ or "it" or "this creature")
+      } else if (/put\s+(?:a|an|one)\s+(\w+)\s+counter/i.test(effectText)) {
         const counterType = effectText.match(/put\s+(?:a|an|one)\s+(\w+)\s+counter/i)[1];
         effect = { type: 'addCounter', counterType, label: `Add ${counterType} counter` };
-      } else if (/draw\s+(?:a\s+)?card/i.test(effectText)) {
+      } else if (/draw\s+(\w+)\s+cards?/i.test(effectText)) {
+        const countMatch = effectText.match(/draw\s+(\w+)\s+cards?/i);
+        const numWord = countMatch[1].toLowerCase();
+        const numMap = { a: 1, one: 1, two: 2, three: 3, four: 4 };
+        const count = numMap[numWord] || parseInt(numWord) || 1;
+        effect = { type: 'draw', count, label: `Draw ${count} card${count > 1 ? 's' : ''}` };
+      } else if (/draw a card/i.test(effectText)) {
         effect = { type: 'draw', count: 1, label: 'Draw a card' };
-      } else if (/create\s+/i.test(effectText)) {
-        const shortText = effectText.length > 40 ? effectText.slice(0, 37) + '...' : effectText;
-        effect = { type: 'manual', text: effectText, label: shortText };
       } else if (/gain\s+(\d+)\s+life/i.test(effectText)) {
         const amt = parseInt(effectText.match(/gain\s+(\d+)\s+life/i)[1]);
         effect = { type: 'gainLife', amount: amt, label: `Gain ${amt} life` };
-      } else {
+      } else if (/deals?\s+(\d+)\s+damage/i.test(effectText)) {
+        const amt = parseInt(effectText.match(/deals?\s+(\d+)\s+damage/i)[1]);
+        if (needsTargetAny) {
+          effect = { type: 'damageTarget', amount: amt, label: `Deal ${amt} damage to target`, needsTarget: true };
+        } else {
+          effect = { type: 'damage', amount: amt, label: `Deal ${amt} damage (manual)` };
+        }
+      } else if (/create\s+/i.test(effectText)) {
         const shortText = effectText.length > 40 ? effectText.slice(0, 37) + '...' : effectText;
         effect = { type: 'manual', text: effectText, label: shortText };
+      // Prevent damage: "prevent the next X damage" or "prevent all damage"
+      } else if (/prevent/i.test(effectText)) {
+        const shortText = effectText.length > 40 ? effectText.slice(0, 37) + '...' : effectText;
+        effect = { type: 'manual', text: effectText, label: shortText, needsTarget };
+      } else {
+        const shortText = effectText.length > 40 ? effectText.slice(0, 37) + '...' : effectText;
+        effect = { type: 'manual', text: effectText, label: shortText, needsTarget };
       }
-      abilities.push({ ...effect, manaCost, costStr, requiresTap });
+      abilities.push({ ...effect, manaCost, costStr, requiresTap, fullEffectText: effectText });
     }
-    return abilities;
+    // Deduplicate
+    const seen = new Set();
+    return abilities.filter(ab => {
+      const key = ab.costStr + ':' + ab.label;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
   };
 
   const activatePaidAbility = (pIdx, card, ability) => {
@@ -5255,6 +5309,20 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       setTimeout(() => setCastError(null), 2000);
       return;
     }
+    // If ability needs a target, enter targeting mode BEFORE paying costs
+    if (ability.needsTarget) {
+      setAbilityTargeting({ pIdx, card, ability });
+      setStackMinimized(true); // minimize stack so player can see battlefield
+      setCastError({ pIdx, message: `🎯 Select target creature for ${card.name}'s ability`, background: '#1a2a3a' });
+      return;
+    }
+    // Pay costs and execute immediately (no targeting needed)
+    executeAbility(pIdx, card, ability, null);
+  };
+
+  // Execute a paid ability after optional targeting
+  const executeAbility = (pIdx, sourceCard, ability, targetInfo) => {
+    const p = getState(pIdx);
     // Pay mana
     let newPool = p.manaPool;
     if (ability.manaCost) {
@@ -5266,17 +5334,56 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       ...prev,
       manaPool: newPool,
       battlefield: ability.requiresTap
-        ? prev.battlefield.map(c => c.id === card.id ? { ...c, tapped: true } : c)
+        ? prev.battlefield.map(c => c.id === sourceCard.id ? { ...c, tapped: true } : c)
         : prev.battlefield,
     }));
     // Execute effect
     if (ability.type === 'addCounter') {
-      addCounter(pIdx, card.id, ability.counterType);
+      addCounter(pIdx, sourceCard.id, ability.counterType);
       // Check for Midnight Clock 12th hour counter trigger
-      const currentCount = (card.counters?.[ability.counterType] || 0) + 1;
-      if (card.name && card.name.toLowerCase() === 'midnight clock' && ability.counterType === 'hour' && currentCount >= 12) {
-        setTimeout(() => triggerMidnightClock(pIdx, card), 300);
+      const currentCount = (sourceCard.counters?.[ability.counterType] || 0) + 1;
+      if (sourceCard.name && sourceCard.name.toLowerCase() === 'midnight clock' && ability.counterType === 'hour' && currentCount >= 12) {
+        setTimeout(() => triggerMidnightClock(pIdx, sourceCard), 300);
       }
+    } else if (ability.type === 'addCounterTarget' && targetInfo) {
+      addCounter(targetInfo.pIdx, targetInfo.cardId, ability.counterType);
+    } else if (ability.type === 'grantKeyword' && targetInfo) {
+      // Apply keyword as tempBuff until end of turn
+      setState(targetInfo.pIdx, prev => ({
+        ...prev,
+        battlefield: prev.battlefield.map(c => {
+          if (c.id !== targetInfo.cardId) return c;
+          const existing = c.tempBuffs || { power: 0, toughness: 0, keywords: [] };
+          const keywords = [...(existing.keywords || [])];
+          if (!keywords.includes(ability.keyword)) keywords.push(ability.keyword);
+          return { ...c, tempBuffs: { ...existing, keywords } };
+        })
+      }));
+      setCastError({ pIdx, message: `${targetInfo.cardName} gains ${ability.keyword} until end of turn`, background: '#2a2a1a' });
+      setTimeout(() => setCastError(null), 2000);
+    } else if (ability.type === 'buff' && targetInfo) {
+      // Apply +X/+X as tempBuff until end of turn
+      setState(targetInfo.pIdx, prev => ({
+        ...prev,
+        battlefield: prev.battlefield.map(c => {
+          if (c.id !== targetInfo.cardId) return c;
+          const existing = c.tempBuffs || { power: 0, toughness: 0, keywords: [] };
+          return { ...c, tempBuffs: { ...existing, power: (existing.power || 0) + ability.power, toughness: (existing.toughness || 0) + ability.toughness } };
+        })
+      }));
+      setCastError({ pIdx, message: `${targetInfo.cardName} gets ${ability.label}`, background: '#2a2a1a' });
+      setTimeout(() => setCastError(null), 2000);
+    } else if (ability.type === 'damageTarget' && targetInfo) {
+      // Deal damage to target creature
+      setState(targetInfo.pIdx, prev => ({
+        ...prev,
+        battlefield: prev.battlefield.map(c => {
+          if (c.id !== targetInfo.cardId) return c;
+          return { ...c, damage: (c.damage || 0) + ability.amount };
+        })
+      }));
+      setCastError({ pIdx, message: `${sourceCard.name} deals ${ability.amount} damage to ${targetInfo.cardName}`, background: '#3a1a1a' });
+      setTimeout(() => setCastError(null), 2000);
     } else if (ability.type === 'draw') {
       for (let i = 0; i < ability.count; i++) {
         setTimeout(() => drawCard(pIdx), i * 100);
@@ -5284,15 +5391,17 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     } else if (ability.type === 'gainLife') {
       setState(pIdx, prev => ({ ...prev, life: prev.life + ability.amount }));
     } else if (ability.type === 'manual') {
-      setEtbReminder({ pIdx, card, effects: [{ icon: '⚡', text: `${card.name}: ${ability.text || ability.label}` }] });
+      const targetStr = targetInfo ? ` → ${targetInfo.cardName}` : '';
+      setEtbReminder({ pIdx, card: sourceCard, effects: [{ icon: '⚡', text: `${sourceCard.name}: ${ability.text || ability.label}${targetStr}` }] });
     }
-    addGameLog(pIdx, '⚡', `${card.name}: ${ability.label}`);
-    // Broadcast ability activation to both players (like PW reminder but for creatures/enchantments)
-    const cardImg = card._reskin?.artUrl || card.image_uris?.art_crop || card.image_uris?.small || (card.card_faces?.[0]?.image_uris?.art_crop) || null;
+    const targetStr = targetInfo ? ` → ${targetInfo.cardName}` : '';
+    addGameLog(pIdx, '⚡', `${sourceCard.name}: ${ability.label}${targetStr}`);
+    // Broadcast ability activation to both players
+    const cardImg = sourceCard._reskin?.artUrl || sourceCard.image_uris?.art_crop || sourceCard.image_uris?.small || (sourceCard.card_faces?.[0]?.image_uris?.art_crop) || null;
     setAbilityActivated({
       pIdx,
-      cardName: card._reskin?.name || card.name,
-      abilityText: ability.text || ability.label,
+      cardName: sourceCard._reskin?.name || sourceCard.name,
+      abilityText: `${ability.text || ability.label}${targetStr}`,
       cardImage: cardImg,
     });
     setTimeout(() => setAbilityActivated(null), 3500);
@@ -6447,6 +6556,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
   const [gameOver, setGameOver] = useState(null); // { winner, loser, reason }
   const [concedeConfirm, setConcedeConfirm] = useState(false); // show confirmation dialog
   const [spellTargeting, setSpellTargeting] = useState(null); // { pIdx, card, effects, targetMode }
+  const [abilityTargeting, setAbilityTargeting] = useState(null); // LOCAL — { pIdx, card, ability } — targeting mode for activated abilities that need a target creature
   // Pre-cast targeting: when casting a spell with targets, we show the targeting UI
   // BEFORE putting the spell on the stack. This ref stores the cast info until targets are chosen.
   const pendingCastRef = useRef(null); // { pIdx, card, asAdventure, fromExile, displayName, nonTargetedEffects }
@@ -6459,7 +6569,10 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
   const setSacCounterChoice = syncSetter(_setSacCounterChoice);
   // Auto-restore full stack overlay when stack empties or sacCounter overlay appears
   useEffect(() => {
-    if (spellStack.length === 0 || sacCounterChoice) setStackMinimized(false);
+    if (spellStack.length === 0 || sacCounterChoice) {
+      setStackMinimized(false);
+      setAbilityTargeting(null);
+    }
   }, [spellStack.length, sacCounterChoice]);
   const [pwAbilityOnStack, _setPwAbilityOnStack] = useState(null); // SYNCED — { pIdx, card, ability: { cost, text } }
   const setPwAbilityOnStack = syncSetter(_setPwAbilityOnStack);
@@ -8035,6 +8148,41 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         }
         return;
       }
+      // Ability targeting mode: click a target creature for activated ability
+      if (abilityTargeting) {
+        if (!isCreature(card)) {
+          setCastError({ pIdx: abilityTargeting.pIdx, message: `❌ ${card.name} is not a creature!`, background: '#4a1a1a' });
+          setTimeout(() => setCastError(null), 2000);
+          return;
+        }
+        // "Another target creature" — can't target the source card itself
+        if (abilityTargeting.ability.fullEffectText && /another\s+target/i.test(abilityTargeting.ability.fullEffectText) && card.id === abilityTargeting.card.id) {
+          setCastError({ pIdx: abilityTargeting.pIdx, message: `❌ Must target another creature (not ${card.name} itself)!`, background: '#4a1a1a' });
+          setTimeout(() => setCastError(null), 2000);
+          return;
+        }
+        // Hexproof check (can't target opponent's hexproof creatures)
+        const isOpponent = pIdx !== abilityTargeting.pIdx;
+        if (isOpponent && hasHexproof(card)) {
+          setCastError({ pIdx: abilityTargeting.pIdx, message: `❌ ${card.name} has hexproof!`, background: '#4a1a1a' });
+          setTimeout(() => setCastError(null), 2000);
+          return;
+        }
+        // Shroud check
+        if (hasShroud(card)) {
+          setCastError({ pIdx: abilityTargeting.pIdx, message: `❌ ${card.name} has shroud!`, background: '#4a1a1a' });
+          setTimeout(() => setCastError(null), 2000);
+          return;
+        }
+        // Valid target — pay costs and execute
+        const targetInfo = { pIdx, cardId: card.id, cardName: card.name };
+        const { pIdx: srcPIdx, card: srcCard, ability } = abilityTargeting;
+        setAbilityTargeting(null);
+        setStackMinimized(false);
+        setCastError(null);
+        executeAbility(srcPIdx, srcCard, ability, targetInfo);
+        return;
+      }
       // Combat mode: declare attackers
       if (combatState && combatState.phase === 'attackers' && pIdx === activePlayer && isCreature(card)) {
         toggleAttacker(card.id);
@@ -8179,13 +8327,13 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       const opponent = getState(i === 0 ? 1 : 0);
       if (p.life <= 0) {
         const winner = opponent.name, loser = p.name, reason = `${p.name} reached ${p.life} life`;
-        setEndOfTurnRespond(false); setInstantCasting(null); setSpellTargeting(null); setModalChoice(null);
+        setEndOfTurnRespond(false); setInstantCasting(null); setSpellTargeting(null); setAbilityTargeting(null); setModalChoice(null);
         const timer = setTimeout(() => setGameOver({ winner, loser, reason }), 2000);
         return () => clearTimeout(timer);
       }
       if (p.poison >= GAME_CONSTANTS.POISON_LETHAL) {
         const winner = opponent.name, loser = p.name, reason = `${p.name} reached ${p.poison} poison counters`;
-        setEndOfTurnRespond(false); setInstantCasting(null); setSpellTargeting(null); setModalChoice(null);
+        setEndOfTurnRespond(false); setInstantCasting(null); setSpellTargeting(null); setAbilityTargeting(null); setModalChoice(null);
         const timer = setTimeout(() => setGameOver({ winner, loser, reason }), 2000);
         return () => clearTimeout(timer);
       }
@@ -8780,6 +8928,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     setEndOfTurnRespond(false);
     setInstantCasting(null);
     setSpellTargeting(null);
+    setAbilityTargeting(null);
     setModalChoice(null);
     setStackMinimized(false);
     SFX.passTurn();
@@ -10240,6 +10389,21 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
             </div>
           )}
 
+          {/* Ability Targeting Bar — only show if stack is not minimized (minimized bar has its own targeting hint) */}
+          {abilityTargeting && !stackMinimized && (
+            <div className="spell-target-bar" style={{ borderColor: 'rgba(220,160,60,0.4)' }}>
+              <span className="target-label" style={{ color: '#e0a040' }}>🎯 {abilityTargeting.card._reskin?.name || abilityTargeting.card.name}</span>
+              <span className="target-hint">
+                {abilityTargeting.ability.label} — Click a target creature
+              </span>
+              <button className="btn" style={{ borderColor: 'rgba(220,160,60,0.3)', color: '#e0a040', fontSize: 10 }} onClick={() => {
+                setAbilityTargeting(null);
+                setStackMinimized(false);
+                setCastError(null);
+              }}>Cancel</button>
+            </div>
+          )}
+
           {/* Combat Control Bar */}
           {combatState ? (
             <div className="combat-bar">
@@ -11080,10 +11244,16 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
           boxShadow: '0 4px 24px rgba(0,0,0,0.6), 0 0 20px rgba(220,160,60,0.1)',
         }}>
           <span style={{ fontSize: 11, color: '#e0a040', fontWeight: 700 }}>
-            ⚡ {stackTop.displayName} on stack — Right-click a creature to use its ability
+            ⚡ {stackTop.displayName} on stack — {abilityTargeting ? `Click a creature to target with ${abilityTargeting.card.name}'s ability` : 'Right-click a creature to use its ability'}
           </span>
-          <button className="btn" style={{ fontSize: 10, padding: '4px 12px', borderColor: 'rgba(200,170,60,0.4)', color: '#e8c96a' }}
-            onClick={() => setStackMinimized(false)}>Back to Stack</button>
+          {!abilityTargeting && (
+            <button className="btn" style={{ fontSize: 10, padding: '4px 12px', borderColor: 'rgba(200,170,60,0.4)', color: '#e8c96a' }}
+              onClick={() => setStackMinimized(false)}>Back to Stack</button>
+          )}
+          {abilityTargeting && (
+            <button className="btn" style={{ fontSize: 10, padding: '4px 12px', borderColor: 'rgba(180,60,60,0.4)', color: '#e86a6a' }}
+              onClick={() => { setAbilityTargeting(null); setStackMinimized(false); setCastError(null); }}>Cancel Ability</button>
+          )}
         </div>
       )}
 
