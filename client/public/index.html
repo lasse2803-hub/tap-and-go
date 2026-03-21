@@ -10041,13 +10041,40 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
               );
             })()}
             {/* Graveyard counter — always visible for Drown in the Loch, mill tracking */}
-            {p.graveyard.length > 0 && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 3, fontSize: 10, padding: '1px 6px', borderRadius: 4, background: p.graveyard.length >= 8 ? 'rgba(180,60,220,0.12)' : 'rgba(255,255,255,0.03)', border: p.graveyard.length >= 8 ? '1px solid rgba(180,60,220,0.25)' : '1px solid rgba(255,255,255,0.04)', transition: 'all 0.3s' }}
-                title={`${p.graveyard.length} cards in graveyard${p.graveyard.length >= 8 ? ' — Drown in the Loch / Rogues threshold met!' : ''}`}>
-                <span style={{ fontSize: 9, opacity: 0.5, fontWeight: 600, letterSpacing: 0.5 }}>GY</span>
-                <span style={{ fontWeight: 700, fontSize: 11, color: p.graveyard.length >= 8 ? '#c080e0' : 'rgba(255,255,255,0.6)' }}>{p.graveyard.length}</span>
-              </div>
-            )}
+            {(() => {
+              const gyCount = p.graveyard.length;
+              const opponentPIdx = pIdx === 0 ? 1 : 0;
+              const oppGy = getState(opponentPIdx).graveyard.length;
+              // Highlight: this player's GY count matters for opponent's Drown in the Loch etc.
+              const threshold = gyCount >= 8;
+              return (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 3, fontSize: 10, padding: '1px 6px', borderRadius: 4, cursor: 'pointer',
+                  background: threshold ? 'rgba(180,60,220,0.12)' : 'rgba(255,255,255,0.03)',
+                  border: threshold ? '1px solid rgba(180,60,220,0.25)' : '1px solid rgba(255,255,255,0.04)', transition: 'all 0.3s' }}
+                  title={`${p.name}: ${gyCount} cards in graveyard\nOpponent: ${oppGy} cards in graveyard\n${threshold ? '⚠️ Drown in the Loch / Rogues threshold (8+) reached!' : gyCount >= 5 ? `${8 - gyCount} more cards until Drown threshold (8)` : ''}`}
+                  onClick={() => setViewingZone({ pIdx, zone: 'graveyard', title: `${p.name}'s Graveyard`, cards: p.graveyard })}>
+                  <span style={{ fontSize: 9, opacity: 0.5, fontWeight: 600, letterSpacing: 0.5 }}>💀</span>
+                  <span style={{ fontWeight: 700, fontSize: 11, color: threshold ? '#c080e0' : gyCount > 0 ? 'rgba(255,255,255,0.6)' : 'rgba(255,255,255,0.25)' }}>{gyCount}</span>
+                  {threshold && <span style={{ fontSize: 8, color: '#c080e0', fontWeight: 600 }}>⚠️</span>}
+                </div>
+                {/* Opponent's graveyard count — key for Drown in the Loch: you need to see THEIR GY count */}
+                {(() => {
+                  const oppThreshold = oppGy >= 8;
+                  return (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 2, fontSize: 10, padding: '1px 5px', borderRadius: 4, cursor: 'pointer',
+                      background: oppThreshold ? 'rgba(220,80,60,0.12)' : 'rgba(255,255,255,0.02)',
+                      border: oppThreshold ? '1px solid rgba(220,80,60,0.25)' : '1px solid rgba(255,255,255,0.03)', transition: 'all 0.3s' }}
+                      title={`Opponent graveyard: ${oppGy} cards\n${oppThreshold ? '⚠️ Drown in the Loch active — their spells with MV ≤ ' + oppGy + ' can be countered/destroyed!' : oppGy >= 5 ? `${8 - oppGy} more until Drown threshold` : 'Mill opponent to power up Drown in the Loch'}`}
+                      onClick={() => setViewingZone({ pIdx: opponentPIdx, zone: 'graveyard', title: `${getState(opponentPIdx).name}'s Graveyard`, cards: getState(opponentPIdx).graveyard })}>
+                      <span style={{ fontSize: 8, opacity: 0.4, fontWeight: 600 }}>OPP</span>
+                      <span style={{ fontSize: 8, opacity: 0.4 }}>💀</span>
+                      <span style={{ fontWeight: 700, fontSize: 11, color: oppThreshold ? '#e06048' : oppGy > 0 ? 'rgba(255,255,255,0.45)' : 'rgba(255,255,255,0.15)' }}>{oppGy}</span>
+                      {oppThreshold && <span style={{ fontSize: 8, color: '#e06048', fontWeight: 600 }}>⚠️</span>}
+                    </div>
+                  );
+                })()}
+              );
+            })()}
           </div>
           <div className="flex gap-1">
             {isActive && isCommander && p.commandZone.length > 0 && (
