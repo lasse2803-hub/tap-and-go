@@ -6612,6 +6612,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
   const [concedeConfirm, setConcedeConfirm] = useState(false); // show confirmation dialog
   const [spellTargeting, setSpellTargeting] = useState(null); // { pIdx, card, effects, targetMode }
   const [abilityTargeting, setAbilityTargeting] = useState(null); // LOCAL — { pIdx, card, ability } — targeting mode for activated abilities that need a target creature
+  const [cycleXChoice, setCycleXChoice] = useState(null); // LOCAL — { pIdx, cardName, creatureType, colors, keywords } — pending X/X token from cycling
   // Pre-cast targeting: when casting a spell with targets, we show the targeting UI
   // BEFORE putting the spell on the stack. This ref stores the cast info until targets are chosen.
   const pendingCastRef = useRef(null); // { pIdx, card, asAdventure, fromExile, displayName, nonTargetedEffects }
@@ -8037,40 +8038,8 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         const colorMap = { white: 'W', blue: 'U', black: 'B', red: 'R', green: 'G' };
         const colors = Object.keys(colorMap).filter(c => colorType.includes(c)).map(c => colorMap[c]);
         const creatureType = colorType.split(' ').filter(w => !colorMap[w] && w !== 'colorless').map(w => w[0].toUpperCase() + w.slice(1)).join(' ') || 'Token';
-        // Prompt for X value
-        setTimeout(() => {
-          const xVal = prompt(`${getDisplayName(card)}: Enter X value for the ${creatureType} token:`);
-          const x = parseInt(xVal);
-          if (!isNaN(x) && x > 0) {
-            const token = {
-              name: creatureType, power: String(x), toughness: String(x),
-              type_line: `Creature Token — ${creatureType}`, colors, keywords,
-              isToken: true, oracle_text: keywords.length > 0 ? keywords.join(', ') : '',
-            };
-            createToken(pIdx, token, true, true);
-            addGameLog(pIdx, '🔄', `${getDisplayName(card)}: Cycling — created ${x}/${x} ${creatureType}${keywords.length > 0 ? ' with ' + keywords.join(', ') : ''}`);
-            // Fetch Scryfall token art
-            (async () => {
-              try {
-                const res = await fetch('https://api.scryfall.com/cards/search?q=' + encodeURIComponent('t:token ' + creatureType.toLowerCase()) + '&unique=art&order=released&dir=desc');
-                if (res.ok) {
-                  const data = await res.json();
-                  const match = data.data?.find(c => c.image_uris && (c.name || '').toLowerCase().includes(creatureType.toLowerCase()));
-                  if (match?.image_uris) {
-                    setState(pIdx, prev => ({
-                      ...prev,
-                      battlefield: prev.battlefield.map(c =>
-                        c.isToken && c.name === creatureType && !c.tokenImageSmall
-                          ? { ...c, image_uris: match.image_uris, tokenImageSmall: match.image_uris.small, tokenImageNormal: match.image_uris.normal }
-                          : c
-                      )
-                    }));
-                  }
-                }
-              } catch(e) {}
-            })();
-          }
-        }, 400);
+        // Show X-value picker modal (replaces browser prompt() for better UX)
+        setCycleXChoice({ pIdx, cardName: getDisplayName(card), creatureType, colors, keywords });
       } else {
         // Generic cycling trigger — show reminder
         const triggerMatch = allText.match(/(when you cycle[^.]*\.)/);
@@ -11237,6 +11206,73 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
           </div>
         );
       })()}
+
+      {/* Cycling X/X Token — choose X value (Shark Typhoon, etc.) */}
+      {cycleXChoice && (
+        <div style={{
+          position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+          background: 'rgba(0,0,0,0.7)', zIndex: 10005,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          animation: 'fadeIn 0.15s ease',
+        }}>
+          <div style={{
+            background: 'linear-gradient(160deg, #0a1a28, #14122a)', borderRadius: 16, padding: '20px 28px',
+            border: '1px solid rgba(60,180,220,0.4)', boxShadow: '0 12px 48px rgba(0,0,0,0.8)',
+            textAlign: 'center', minWidth: 260,
+          }}>
+            <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: 2, color: 'rgba(60,180,220,0.7)', marginBottom: 4, fontWeight: 700 }}>
+              🔄 {cycleXChoice.cardName}
+            </div>
+            <div style={{ fontSize: 14, fontWeight: 700, color: '#a8d8f0', marginBottom: 14 }}>
+              Choose X for {cycleXChoice.creatureType} token
+            </div>
+            <div style={{ display: 'flex', gap: 6, justifyContent: 'center', flexWrap: 'wrap' }}>
+              {[1, 2, 3, 4, 5, 6, 7, 8].map(x => (
+                <button key={x} className="btn" style={{
+                  padding: '8px 14px', fontSize: 14, fontWeight: 700, minWidth: 44,
+                  background: 'rgba(60,180,220,0.08)', border: '1px solid rgba(60,180,220,0.3)',
+                  borderRadius: 8, color: '#a8d8f0',
+                }}
+                onMouseOver={e => { e.currentTarget.style.background = 'rgba(60,180,220,0.25)'; }}
+                onMouseOut={e => { e.currentTarget.style.background = 'rgba(60,180,220,0.08)'; }}
+                onClick={() => {
+                  const { pIdx, creatureType, colors, keywords } = cycleXChoice;
+                  const token = {
+                    name: creatureType, power: String(x), toughness: String(x),
+                    type_line: `Creature Token — ${creatureType}`, colors, keywords,
+                    isToken: true, oracle_text: keywords.length > 0 ? keywords.join(', ') : '',
+                  };
+                  createToken(pIdx, token, true, true);
+                  addGameLog(pIdx, '🔄', `${cycleXChoice.cardName}: Cycling — created ${x}/${x} ${creatureType}${keywords.length > 0 ? ' with ' + keywords.join(', ') : ''}`);
+                  // Fetch token art from Scryfall
+                  (async () => {
+                    try {
+                      const res = await fetch('https://api.scryfall.com/cards/search?q=' + encodeURIComponent('t:token ' + creatureType.toLowerCase()) + '&unique=art&order=released&dir=desc');
+                      if (res.ok) {
+                        const data = await res.json();
+                        const match = data.data?.find(c => c.image_uris && (c.name || '').toLowerCase().includes(creatureType.toLowerCase()));
+                        if (match?.image_uris) {
+                          setState(pIdx, prev => ({
+                            ...prev,
+                            battlefield: prev.battlefield.map(c =>
+                              c.isToken && c.name === creatureType && !c.tokenImageSmall
+                                ? { ...c, image_uris: match.image_uris, tokenImageSmall: match.image_uris.small, tokenImageNormal: match.image_uris.normal }
+                                : c
+                            )
+                          }));
+                        }
+                      }
+                    } catch(e) {}
+                  })();
+                  setCycleXChoice(null);
+                }}>
+                  {x}/{x}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
 
       {peekingHand && (() => {
         const targetP = getState(peekingHand.targetPIdx);
