@@ -11195,7 +11195,8 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                   onMouseLeave={e => { e.currentTarget.style.transform = 'scale(1)'; }}
                   onClick={() => {
                     cycleCard(instantCasting.pIdx, card);
-                    setInstantCasting(null);
+                    // Don't auto-close overlay after cycling — player may want to cycle/cast more
+                    // Overlay stays open so player can continue or click Done
                   }}>
                   <CardImg card={card} alt={card.name}
                     style={{ height: 140, borderRadius: 8, boxShadow: '0 3px 12px rgba(0,0,0,0.5), 0 0 8px rgba(140,180,60,0.25)' }} />
@@ -11216,10 +11217,23 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                 {castError.message}
               </div>
             )}
-            <button className="btn" style={{ padding: '6px 20px', fontSize: 12, borderColor: 'rgba(60,180,220,0.3)', color: '#60c8e8' }}
-              onClick={() => setInstantCasting(null)}>
-              Close
-            </button>
+            {instantCasting.returnToEndStep ? (
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button className="btn btn-gold" style={{ padding: '6px 20px', fontSize: 12 }}
+                  onClick={() => { setInstantCasting(null); executePassTurn(); }}>
+                  ✓ Done — Pass Turn
+                </button>
+                <button className="btn" style={{ padding: '6px 16px', fontSize: 11, borderColor: 'rgba(60,180,220,0.3)', color: '#60c8e8' }}
+                  onClick={() => setInstantCasting(null)}>
+                  Back
+                </button>
+              </div>
+            ) : (
+              <button className="btn" style={{ padding: '6px 20px', fontSize: 12, borderColor: 'rgba(60,180,220,0.3)', color: '#60c8e8' }}
+                onClick={() => setInstantCasting(null)}>
+                Done
+              </button>
+            )}
           </div>
         );
       })()}
