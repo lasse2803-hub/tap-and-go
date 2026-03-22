@@ -2391,7 +2391,9 @@ const getCreatureKeywords = (card, attachments = []) => {
       if (!fromAttachments.includes(kw)) fromAttachments.push(kw);
     }
   }
-  return [...new Set([...base, ...temp, ...fromAttachments])];
+  // Conditional static keywords (e.g. Dimir Rogues: deathtouch when opponent GY ≥ 8)
+  const condKw = getConditionalBuffs(card).keywords;
+  return [...new Set([...base, ...temp, ...fromAttachments, ...condKw])];
 };
 
 // Cycling detection — returns cycling cost string or null
@@ -2695,6 +2697,38 @@ const resolveStarPT = (card) => {
   return { power: resolvedP, toughness: resolvedT };
 };
 
+// Conditional static buffs: "As long as [condition], gets +X/+Y and [keyword]"
+// e.g. Thieves' Guild Enforcer / Soaring Thought-Thief: "+2/+1 and deathtouch if opponent has 8+ cards in graveyard"
+const getConditionalBuffs = (card) => {
+  const oracle = getOracleText(card);
+  const allStates = _starPTAllStatesGetter ? _starPTAllStatesGetter() : [];
+  let powerBuff = 0, toughnessBuff = 0;
+  const extraKeywords = [];
+
+  // Pattern: "As long as an opponent has eight or more cards in their graveyard, ~ gets +X/+Y and has [keyword]"
+  const gyThresholdMatch = oracle.match(/as long as an opponent has (?:eight|(\d+)) or more cards in their graveyard.*?gets? \+(\d+)\/\+(\d+)(?: and has (\w[\w ]*?))?(?:\.|$)/i);
+  if (gyThresholdMatch) {
+    const threshold = gyThresholdMatch[1] ? parseInt(gyThresholdMatch[1]) : 8;
+    // Find owner and check opponent graveyard
+    let ownerIdx = -1;
+    for (let i = 0; i < allStates.length; i++) {
+      if (allStates[i]?.battlefield?.some(c => c.id === card.id)) { ownerIdx = i; break; }
+    }
+    if (ownerIdx >= 0) {
+      const oppIdx = ownerIdx === 0 ? 1 : 0;
+      const oppGy = allStates[oppIdx]?.graveyard?.length || 0;
+      if (oppGy >= threshold) {
+        powerBuff += parseInt(gyThresholdMatch[2]);
+        toughnessBuff += parseInt(gyThresholdMatch[3]);
+        if (gyThresholdMatch[4]) {
+          gyThresholdMatch[4].split(/\s+and\s+/).forEach(kw => extraKeywords.push(kw.trim().toLowerCase()));
+        }
+      }
+    }
+  }
+  return { power: powerBuff, toughness: toughnessBuff, keywords: extraKeywords };
+};
+
 // Calculate effective power/toughness including counters, temp buffs, attachment bonuses, and star (*) resolution
 const getEffectivePower = (card, attachments = []) => {
   const resolved = resolveStarPT(card);
@@ -2710,6 +2744,9 @@ const getEffectivePower = (card, attachments = []) => {
     const bonuses = parseAttachmentBonuses(att);
     p += bonuses.power;
   }
+  // Conditional static buffs (Dimir Rogues threshold, etc.)
+  const cond = getConditionalBuffs(card);
+  p += cond.power;
   return Math.max(0, p);
 };
 const getEffectiveToughness = (card, attachments = []) => {
@@ -2726,6 +2763,9 @@ const getEffectiveToughness = (card, attachments = []) => {
     const bonuses = parseAttachmentBonuses(att);
     t += bonuses.toughness;
   }
+  // Conditional static buffs
+  const cond = getConditionalBuffs(card);
+  t += cond.toughness;
   return Math.max(0, t);
 };
 
@@ -4572,6 +4612,75 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
             SFX.playCreature();
           }, 600);
         }
+
+        // Old-Growth Troll death → exile and become Aura on Forest, with sac → 4/4 troll token
+        const cardOracle = getOracleText(card);
+        if (/when.*dies.*exile.*enchant forest.*\{g\}\{g\}\{g\}|old-growth troll/i.test(cardOracle) &&
+            /sacrifice.*create.*troll/i.test(cardOracle)) {
+          setTimeout(() => {
+            const st = getState(pIdx);
+            // Find a Forest to attach to
+            const forests = st.battlefield.filter(c => {
+              const tl = (c.type_line || '').toLowerCase();
+              return tl.includes('forest') || (c.name || '').toLowerCase().includes('forest');
+            });
+            if (forests.length > 0) {
+              const targetForest = forests.find(f => !f.tapped) || forests[0];
+              // Remove from graveyard (already there), create aura token attached to forest
+              const auraToken = {
+                id: uid(), name: `${getDisplayName(card)} (Aura)`, isToken: true,
+                type_line: 'Enchantment — Aura',
+                oracle_text: 'Enchanted Forest has "Tap: Add {G}{G}{G}" and "Sacrifice this: Create a 4/4 green Troll Warrior creature token with trample."',
+                power: null, toughness: null,
+                colors: ['G'], keywords: [],
+                tapped: false, enteredThisTurn: true, counters: {},
+                attachedTo: targetForest.id,
+                trollAura: true, // Special flag for sacrifice ability
+                image_uris: card.image_uris, // Use same art
+                _reskin: card._reskin,
+              };
+              setState(pIdx, prev => ({
+                ...prev,
+                graveyard: prev.graveyard.filter(c => c.id !== card.id),
+                exile: [...prev.exile, { ...card, trollExiled: true }],
+                battlefield: [...prev.battlefield, auraToken],
+              }));
+              addGameLog(pIdx, '🌳', `${getDisplayName(card)} died → Exiled as Aura on ${getDisplayName(targetForest)}. Forest taps for {G}{G}{G}. Sacrifice aura → 4/4 Troll token.`);
+              setCastError({ pIdx, message: `🌳 ${getDisplayName(card)} → Aura on ${getDisplayName(targetForest)}. Tap for {G}{G}{G} or sac → 4/4 Troll.` });
+              setTimeout(() => setCastError(null), 5000);
+            } else {
+              // No forest — just show reminder
+              setCastError({ pIdx, message: `⚠️ ${getDisplayName(card)}: No Forest to enchant! Troll stays in graveyard.` });
+              setTimeout(() => setCastError(null), 3000);
+            }
+          }, 800);
+        }
+
+        // Auto-token: "When ~ dies, create an X/X creature token, where X is the number of creatures you control" (Voice of Resurgence)
+        if (/when.*dies.*create.*creature token.*where x is the number of creatures you control/i.test(cardOracle)) {
+          setTimeout(() => {
+            const st = getState(pIdx);
+            const creatureCount = st.battlefield.filter(c => isCreature(c)).length;
+            const x = Math.max(1, creatureCount); // At least 1 (Voice itself is gone but we just want a meaningful token)
+            // Parse token type from oracle text (e.g. "green and white Elemental creature token")
+            const tokenTypeMatch = cardOracle.match(/create.*?([\w]+(?:\s+and\s+[\w]+)?)\s+([\w]+)\s+creature token/i);
+            const tokenColors = tokenTypeMatch ? tokenTypeMatch[1] : 'green and white';
+            const tokenType = tokenTypeMatch ? tokenTypeMatch[2] : 'Elemental';
+            const colorMap = { white: 'W', green: 'G', blue: 'U', black: 'B', red: 'R' };
+            const colorStr = Object.keys(colorMap).filter(c => tokenColors.toLowerCase().includes(c)).map(c => colorMap[c]).join('');
+            const token = {
+              id: uid(), name: `${tokenType} Token`, isToken: true,
+              type_line: `Creature — ${tokenType}`, power: String(x), toughness: String(x),
+              colors: colorStr.split(''), oracle_text: '', keywords: [],
+              tapped: false, enteredThisTurn: true, counters: {},
+            };
+            setState(pIdx, prev => ({ ...prev, battlefield: [...prev.battlefield, token] }));
+            addGameLog(pIdx, '✦', `${getDisplayName(card)} died → Created ${x}/${x} ${tokenType} token`);
+            setCastError({ pIdx, message: `✦ ${getDisplayName(card)}: Created ${x}/${x} ${tokenType} token!` });
+            setTimeout(() => setCastError(null), 3000);
+            SFX.playCreature();
+          }, 800);
+        }
       }
     }
 
@@ -5001,6 +5110,14 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         // Multiple colors: player must choose — pass pain land flag
         setManaChoice({ pIdx, colors, cardId, isPainLand });
       }
+      // Troll Aura bonus: if this land has a trollAura attached, also add {G}{G}{G}
+      const trollAura = p.battlefield.find(c => c.trollAura && c.attachedTo === cardId);
+      if (trollAura) {
+        addManaToPool(pIdx, 'G');
+        addManaToPool(pIdx, 'G');
+        addManaToPool(pIdx, 'G');
+        addGameLog(pIdx, '🌳', `${getDisplayName(card)} (Troll Aura): Added {G}{G}{G}`);
+      }
       return;
     }
 
@@ -5238,6 +5355,14 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       const needsTargetAny = /(?:any target|target\s+(?:creature|player|opponent))/i.test(effectText);
       // Parse effect type
       let effect;
+      // Monstrosity: "{cost}: Monstrosity N" — put N +1/+1 counters, mark as monstrous
+      const monstrousMatch = effectText.match(/monstrosity\s+(\d+)/i);
+      if (monstrousMatch) {
+        const monstrousN = parseInt(monstrousMatch[1]);
+        effect = { type: 'monstrosity', counters: monstrousN, label: `Monstrosity ${monstrousN} (${monstrousN > 0 ? `+${monstrousN} counters` : 'become monstrous'})` };
+        abilities.push({ ...effect, manaCost, costStr, requiresTap, fullEffectText: effectText });
+        continue;
+      }
       // Keyword-granting: "target creature gains [keyword] until end of turn" or "another target creature gains [keyword]"
       const keywordGrantMatch = effectText.match(/(?:target\s+)?(?:another\s+)?(?:target\s+)?creature\s+gains?\s+(lifelink|deathtouch|flying|trample|vigilance|menace|first strike|double strike|hexproof|indestructible|reach|haste)\s+until\s+end\s+of\s+turn/i);
       if (keywordGrantMatch) {
@@ -5343,7 +5468,42 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         : prev.battlefield,
     }));
     // Execute effect
-    if (ability.type === 'addCounter') {
+    if (ability.type === 'monstrosity') {
+      // Monstrosity N: if not already monstrous, put N +1/+1 counters and mark as monstrous
+      if (sourceCard.monstrous) {
+        setCastError({ pIdx, message: `⚠️ ${getDisplayName(sourceCard)} is already monstrous!` });
+        setTimeout(() => setCastError(null), 2000);
+        return;
+      }
+      setState(pIdx, prev => ({
+        ...prev,
+        battlefield: prev.battlefield.map(c => {
+          if (c.id !== sourceCard.id) return c;
+          const counters = { ...(c.counters || {}) };
+          counters['+1/+1'] = (counters['+1/+1'] || 0) + ability.counters;
+          return { ...c, counters, monstrous: true };
+        })
+      }));
+      // Check oracle for "if ~ is monstrous, it has X" and apply those keywords permanently
+      const oracle = getOracleText(sourceCard);
+      const monstrousKwMatch = oracle.match(/if .* is monstrous.*has (hexproof|indestructible|flying|trample|deathtouch|lifelink|vigilance)(?: and (hexproof|indestructible|flying|trample|deathtouch|lifelink|vigilance))?/i);
+      if (monstrousKwMatch) {
+        const kws = [monstrousKwMatch[1], monstrousKwMatch[2]].filter(Boolean).map(k => k.toLowerCase());
+        setState(pIdx, prev => ({
+          ...prev,
+          battlefield: prev.battlefield.map(c => {
+            if (c.id !== sourceCard.id) return c;
+            const existing = c.keywords ? [...c.keywords] : [];
+            kws.forEach(kw => { if (!existing.some(e => e.toLowerCase() === kw)) existing.push(kw); });
+            return { ...c, keywords: existing };
+          })
+        }));
+        setCastError({ pIdx, message: `🦁 ${getDisplayName(sourceCard)} is now MONSTROUS! Gains ${kws.join(' + ')}` });
+      } else {
+        setCastError({ pIdx, message: `🦁 ${getDisplayName(sourceCard)} is now MONSTROUS! +${ability.counters} counters` });
+      }
+      setTimeout(() => setCastError(null), 3000);
+    } else if (ability.type === 'addCounter') {
       addCounter(pIdx, sourceCard.id, ability.counterType);
       // Check for Midnight Clock 12th hour counter trigger
       const currentCount = (sourceCard.counters?.[ability.counterType] || 0) + 1;
@@ -5936,6 +6096,52 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         }
       } else {
         actions.push({ label: '▶ Play to Battlefield', fn: () => playCardFromHand(pIdx, card) });
+        // Offspring: "You may pay {cost} additional. If you do, when ETB, create a 1/1 copy."
+        const cardKwsHand = (card.keywords || []).map(k => k.toLowerCase());
+        const cardOracleHand = getOracleText(card);
+        const offspringMatch = cardOracleHand.match(/offspring\s*((?:\{[^}]+\})+)/i) || (cardKwsHand.includes('offspring') ? [null, '{2}'] : null);
+        if (offspringMatch) {
+          const offspringCost = offspringMatch[1] || '{2}';
+          actions.push({ label: `👶 Play + Offspring (${offspringCost} extra)`, fn: () => {
+            playCardFromHand(pIdx, card);
+            // Mark the card for offspring token creation on ETB
+            setTimeout(() => {
+              setState(pIdx, prev => ({
+                ...prev,
+                battlefield: prev.battlefield.map(c => c.id === card.id ? { ...c, offspringPending: true } : c)
+              }));
+            }, 100);
+            // Create 1/1 copy token after a delay (simulating ETB)
+            setTimeout(() => {
+              const reskin = card._reskin;
+              const tokenName = reskin?.customTokenName || reskin?.name || card.name;
+              const token = {
+                id: uid(), name: `${tokenName} (Offspring)`, isToken: true,
+                type_line: card.type_line || 'Creature', power: '1', toughness: '1',
+                colors: card.colors || [], oracle_text: card.oracle_text || '',
+                keywords: [...(card.keywords || [])],
+                tapped: false, enteredThisTurn: true, counters: {},
+              };
+              if (reskin?.customTokenImage) {
+                token.tokenImageSmall = reskin.customTokenImage;
+                token.tokenImageNormal = reskin.customTokenImage;
+              } else if (card.image_uris?.small) {
+                token.tokenImageSmall = card.image_uris.small;
+                token.tokenImageNormal = card.image_uris?.normal || card.image_uris.small;
+              }
+              setState(pIdx, prev => ({
+                ...prev,
+                battlefield: prev.battlefield
+                  .map(c => c.id === card.id ? { ...c, offspringPending: undefined } : c)
+                  .concat([token])
+              }));
+              addGameLog(pIdx, '👶', `Offspring: Created 1/1 copy of ${getDisplayName(card)}`);
+              setCastError({ pIdx, message: `👶 Offspring! Created 1/1 ${tokenName} token` });
+              setTimeout(() => setCastError(null), 3000);
+              SFX.playCreature();
+            }, 600);
+          }});
+        }
       }
       // Cycling option
       const cyclingCost = getCyclingCost(card);
@@ -6018,6 +6224,31 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
               });
             });
           }
+        }
+        // Troll Aura sacrifice → create 4/4 Troll Warrior token with trample (Old-Growth Troll)
+        if (card.trollAura) {
+          actions.push({ sep: true });
+          actions.push({
+            label: '🌳 Sacrifice Aura → Create 4/4 Troll with Trample',
+            fn: () => {
+              const token = {
+                id: uid(), name: 'Troll Warrior Token', isToken: true,
+                type_line: 'Creature — Troll Warrior',
+                power: '4', toughness: '4',
+                colors: ['G'], keywords: ['trample'],
+                oracle_text: 'Trample', tapped: false, enteredThisTurn: true, counters: {},
+              };
+              // Remove aura from battlefield, add token
+              setState(pIdx, prev => ({
+                ...prev,
+                battlefield: prev.battlefield.filter(c => c.id !== card.id).concat([token]),
+              }));
+              addGameLog(pIdx, '🌳', `Sacrificed Troll Aura → Created 4/4 Troll Warrior with trample`);
+              setCastError({ pIdx, message: `🌳 Created 4/4 Troll Warrior token with trample!` });
+              setTimeout(() => setCastError(null), 3000);
+              SFX.playCreature();
+            }
+          });
         }
         // Planeswalker abilities
         if (isPlaneswalker(card)) {
@@ -6512,9 +6743,15 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     }
     // "When ~ dies" triggers
     if (allText.includes('when') && allText.includes('dies')) {
-      const diesMatch = allText.match(/(when.*?dies.*?(?:\.|$))/);
-      if (diesMatch && !diesMatch[1].includes('leaves the battlefield')) {
-        effects.push({ icon: '💀', text: diesMatch[1].slice(0, 120) });
+      // Special: "When ~ dies, create an X/X ... creature token, where X is the number of creatures you control" (Voice of Resurgence)
+      const diesXXTokenMatch = allText.match(/when.*dies.*create.*?(\w+\/\w+).*?creature token.*?where x is the number of creatures you control/i);
+      if (diesXXTokenMatch) {
+        effects.push({ icon: '✦', text: `DIES → Create X/X token (X = creatures you control)`, actionType: 'death_xx_token' });
+      } else {
+        const diesMatch = allText.match(/(when.*?dies.*?(?:\.|$))/);
+        if (diesMatch && !diesMatch[1].includes('leaves the battlefield')) {
+          effects.push({ icon: '💀', text: diesMatch[1].slice(0, 120) });
+        }
       }
     }
     // "When ~ is put into a graveyard from the battlefield"
@@ -6595,6 +6832,20 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       const emblemText = (emblem.text || '').toLowerCase();
       if (/whenever you cast a spell/.test(emblemText)) {
         triggers.push({ permanent: { name: emblem.name, id: emblem.id }, text: emblem.text });
+      }
+    }
+
+    // "Whenever an opponent casts a spell during your turn" (Voice of Resurgence)
+    // Check OPPONENT's battlefield for permanents that trigger when WE cast during THEIR turn
+    const oppIdx = pIdx === 0 ? 1 : 0;
+    const opp = getState(oppIdx);
+    if (activePlayer === oppIdx) { // It's opponent's turn and we (pIdx) are casting
+      for (const perm of opp.battlefield) {
+        const allText = getOracleText(perm);
+        if (/whenever an opponent casts a spell during your turn/i.test(allText)) {
+          const triggerMatch = allText.match(/(whenever an opponent casts a spell during your turn[^.]*\.)/i);
+          triggers.push({ permanent: perm, text: triggerMatch ? triggerMatch[1] : `${perm.name}: Opponent cast during your turn — triggered!` });
+        }
       }
     }
 
@@ -8722,6 +8973,45 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       setTimeout(() => setCastError(null), 3000);
     }
 
+    // Battle Cry: "Whenever this creature attacks, each other attacking creature gets +1/+0 until end of turn"
+    // Scans all declared attackers for the "battle cry" keyword or oracle text pattern
+    {
+      let battleCryCount = 0;
+      const battleCryNames = [];
+      for (const atkId of combatState.attackers) {
+        const atk = p.battlefield.find(c => c.id === atkId);
+        if (!atk) continue;
+        const atkKw = (atk.keywords || []).map(k => k.toLowerCase());
+        const atkOracle = getOracleText(atk);
+        if (atkKw.includes('battle cry') || /battle cry/i.test(atkOracle) ||
+            /whenever.*attacks.*each other attacking creature gets? \+1\/\+0/i.test(atkOracle)) {
+          battleCryCount++;
+          battleCryNames.push(getDisplayName(atk));
+        }
+      }
+      if (battleCryCount > 0 && combatState.attackers.length > 1) {
+        setState(activePlayer, prev => ({
+          ...prev,
+          battlefield: prev.battlefield.map(c => {
+            if (!combatState.attackers.includes(c.id) || !isCreature(c)) return c;
+            // Battle cry sources don't buff themselves — only "each OTHER attacking creature"
+            const atkKw = (c.keywords || []).map(k => k.toLowerCase());
+            const atkOracle = getOracleText(c);
+            const isBattleCrySource = atkKw.includes('battle cry') || /battle cry/i.test(atkOracle) ||
+              /whenever.*attacks.*each other attacking creature gets? \+1\/\+0/i.test(atkOracle);
+            // If there's only 1 battle cry source, it doesn't buff itself. If multiple, each buffs the others.
+            const buffFromOthers = isBattleCrySource ? battleCryCount - 1 : battleCryCount;
+            if (buffFromOthers <= 0) return c;
+            const existing = c.tempBuffs || { power: 0, toughness: 0, keywords: [] };
+            return { ...c, tempBuffs: { ...existing, power: (existing.power || 0) + buffFromOthers, toughness: existing.toughness || 0 } };
+          }),
+        }));
+        addGameLog(activePlayer, '⚔️', `Battle Cry! ${battleCryNames.join(', ')}: Other attackers get +${battleCryCount}/+0`);
+        setCastError({ pIdx: activePlayer, message: `⚔️ Battle Cry! Other attackers get +${battleCryCount}/+0` });
+        setTimeout(() => setCastError(null), 3000);
+      }
+    }
+
     // Check if defending player has any planeswalkers — if so, ask for attack targets
     const defenderPWs = getState(defendingPlayer).battlefield.filter(c => isPlaneswalker(c));
     if (defenderPWs.length > 0 && combatState.attackers.length > 0) {
@@ -8753,12 +9043,34 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         const selfAttackPattern = new RegExp('whenever ' + nameEscaped + '(?:\\s+enters the battlefield or)?\\s+attacks(?:\\s+or\\s+blocks)?');
         // Also match generic "~ attacks" or "this creature attacks" patterns as fallback
         const genericAttackPattern = /whenever (?:~|this creature)(?:\s+enters the battlefield or)?\s+attacks(?:\s+or\s+blocks)?/;
-        if (selfAttackPattern.test(oracle) || genericAttackPattern.test(oracle)) {
+        // Also match "whenever you attack" (Adeline etc.)
+        const wheneverYouAttackPattern = /whenever you attack/;
+        if (selfAttackPattern.test(oracle) || genericAttackPattern.test(oracle) || wheneverYouAttackPattern.test(oracle)) {
           try {
             const parsedTrigger = parseCombatTrigger(attacker, oracle, 'attack');
             if (parsedTrigger) attackTriggers.push(parsedTrigger);
           } catch (e) {
             console.error('[Attack Trigger] Error parsing trigger for', attacker.name, e);
+          }
+        }
+        // Mentor keyword: "Whenever this creature attacks, put a +1/+1 counter on target attacking creature with lesser power"
+        const attackerKeywords = (attacker.keywords || []).map(k => k.toLowerCase());
+        if (attackerKeywords.includes('mentor') || /mentor/i.test(oracle)) {
+          const attackerPower = getEffectivePower(attacker, getAttachments(activePlayer, attacker.id));
+          // Find valid mentor targets: other attacking creatures with lesser power
+          const mentorTargets = combatState.attackers
+            .filter(id => id !== attacker.id)
+            .map(id => p.battlefield.find(c => c.id === id))
+            .filter(c => c && isCreature(c) && getEffectivePower(c, getAttachments(activePlayer, c.id)) < attackerPower);
+          if (mentorTargets.length > 0) {
+            attackTriggers.push({
+              card: attacker,
+              trigger: {
+                icon: '🎓', text: `MENTOR — ${getDisplayName(attacker)} (power ${attackerPower}): Put +1/+1 on attacking creature with lesser power`,
+                mentorTargets: mentorTargets.map(c => ({ id: c.id, name: getDisplayName(c), power: getEffectivePower(c, getAttachments(activePlayer, c.id)) })),
+                isMentor: true,
+              }
+            });
           }
         }
       }
@@ -8808,6 +9120,17 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
           pIdx: activePlayer, card: mt.card, triggerType: 'attack',
           choices: mt.trigger.modalChoices,
         });
+      }
+
+      // Auto-apply mentor triggers: put +1/+1 counter on lesser-power attacking creature
+      for (const t of simpleTriggers) {
+        if (t.trigger.isMentor && t.trigger.mentorTargets?.length > 0) {
+          // If exactly 1 valid target, auto-apply. Otherwise, apply to smallest power creature.
+          const targets = t.trigger.mentorTargets;
+          const target = targets.length === 1 ? targets[0] : targets.sort((a, b) => a.power - b.power)[0];
+          addCounter(activePlayer, target.id, '+1/+1');
+          addGameLog(activePlayer, '🎓', `Mentor: ${getDisplayName(t.card)} → +1/+1 on ${target.name}`);
+        }
       }
 
       // Auto-create tokens from non-modal simple triggers
@@ -9204,6 +9527,16 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       // If none of the patterns matched, allow manual override
       if (!canBlock && !requirement.includes('or more')) {
         rejectBlock(requirement); return;
+      }
+    }
+
+    // "Can't be blocked by creatures with power N or less" (Steel Leaf Champion, etc.)
+    const cantBlockedByPowerMatch = attackerOracle.match(/can't be blocked by creatures with power (\d+) or less/);
+    if (cantBlockedByPowerMatch) {
+      const maxPower = parseInt(cantBlockedByPowerMatch[1]);
+      const blockerPower = getEffectivePower(blocker, getAttachments(defendingPlayer, blocker.id));
+      if (blockerPower <= maxPower) {
+        rejectBlock(`power ${blockerPower} ≤ ${maxPower}`); return;
       }
     }
 
