@@ -7896,6 +7896,17 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         const opponentPIdx = topSpell.pIdx === 0 ? 1 : 0;
         setCastError({ pIdx: opponentPIdx, message: `✕ ${spellBelow.displayName} was countered by ${topSpell.displayName}!` });
         setTimeout(() => setCastError(null), 2500);
+        // Handle counterspell additional effects (Absorb gain life, Undermine lose life, etc.)
+        if (/you gain (\d+) life/i.test(counterOracle)) {
+          const lifeGain = parseInt(RegExp.$1, 10);
+          setState(topSpell.pIdx, prev => ({ ...prev, life: prev.life + lifeGain }));
+          addGameLog(topSpell.pIdx, 'heart', topSpell.displayName + ' gained ' + lifeGain + ' life');
+        }
+        if (/(?:opponent|that player|controller) loses (\d+) life/i.test(counterOracle)) {
+          const lifeLoss = parseInt(RegExp.$1, 10);
+          setState(spellBelow.pIdx, prev => ({ ...prev, life: prev.life - lifeLoss }));
+          addGameLog(spellBelow.pIdx, 'skull', topSpell.displayName + ' lost ' + lifeLoss + ' life');
+        }
         // Post-counter search & exile (Test of Talents: "search...exile cards with the same name")
         if (/search.*(?:graveyard|hand|library).*exile/i.test(counterOracle) ||
             /exile.*cards? with the same name/i.test(counterOracle)) {
@@ -11663,10 +11674,16 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
               {(!onlineMode || onlinePlayerIndex === (stackTop.pIdx === 0 ? 1 : 0)) && (
                 <button className="btn-resolve" onClick={() => {
                   if (onlineMode) {
-                    // In online mode, signal the CASTER's client to resolve the spell.
-                    // The caster has full access to their own library/hand data.
-                    // The opponent's client can't resolve because the caster's library is hidden.
-                    setSpellResolveRequest({ timestamp: Date.now() });
+                    // For counterspells: resolve directly — no hidden info needed.
+                    // For non-counterspells: signal the CASTER's client which has library/hand data.
+                    const top = spellStack[spellStack.length - 1];
+                    const below = spellStack.length > 1 ? spellStack[spellStack.length - 2] : null;
+                    const topIsCounter = top && isCounterSpellCard(top.card) && below;
+                    if (topIsCounter) {
+                      resolveTopOfStack();
+                    } else {
+                      setSpellResolveRequest({ timestamp: Date.now() });
+                    }
                   } else {
                     resolveTopOfStack();
                   }
