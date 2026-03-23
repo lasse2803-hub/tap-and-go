@@ -10350,6 +10350,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
               // Highlight: this player's GY count matters for opponent's Drown in the Loch etc.
               const threshold = gyCount >= 8;
               return (
+                <>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 3, fontSize: 10, padding: '1px 6px', borderRadius: 4, cursor: 'pointer',
                   background: threshold ? 'rgba(180,60,220,0.12)' : 'rgba(255,255,255,0.03)',
                   border: threshold ? '1px solid rgba(180,60,220,0.25)' : '1px solid rgba(255,255,255,0.04)', transition: 'all 0.3s' }}
@@ -10375,6 +10376,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                     </div>
                   );
                 })()}
+                </>
               );
             })()}
           </div>
