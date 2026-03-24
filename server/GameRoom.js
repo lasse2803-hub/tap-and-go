@@ -347,12 +347,11 @@ class GameRoom {
           if (u.commandZone) s.commandZone = u.commandZone;
           if (u.commanderDamageReceived) s.commanderDamageReceived = u.commanderDamageReceived;
           if (u.untilNextTurnEffects) s.untilNextTurnEffects = u.untilNextTurnEffects;
-          // Library must be public so spell resolution (e.g. Light Up the Stage exile-from-library)
-          // can be applied by the resolving player (opponent), not just the owning player.
-          if (u.library) s.library = u.library;
-
-          // Semi-private game tracking (only owning player updates these)
+          // Library & hand: only the owning player can update these.
+          // The opponent's client receives library as [] (filtered/hidden),
+          // so accepting their sync would wipe the real library data.
           if (i === playerIndex) {
+            if (u.library) s.library = u.library;
             if (u.hand) s.hand = u.hand;
             if (u.landPlayedThisTurn !== undefined) s.landPlayedThisTurn = u.landPlayedThisTurn;
             if (u.dealtDamageThisTurn !== undefined) s.dealtDamageThisTurn = u.dealtDamageThisTurn;

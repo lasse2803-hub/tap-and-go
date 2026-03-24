@@ -11673,20 +11673,9 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
             <div className="spell-stack-buttons">
               {(!onlineMode || onlinePlayerIndex === (stackTop.pIdx === 0 ? 1 : 0)) && (
                 <button className="btn-resolve" onClick={() => {
-                  if (onlineMode) {
-                    // For counterspells: resolve directly — no hidden info needed.
-                    // For non-counterspells: signal the CASTER's client which has library/hand data.
-                    const top = spellStack[spellStack.length - 1];
-                    const below = spellStack.length > 1 ? spellStack[spellStack.length - 2] : null;
-                    const topIsCounter = top && isCounterSpellCard(top.card) && below;
-                    if (topIsCounter) {
-                      resolveTopOfStack();
-                    } else {
-                      setSpellResolveRequest({ timestamp: Date.now() });
-                    }
-                  } else {
-                    resolveTopOfStack();
-                  }
+                  // Always resolve directly — works for both local and online mode.
+                  // Public zones (stack, graveyard, battlefield, exile, life) are all accessible.
+                  resolveTopOfStack();
                 }}>✓ Resolve</button>
               )}
               {(!onlineMode || onlinePlayerIndex === (stackTop.pIdx === 0 ? 1 : 0)) && (
