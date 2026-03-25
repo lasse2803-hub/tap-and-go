@@ -10324,27 +10324,35 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     /* Arena layout: lands near player, creatures near center, other permanents between them, PW sidebar on right */
     const battlefieldRows = inverted ? (
       <>
+        {other.length > 0 && (
+          <div className="bf-sidebar-left" style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 60, alignItems: 'center' }}>
+            {renderBfRow(other, 'bf-other')}
+          </div>
+        )}
         <div className="bf-main">
           {renderBfRow(lands, 'bf-lands')}
           {renderBfRow(creatures, 'bf-creatures')}
         </div>
-        {(other.length > 0 || planeswalkers.length > 0) && (
+        {planeswalkers.length > 0 && (
           <div className="bf-sidebar" style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 60, alignItems: 'center' }}>
             {renderPWSidebar()}
-            {other.length > 0 && renderBfRow(other, 'bf-other')}
           </div>
         )}
       </>
     ) : (
       <>
+        {other.length > 0 && (
+          <div className="bf-sidebar-left" style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 60, alignItems: 'center' }}>
+            {renderBfRow(other, 'bf-other')}
+          </div>
+        )}
         <div className="bf-main">
           {renderBfRow(creatures, 'bf-creatures')}
           {renderBfRow(lands, 'bf-lands')}
         </div>
-        {(other.length > 0 || planeswalkers.length > 0) && (
+        {planeswalkers.length > 0 && (
           <div className="bf-sidebar" style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 60, alignItems: 'center' }}>
             {renderPWSidebar()}
-            {other.length > 0 && renderBfRow(other, 'bf-other')}
           </div>
         )}
       </>
