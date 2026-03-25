@@ -4177,22 +4177,6 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     onStateChange(payload);
   }); // run on every render when sync is needed
 
-  // ONLINE SYNC FIX: Periodic heartbeat re-sync every 3 seconds.
-  // Catches any state updates that were dropped due to browser tab throttling,
-  // network hiccups, or React batching delays during idle periods.
-  useEffect(() => {
-    if (!onlineMode || !onStateChange) return;
-    const interval = setInterval(() => {
-      // Skip heartbeat during mulligan — frequent syncs cause echo race conditions
-      if (mulliganPhase) return;
-      // Always mark sync needed — the broadcast effect will pick it up on next render
-      onlineSyncNeededRef.current = true;
-      // Force a trivial state update to trigger a render (and thus the sync effect)
-      setCurrentPhase(prev => prev);
-    }, 3000);
-    return () => clearInterval(interval);
-  }, [onlineMode, onStateChange, mulliganPhase]);
-
   // Online mode: receive state updates from server (opponent's actions)
   // IMPORTANT: Use raw _set* functions here to avoid triggering a broadcast loop!
   const onlineStateTimestampRef = useRef(0);
