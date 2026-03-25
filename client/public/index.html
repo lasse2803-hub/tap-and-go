@@ -4162,11 +4162,13 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       preventCombatDamage,
       modalChoice,
       searchExile,
-      spellResolveRequest,
       abilityActivated,
       lookTopView,
       putLandFromHand,
     };
+    // Only include spellResolveRequest when non-null. Prevents race condition where
+    // caster's sync (with null) overwrites the non-caster's pending resolve signal.
+    if (spellResolveRequest) payload.spellResolveRequest = spellResolveRequest;
     // Bundle any pending log entries into this broadcast
     // (avoids race condition where separate log broadcast triggers throttle
     // and causes the actual state sync to be dropped)
