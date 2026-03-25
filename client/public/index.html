@@ -4324,14 +4324,19 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     if (onlineState.currentPhase) _setCurrentPhase(onlineState.currentPhase);
     if (onlineState.turnNumber) _setTurnCount(onlineState.turnNumber);
     if (onlineState.combatState !== undefined) {
-      const incomingVer = onlineState.combatState?._v || 0;
-      const currentVer = combatStateVersionRef.current;
-      // Only accept if incoming version is newer (prevents stale overwrites)
-      if (incomingVer >= currentVer) {
-        combatStateVersionRef.current = incomingVer;
-        _setCombatState(onlineState.combatState);
-      }
+  // null means "combat ended" - always accept it.
+  // For non-null, only accept if incoming version is newer (prevents stale overwrites).
+  if (onlineState.combatState === null) {
+    _setCombatState(null);
+  } else {
+    const incomingVer = onlineState.combatState._v || 0;
+    const currentVer = combatStateVersionRef.current;
+    if (incomingVer >= currentVer) {
+      combatStateVersionRef.current = incomingVer;
+      _setCombatState(onlineState.combatState);
     }
+  }
+}
 
     // Sync mulligan state (RAW setters — no broadcast trigger)
     if (onlineState.mulliganPhase !== undefined) _setMulliganPhase(onlineState.mulliganPhase);
@@ -8550,6 +8555,20 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     }
     if (onlineMode && onlineSyncNeededRef) onlineSyncNeededRef.current = true;
   };
+
+    // Safety net: auto-clear stuck 'damage' phase after 5 seconds.
+    // This prevents "Resolving Damage..." from getting stuck on screen.
+    useEffect(() => {
+      if (combatState && combatState.phase === 'damage') {
+        const timer = setTimeout(() => {
+          if (combatStateRef.current && combatStateRef.current.phase === 'damage') {
+            setCombatState(null);
+            setCurrentPhase('main2');
+          }
+        }, 5000);
+        return () => clearTimeout(timer);
+      }
+    }, [combatState]);
   const combatStateRef = useRef(combatState);
   combatStateRef.current = combatState;
   const [combatLog, setCombatLog] = useState(null);
@@ -10782,19 +10801,8 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                  combatState.phase === 'combat-respond' ? '⚡ Before Damage' :
                  combatState.phase === 'damage' ? '💥 Resolving Damage...' : 'Combat'}
               </span>
-              {combatState.phase === 'damage' && (!onlineMode || activePlayer === onlinePlayerIndex) && (
-                <button className="btn" style={{ fontSize: 10, marginLeft: 8, borderColor: 'rgba(220,60,40,0.4)', color: '#dc8060' }}
-                  onClick={() => {
-                    resolveCombatDamage();
-                    // If still stuck, force end combat
-                    setTimeout(() => {
-                      if (combatStateRef.current && combatStateRef.current.phase === 'damage') {
-                        setCombatState(null);
-                        setCurrentPhase('main2');
-                      }
-                    }, 1000);
-                  }}>⚡ Force Resolve</button>
-              )}
+              {/* Force Resolve removed - the root cause (combatState null not syncing)
+                is now fixed. Combat damage resolves automatically. */}
               <span className="combat-hint">
                 {combatState.phase === 'attackers'
                   ? `${getState(activePlayer).name}: Click creatures to attack (${combatState.attackers.length} selected)`
