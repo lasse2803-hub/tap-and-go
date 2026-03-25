@@ -4275,7 +4275,14 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         if (opponentCausedUpdate) {
           try {
             const newLife = serverMe.life ?? prev.life;
-            if (newLife < prev.life) { SFX.lifeLoss(); }
+            if (newLife < prev.life) {
+              // During combat, use combat damage sound instead of spell life-loss sound
+              if (combatStateRef.current && combatStateRef.current.phase === 'damage') {
+                SFX.combatDamage();
+              } else {
+                SFX.lifeLoss();
+              }
+            }
             const prevBF = prev.battlefield || [];
             const newBF = serverMe.battlefield || prevBF;
             const prevBFIds = new Set(prevBF.map(c => c.id));
@@ -9024,10 +9031,14 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         const nameLower = (attacker.name || '').toLowerCase();
         const nameEscaped = nameLower.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         // Match patterns: "whenever [name] attacks", "whenever [name] attacks or blocks", "whenever [name] enters the battlefield or attacks"
+        // For legendary creatures like "Kari Zev, Skyship Raider", oracle text uses the short name "Kari Zev"
+        const shortName = nameLower.includes(',') ? nameLower.split(',')[0].trim() : null;
+        const shortNameEscaped = shortName ? shortName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') : null;
         const selfAttackPattern = new RegExp('whenever ' + nameEscaped + '(?:\\s+enters the battlefield or)?\\s+attacks(?:\\s+or\\s+blocks)?');
+        const shortNameAttackPattern = shortNameEscaped ? new RegExp('whenever ' + shortNameEscaped + '(?:\\s+enters the battlefield or)?\\s+attacks(?:\\s+or\\s+blocks)?') : null;
         // Also match generic "~ attacks" or "this creature attacks" patterns as fallback
         const genericAttackPattern = /whenever (?:~|this creature)(?:\s+enters the battlefield or)?\s+attacks(?:\s+or\s+blocks)?/;
-        if (selfAttackPattern.test(oracle) || genericAttackPattern.test(oracle) || /whenever you attack/.test(oracle)) {
+        if (selfAttackPattern.test(oracle) || (shortNameAttackPattern && shortNameAttackPattern.test(oracle)) || genericAttackPattern.test(oracle) || /whenever you attack/.test(oracle)) {
           try {
             const parsedTrigger = parseCombatTrigger(attacker, oracle, 'attack');
             if (parsedTrigger) attackTriggers.push(parsedTrigger);
@@ -9571,9 +9582,13 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       const nameLower = (blocker.name || '').toLowerCase();
       const nameEscaped = nameLower.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       // Match "whenever [name] blocks" or "whenever [name] attacks or blocks"
+      // For legendary creatures, oracle text uses the short name (before comma)
+      const shortName = nameLower.includes(',') ? nameLower.split(',')[0].trim() : null;
+      const shortNameEscaped = shortName ? shortName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') : null;
       const selfBlockPattern = new RegExp('whenever ' + nameEscaped + '(?:\\s+attacks\\s+or)?\\s+blocks');
+      const shortNameBlockPattern = shortNameEscaped ? new RegExp('whenever ' + shortNameEscaped + '(?:\\s+attacks\\s+or)?\\s+blocks') : null;
       const genericBlockPattern = /whenever (?:~|this creature)(?:\s+attacks\s+or)?\s+blocks/;
-      if (selfBlockPattern.test(oracle) || genericBlockPattern.test(oracle)) {
+      if (selfBlockPattern.test(oracle) || (shortNameBlockPattern && shortNameBlockPattern.test(oracle)) || genericBlockPattern.test(oracle)) {
         try {
           const parsedTrigger = parseCombatTrigger(blocker, oracle, 'block');
           if (parsedTrigger) blockTriggers.push(parsedTrigger);
@@ -10950,10 +10965,17 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                           confirmBlockers();
                         }}>Confirm Blockers</button>
                         <button className="btn" style={{ fontSize: 10 }} onClick={() => {
-                          SFX.block();
-                          confirmBlockers();
+                          // Clear all blocks first, then confirm (no blocks)
+                          setCombatState(prev => ({ ...prev, blocks: {} }));
+                          setTimeout(() => { SFX.block(); confirmBlockers(); }, 50);
                         }}>No Blocks</button>
                       </>
+                    )}
+                    {castError && castError.pIdx === (activePlayer === 0 ? 1 : 0) && (
+                      <span style={{ fontSize: 11, color: '#ff6060', fontWeight: 600, animation: 'fadeIn 0.2s ease' }}>
+                        {castError.message}
+                      </span>
+                    
                     )}
                   </>
                 );
