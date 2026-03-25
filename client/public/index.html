@@ -4170,9 +4170,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     // Prevents race condition where caster's sync overwrites pending signal.
     if (spellResolveRequest) payload.spellResolveRequest = spellResolveRequest;
     if (pendingRemoteDraw) payload.pendingRemoteDraw = pendingRemoteDraw;
-    if (pendingRemoteScry) payload.pendingRemoteScry = pendingRemoteScry; Prevents race condition where
-    // caster's sync (with null) overwrites the non-caster's pending resolve signal.
-    if (spellResolveRequest) payload.spellResolveRequest = spellResolveRequest;
+    if (pendingRemoteScry) payload.pendingRemoteScry = pendingRemoteScry;
     // Bundle any pending log entries into this broadcast
     // (avoids race condition where separate log broadcast triggers throttle
     // and causes the actual state sync to be dropped)
