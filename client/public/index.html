@@ -9038,7 +9038,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         const shortNameAttackPattern = shortNameEscaped ? new RegExp('whenever ' + shortNameEscaped + '(?:\\s+enters the battlefield or)?\\s+attacks(?:\\s+or\\s+blocks)?') : null;
         // Also match generic "~ attacks" or "this creature attacks" patterns as fallback
         const genericAttackPattern = /whenever (?:~|this creature)(?:\s+enters the battlefield or)?\s+attacks(?:\s+or\s+blocks)?/;
-        if (selfAttackPattern.test(oracle) || (shortNameAttackPattern && shortNameAttackPattern.test(oracle)) || genericAttackPattern.test(oracle) || /whenever you attack/.test(oracle)) {
+        if (selfAttackPattern.test(oracle) || (shortNameAttackPattern && shortNameAttackPattern.test(oracle)) || genericAttackPattern.test(oracle) || (/whenever you attack/.test(oracle) && !/from your graveyard/.test(oracle))) {
           try {
             const parsedTrigger = parseCombatTrigger(attacker, oracle, 'attack');
             if (parsedTrigger) attackTriggers.push(parsedTrigger);
