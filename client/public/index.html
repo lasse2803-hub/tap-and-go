@@ -7736,7 +7736,8 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       return;
     }
 
-    if (isSpellCard(card)) {
+    // Adventure cards have combined type_line with "Instant" — skip spell path when cast as creature
+    if (isSpellCard(card) && !(isAdventureCard(card) && !asAdventure)) {
       // Move spell to graveyard (card already removed from hand/exile on cast)
       setState(pIdx, prev => ({
         ...prev,
@@ -8028,7 +8029,10 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       ? { ...card, oracle_text: getAdventureFace(card).oracle_text, type_line: getAdventureFace(card).type_line }
       : card;
 
-    if (isSpellCard(card) || (asAdventure && isAdventure(card))) {
+    // Adventure cards (e.g. Bonecrusher Giant) have combined type_line "Creature — Giant // Instant — Adventure"
+    // which makes isSpellCard() return true. When cast as creature (asAdventure=false), skip spell path.
+    const treatAsSpell = (isSpellCard(card) && !(isAdventureCard(card) && !asAdventure)) || (asAdventure && isAdventure(card));
+    if (treatAsSpell) {
       // ===== MODAL SPELL DETECTION ("choose one" — e.g. Decisive Denial) =====
       const spellOracle = (spellToCheck.oracle_text || '').toLowerCase();
       if (/choose one/i.test(spellOracle)) {
