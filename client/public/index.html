@@ -1676,6 +1676,18 @@ const parseSpellEffects = (card) => {
 
   // === NON-TARGETED / SELF EFFECTS ===
 
+  // Scry / Surveil — parse BEFORE draw so effects array order matches "surveil X, then draw"
+  // (applyNonTargetedEffects uses array index to detect scry-before-draw ordering)
+  const scryMatch = allText.match(/scry (\d+)/);
+  if (scryMatch) {
+    const scryCount = parseInt(scryMatch[1]) || 1;
+    effects.push({ type: 'scry', count: scryCount, mode: 'scry', description: `Scry ${scryCount}` });
+  }
+  const surveilMatch = allText.match(/surveil (\d+)/);
+  if (surveilMatch && !scryMatch) {
+    const surveilCount = parseInt(surveilMatch[1]) || 1;
+    effects.push({ type: 'scry', count: surveilCount, mode: 'surveil', description: `Surveil ${surveilCount}` });
+  }
   // Draw cards
   const drawMatch = allText.match(/draw (\w+|\d+) cards?/);
   if (drawMatch) {
@@ -1686,17 +1698,6 @@ const parseSpellEffects = (card) => {
   // "You may put a land card from your hand onto the battlefield" (Growth Spiral, Explore)
   if (/you may put a land card from your hand onto the battlefield/.test(allText)) {
     effects.push({ type: 'extra_land_drop', description: 'You may put a land onto the battlefield' });
-  }
-  // Scry / Surveil / Look at top
-  const scryMatch = allText.match(/scry (\d+)/);
-  if (scryMatch) {
-    const scryCount = parseInt(scryMatch[1]) || 1;
-    effects.push({ type: 'scry', count: scryCount, mode: 'scry', description: `Scry ${scryCount}` });
-  }
-  const surveilMatch = allText.match(/surveil (\d+)/);
-  if (surveilMatch && !scryMatch) {
-    const surveilCount = parseInt(surveilMatch[1]) || 1;
-    effects.push({ type: 'scry', count: surveilCount, mode: 'surveil', description: `Surveil ${surveilCount}` });
   }
 
   // "Look at the top X cards" + "put N into your hand/onto the battlefield" (Memory Deluge, Dig Through Time, Collected Company, etc.)
@@ -4458,19 +4459,20 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     }, 300);
   });
 
-  // Online mode: when opponent clicks "Resolve" on our spell, they send a spellResolveRequest.
-  // We (the caster) run the actual resolution here because we have our own library/hand data.
-  // The opponent's client can't resolve because the server hides our library (empty array).
+  // Online mode: when opponent clicks "Resolve", they send a spellResolveRequest signal
+  // instead of resolving directly. The CASTER runs the actual resolution here because
+  // they have their own library/hand data. The opponent's client can't resolve draw/scry/
+  // surveil because the server hides the other player's library (appears as empty array).
   useEffect(() => {
     if (!onlineMode || !spellResolveRequest) return;
     if (spellResolveHandledRef.current === spellResolveRequest.timestamp) return; // already handled
-    if (spellStack.length === 0) return;
+    spellResolveHandledRef.current = spellResolveRequest.timestamp;
+    if (spellStack.length === 0) { _setSpellResolveRequest(null); return; }
     const topSpell = spellStack[spellStack.length - 1];
     // Only the caster should resolve (the one whose library is available locally)
-    if (topSpell.pIdx !== onlinePlayerIndex) return;
-    spellResolveHandledRef.current = spellResolveRequest.timestamp;
+    if (topSpell.pIdx !== onlinePlayerIndex) { _setSpellResolveRequest(null); return; }
     // Clear the request signal
-    setSpellResolveRequest(null);
+    _setSpellResolveRequest(null);
     // Now resolve on our client where we have full library data
     resolveTopOfStack();
   }, [spellResolveRequest, onlineMode, spellStack]);
@@ -4955,6 +4957,11 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
   const drawCard = (pIdx) => {
     const p = getState(pIdx);
     if (p.library.length === 0) {
+      // In online mode, the server hides the opponent's library (sends []).
+      // If we're trying to draw for a remote player, their library APPEARS empty
+      // but isn't actually empty. Skip the game-over check — the owning client
+      // will handle draw via spellResolveRequest.
+      if (onlineMode && pIdx !== onlinePlayerIndex) return;
       // Drawing from empty library = lose the game
       const opponent = getState(pIdx === 0 ? 1 : 0);
       if (!gameOver) {
@@ -11778,9 +11785,14 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
             <div className="spell-stack-buttons">
               {(!onlineMode || onlinePlayerIndex === (stackTop.pIdx === 0 ? 1 : 0)) && (
                 <button className="btn-resolve" onClick={() => {
-                  // Always resolve directly — works for both local and online mode.
-                  // Public zones (stack, graveyard, battlefield, exile, life) are all accessible.
-                  resolveTopOfStack();
+                  if (onlineMode) {
+                    // Signal the caster to resolve on THEIR client where they have
+                    // full library/hand data. Direct resolve here would fail for
+                    // draw/scry/surveil because the opponent's library appears empty.
+                    setSpellResolveRequest({ timestamp: Date.now() });
+                  } else {
+                    resolveTopOfStack();
+                  }
                 }}>✓ Resolve</button>
               )}
               {(!onlineMode || onlinePlayerIndex === (stackTop.pIdx === 0 ? 1 : 0)) && (
