@@ -4166,7 +4166,11 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       lookTopView,
       putLandFromHand,
     };
-    // Only include spellResolveRequest when non-null. Prevents race condition where
+    // Only include spellResolveRequest when non-null.
+    // Prevents race condition where caster's sync overwrites pending signal.
+    if (spellResolveRequest) payload.spellResolveRequest = spellResolveRequest;
+    if (pendingRemoteDraw) payload.pendingRemoteDraw = pendingRemoteDraw;
+    if (pendingRemoteScry) payload.pendingRemoteScry = pendingRemoteScry; Prevents race condition where
     // caster's sync (with null) overwrites the non-caster's pending resolve signal.
     if (spellResolveRequest) payload.spellResolveRequest = spellResolveRequest;
     // Bundle any pending log entries into this broadcast
@@ -4376,6 +4380,8 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     if (onlineState.searchExile !== undefined) _setSearchExile(onlineState.searchExile);
     if (onlineState.spellResolveRequest !== undefined) _setSpellResolveRequest(onlineState.spellResolveRequest);
     if (onlineState.abilityActivated !== undefined) _setAbilityActivated(onlineState.abilityActivated);
+    if (onlineState.pendingRemoteDraw !== undefined) _setPendingRemoteDraw(onlineState.pendingRemoteDraw);
+    if (onlineState.pendingRemoteScry !== undefined) _setPendingRemoteScry(onlineState.pendingRemoteScry);
     if (onlineState.putLandFromHand !== undefined) _setPutLandFromHand(onlineState.putLandFromHand);
 
     // Receive game log entries from opponent (supports both array and single entry)
@@ -4478,6 +4484,34 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     _setSpellResolveRequest(null);
     resolveTopOfStack();
   }, [spellResolveRequest, onlineMode, spellStack]);
+
+  // Online mode: opponent resolved a spell with draw effects targeting us.
+  // Our library is hidden on their client, so they sent pendingRemoteDraw instead.
+  // We execute the draw here where we have our actual library data.
+  useEffect(() => {
+    if (!onlineMode || !pendingRemoteDraw) return;
+    if (pendingRemoteDrawHandledRef.current === pendingRemoteDraw.timestamp) return;
+    if (pendingRemoteDraw.pIdx !== onlinePlayerIndex) return; // not for us
+    pendingRemoteDrawHandledRef.current = pendingRemoteDraw.timestamp;
+    _setPendingRemoteDraw(null);
+    for (let i = 0; i < (pendingRemoteDraw.count || 1); i++) drawCard(pendingRemoteDraw.pIdx);
+  }, [pendingRemoteDraw, onlineMode]);
+
+  // Online mode: opponent resolved a spell with scry/surveil targeting us.
+  // Our library is hidden on their client, so they sent pendingRemoteScry instead.
+  // We open the scry UI here where we have our actual library data.
+  useEffect(() => {
+    if (!onlineMode || !pendingRemoteScry) return;
+    if (pendingRemoteScryHandledRef.current === pendingRemoteScry.timestamp) return;
+    if (pendingRemoteScry.pIdx !== onlinePlayerIndex) return; // not for us
+    pendingRemoteScryHandledRef.current = pendingRemoteScry.timestamp;
+    _setPendingRemoteScry(null);
+    const drawAfterCount = pendingRemoteScry.drawAfter || 0;
+    const onComplete = drawAfterCount > 0 ? () => {
+      for (let i = 0; i < drawAfterCount; i++) drawCard(pendingRemoteScry.pIdx);
+    } : null;
+    setScryView({ pIdx: pendingRemoteScry.pIdx, count: pendingRemoteScry.count || 1, mode: pendingRemoteScry.mode || 'scry', onComplete });
+  }, [pendingRemoteScry, onlineMode]);
 
   // Wire up star P/T resolution to access game state
   _starPTStateGetter = getState;
@@ -6882,6 +6916,12 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
   const spellResolveHandledRef = useRef(null); // track which resolve request we already processed
   const [abilityActivated, _setAbilityActivated] = useState(null); // SYNCED — { pIdx, cardName, abilityText, cardImage } — broadcast ability activation
   const setAbilityActivated = syncSetter(_setAbilityActivated);
+  const [pendingRemoteDraw, _setPendingRemoteDraw] = useState(null); // SYNCED — { pIdx, count, timestamp } — tell caster to draw cards
+  const setPendingRemoteDraw = syncSetter(_setPendingRemoteDraw);
+  const [pendingRemoteScry, _setPendingRemoteScry] = useState(null); // SYNCED — { pIdx, count, mode, timestamp, onDrawAfter } — tell caster to scry/surveil
+  const setPendingRemoteScry = syncSetter(_setPendingRemoteScry);
+  const pendingRemoteDrawHandledRef = useRef(null);
+  const pendingRemoteScryHandledRef = useRef(null);
   const [ltbReminder, setLtbReminder] = useState(null); // { pIdx, card, effects[] }
 
   // ===== IN-GAME CHAT =====
@@ -7069,11 +7109,20 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     const drawIdx = effects.findIndex(e => e.type === 'draw');
     const hasScryBeforeDraw = scryIdx !== -1 && drawIdx !== -1 && scryIdx < drawIdx;
 
+    // In online mode, draw/scry/surveil access private zones (library/hand).
+    // If pIdx is a remote player, their library is hidden ([]). Defer these
+    // effects to the owning client via pendingRemoteDraw/pendingRemoteScry.
+    const isRemotePlayer = onlineMode && pIdx !== onlinePlayerIndex;
+
     for (let ei = 0; ei < effects.length; ei++) {
       const effect = effects[ei];
       switch (effect.type) {
         case 'draw':
-          for (let i = 0; i < (effect.amount || 1); i++) drawCard(pIdx);
+          if (isRemotePlayer) {
+            setPendingRemoteDraw({ pIdx, count: effect.amount || 1, timestamp: Date.now() });
+          } else {
+            for (let i = 0; i < (effect.amount || 1); i++) drawCard(pIdx);
+          }
           break;
         case 'extra_land_drop':
           // Growth Spiral / Explore: "you may put a land card from your hand onto the battlefield"
@@ -7091,6 +7140,13 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
           }
           break;
         case 'scry': {
+          if (isRemotePlayer) {
+            // Tell the caster's client to scry via synced state
+            const remEffects = hasScryBeforeDraw ? effects.slice(ei + 1) : [];
+            const drawAfter = remEffects.find(e => e.type === 'draw');
+            setPendingRemoteScry({ pIdx, count: effect.count || 1, mode: effect.mode || 'scry', drawAfter: drawAfter ? (drawAfter.amount || 1) : 0, timestamp: Date.now() });
+            return; // Stop processing — caster handles scry + remaining draw
+          }
           // Collect remaining effects after scry to run on complete
           const remainingEffects = hasScryBeforeDraw ? effects.slice(ei + 1) : [];
           const onComplete = remainingEffects.length > 0 ? () => {
@@ -11787,14 +11843,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
             <div className="spell-stack-buttons">
               {(!onlineMode || onlinePlayerIndex === (stackTop.pIdx === 0 ? 1 : 0)) && (
                 <button className="btn-resolve" onClick={() => {
-                  if (onlineMode) {
-                    // Signal the caster to resolve on THEIR client where they have
-                    // full library/hand data. Direct resolve here would fail for
-                    // draw/scry/surveil because the opponent's library appears empty.
-                    setSpellResolveRequest({ timestamp: Date.now() });
-                  } else {
-                    resolveTopOfStack();
-                  }
+                  resolveTopOfStack();
                 }}>✓ Resolve</button>
               )}
               {(!onlineMode || onlinePlayerIndex === (stackTop.pIdx === 0 ? 1 : 0)) && (
