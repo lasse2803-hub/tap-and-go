@@ -9800,10 +9800,13 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       }
 
       // Blocked: attacker deals damage to blockers, blockers deal damage to attacker
-      if (attackerDealsNow && !killedIds.has(attackerInfo.id)) {
+      // Snapshot killedIds BEFORE this phase's damage — MTG combat damage is simultaneous,
+      // so creatures killed in THIS phase still deal their damage.
+      const killedBeforeThisPhase = new Set(killedIds);
+      if (attackerDealsNow && !killedBeforeThisPhase.has(attackerInfo.id)) {
         let remaining = attackerInfo.power;
         for (const bi of blockerInfos) {
-          if (killedIds.has(bi.id)) continue;
+          if (killedBeforeThisPhase.has(bi.id)) continue;
           // Protection: blocker with protection from attacker's color takes no damage
           const protFromAttacker = hasProtectionFrom(bi.card, attackerInfo.card);
           if (protFromAttacker) continue; // damage prevented
@@ -9822,9 +9825,9 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         if (attackerInfo.lifelink) lifelinkGainAttacker += attackerInfo.power;
       }
 
-      // Blockers deal damage to attacker
+      // Blockers deal damage to attacker (use pre-phase snapshot — simultaneous damage)
       for (const bi of blockerInfos) {
-        if (killedIds.has(bi.id)) continue;
+        if (killedBeforeThisPhase.has(bi.id)) continue;
         const blockerDealsNow = phase === 'first'
           ? bi.firstStrike
           : (!bi.firstStrike || bi.doubleStrike);
