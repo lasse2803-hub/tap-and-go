@@ -389,6 +389,8 @@ class GameRoom {
       if (update.searchExile !== undefined) this.gameState.searchExile = update.searchExile;
       if (update.spellResolveRequest !== undefined) this.gameState.spellResolveRequest = update.spellResolveRequest;
       if (update.abilityActivated !== undefined) this.gameState.abilityActivated = update.abilityActivated;
+      if (update.pendingRemoteDraw !== undefined) this.gameState.pendingRemoteDraw = update.pendingRemoteDraw;
+      if (update.pendingRemoteScry !== undefined) this.gameState.pendingRemoteScry = update.pendingRemoteScry;
       if (update.lookTopView !== undefined) this.gameState.lookTopView = update.lookTopView;
       if (update.putLandFromHand !== undefined) this.gameState.putLandFromHand = update.putLandFromHand;
 
