@@ -4177,6 +4177,20 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     onStateChange(payload);
   }); // run on every render when sync is needed
 
+  // ONLINE SYNC FIX: Periodic heartbeat re-sync every 3 seconds.
+  // Catches any state updates that were dropped due to browser tab throttling,
+  // network hiccups, or React batching delays during idle periods.
+  useEffect(() => {
+    if (!onlineMode || !onStateChange) return;
+    const interval = setInterval(() => {
+      // Always mark sync needed — the broadcast effect will pick it up on next render
+      onlineSyncNeededRef.current = true;
+      // Force a trivial state update to trigger a render (and thus the sync effect)
+      setCurrentPhase(prev => prev);
+    }, 3000);
+    return () => clearInterval(interval);
+  }, [onlineMode, onStateChange]);
+
   // Online mode: receive state updates from server (opponent's actions)
   // IMPORTANT: Use raw _set* functions here to avoid triggering a broadcast loop!
   const onlineStateTimestampRef = useRef(0);
@@ -6695,7 +6709,16 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     // Discard
     if (/enters.*discard/.test(allText)) effects.push({ icon: '🗑', text: 'Target discards' });
     // Scry/surveil
-    if (/enters.*scry (\d+)/.test(allText)) effects.push({ icon: '🔮', text: 'Scry' });
+    {
+        const etbScryMatch = allText.match(/enters.*scry (\d+)/);
+        if (etbScryMatch) {
+          const scryCount = parseInt(etbScryMatch[1]) || 1;
+          effects.push({ icon: '🔮', text: 'Scry ' + scryCount, type: 'scry', count: scryCount });
+          if (/scry \d+.*then draw a card/i.test(allText)) {
+            effects.push({ icon: '🃏', text: 'Draw a card', type: 'draw', count: 1 });
+          }
+        }
+      }
     // Generic ETB — if none matched but it mentions "enters the battlefield"
     if (effects.length === 0 && (allText.includes('enters the battlefield') || allText.includes('enters, '))) {
       // Extract a short snippet of the ETB ability
@@ -7816,7 +7839,19 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       }
 
       if (etbEffects.length > 0) {
-        setEtbReminder({ pIdx, card, effects: etbEffects });
+        const scryEffect = etbEffects.find(e => e.type === 'scry');
+        const drawEffect = etbEffects.find(e => e.type === 'draw');
+        if (scryEffect) {
+          const onScryComplete = drawEffect ? () => { drawCard(pIdx); addGameLog(pIdx, '🃏', getState(pIdx).name + ' drew a card'); } : null;
+          setTimeout(() => { setScryView({ pIdx, count: scryEffect.count || 1, mode: 'scry', onComplete: onScryComplete }); }, 400);
+        } else if (drawEffect) {
+          drawCard(pIdx);
+          addGameLog(pIdx, '🃏', getState(pIdx).name + ' drew a card');
+        }
+        const manualEffects = etbEffects.filter(e => e.type !== 'scry' && e.type !== 'draw');
+        if (manualEffects.length > 0) {
+          setEtbReminder({ pIdx, card, effects: manualEffects });
+        }
       }
     }
     checkCastTriggers(pIdx, card);
@@ -8264,7 +8299,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     const allText = getOracleText(card);
     if (allText.includes('when you cycle') || allText.includes('cycling this card')) {
       // Auto-detect "create an X/X [color] [type] creature token [with keywords]"
-      const cycleTokenMatch = allText.match(/create an? x\/x\s+([\w\s]+?)\s+creature token\s*(?:with\s+([\w\s,]+))?/);
+      const cycleTokenMatch = allText.match(/create an? x\/x\s+([\w\s]+?)\s+creature token\s*(?:with\s+([\w\s,]+?)(?:\.|,\s*where|$))?/);
       if (cycleTokenMatch) {
         const colorType = cycleTokenMatch[1].trim();
         const kwStr = cycleTokenMatch[2] || '';
@@ -9371,6 +9406,34 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         processUpkeepTriggers(nextPlayer);
       }
     }, 200);
+    // ONLINE SYNC FIX: Force an immediate sync broadcast after turn pass.
+    // The useEffect-based sync relies on a React render cycle, which browsers
+    // may delay if the tab has been idle. This ensures the turn change is
+    // sent immediately via a dedicated setTimeout at 100ms (after React batches).
+    if (onlineMode && onStateChange) {
+      setTimeout(() => {
+        onlineSyncNeededRef.current = true;
+        // Force a re-render to trigger the sync useEffect
+        setCurrentPhase(prev => prev);
+      }, 100);
+      // Second safety net at 500ms in case the first was swallowed
+      setTimeout(() => {
+        if (onlineSyncNeededRef.current) {
+          onlineSyncNeededRef.current = false;
+          const payload = {
+            players: [p1, p2],
+            activePlayer: activePlayer === 0 ? 1 : 0,
+            currentPhase: 'main1',
+            turnNumber: turnCount + (activePlayer === 1 ? 1 : 0),
+            combatState: null,
+            mulliganPhase,
+            mulliganPlayer,
+            mulliganCounts,
+          };
+          onStateChange(payload);
+        }
+      }, 500);
+    }
   };
 
   // New flow: click YOUR blocker first, then click the attacker to block
@@ -10263,19 +10326,27 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       <>
         <div className="bf-main">
           {renderBfRow(lands, 'bf-lands')}
-          {other.length > 0 && renderBfRow(other, 'bf-other')}
           {renderBfRow(creatures, 'bf-creatures')}
         </div>
-        {renderPWSidebar()}
+        {(other.length > 0 || planeswalkers.length > 0) && (
+          <div className="bf-sidebar" style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 60, alignItems: 'center' }}>
+            {renderPWSidebar()}
+            {other.length > 0 && renderBfRow(other, 'bf-other')}
+          </div>
+        )}
       </>
     ) : (
       <>
         <div className="bf-main">
           {renderBfRow(creatures, 'bf-creatures')}
-          {other.length > 0 && renderBfRow(other, 'bf-other')}
           {renderBfRow(lands, 'bf-lands')}
         </div>
-        {renderPWSidebar()}
+        {(other.length > 0 || planeswalkers.length > 0) && (
+          <div className="bf-sidebar" style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 60, alignItems: 'center' }}>
+            {renderPWSidebar()}
+            {other.length > 0 && renderBfRow(other, 'bf-other')}
+          </div>
+        )}
       </>
     );
 
@@ -10475,7 +10546,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                 🏷️ Emblems ({p.emblems.length})
               </button>
             )}
-            {isActive && !(onlineMode && pIdx !== onlinePlayerIndex) && (
+            {!(onlineMode && pIdx !== onlinePlayerIndex) && (
               <button className="btn text-xs" style={{ borderColor: 'rgba(100,180,220,0.3)', color: '#70b8d8' }}
                 onClick={() => setScryView({ pIdx, count: 3, mode: 'scry' })}>
                 Scry
