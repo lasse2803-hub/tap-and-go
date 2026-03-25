@@ -4466,14 +4466,14 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
   useEffect(() => {
     if (!onlineMode || !spellResolveRequest) return;
     if (spellResolveHandledRef.current === spellResolveRequest.timestamp) return; // already handled
-    spellResolveHandledRef.current = spellResolveRequest.timestamp;
-    if (spellStack.length === 0) { _setSpellResolveRequest(null); return; }
+    if (spellStack.length === 0) return; // stack empty — wait for sync
     const topSpell = spellStack[spellStack.length - 1];
-    // Only the caster should resolve (the one whose library is available locally)
-    if (topSpell.pIdx !== onlinePlayerIndex) { _setSpellResolveRequest(null); return; }
-    // Clear the request signal
+    // Only the caster should resolve (the one whose library is available locally).
+    // Non-caster: do NOT clear or mark handled — let sync carry the request to caster.
+    if (topSpell.pIdx !== onlinePlayerIndex) return;
+    // We ARE the caster — resolve on our client where we have full library data
+    spellResolveHandledRef.current = spellResolveRequest.timestamp;
     _setSpellResolveRequest(null);
-    // Now resolve on our client where we have full library data
     resolveTopOfStack();
   }, [spellResolveRequest, onlineMode, spellStack]);
 
