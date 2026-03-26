@@ -8056,6 +8056,19 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         setCastError({ pIdx: opponentPIdx, message: `⚠️ ${spellBelow.displayName} can't be countered! ${topSpell.displayName} fizzles.` });
         setTimeout(() => setCastError(null), 3000);
         addGameLog(topSpell.pIdx, '⚠️', `${topSpell.displayName} fizzled — ${spellBelow.displayName} can't be countered`);
+      } else if (/unless.*pays\s*\{(\d+)\}/i.test(counterOracle)) {
+        // "Counter unless pays {X}" — offer the opponent a choice (Make Disappear, Mana Leak, etc.)
+        const payMatch = counterOracle.match(/unless.*pays\s*\{(\d+)\}/i);
+        const payAmount = payMatch ? parseInt(payMatch[1]) : 1;
+        // Remove counterspell from stack (it resolved), move to graveyard
+        setSpellStack(prev => prev.slice(0, -1));
+        setState(topSpell.pIdx, prev => ({
+          ...prev,
+          graveyard: [...prev.graveyard, { ...topSpell.card, tapped: false }],
+        }));
+        SFX.playSpell();
+        // Show pay-or-counter choice to the target spell's owner
+        setSacCounterChoice({ sacPIdx: topSpell.pIdx, sacCard: topSpell.card, targetEntry: spellBelow, payAmount, isSpellCounter: true });
       } else {
         // Counter succeeds — remove both top and target from stack
         setSpellStack(prev => prev.slice(0, -2));
@@ -10300,7 +10313,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
 
   // Render SVG lines connecting blockers to their assigned attackers
   const BlockerLines = () => {
-    if (!combatState || combatState.phase !== 'blockers') return null;
+    if (!combatState || !combatState.blocks || !['blockers', 'combat-respond', 'damage'].includes(combatState.phase)) return null;
     const blockEntries = Object.entries(combatState.blocks);
     if (blockEntries.length === 0) return null;
 
@@ -12023,7 +12036,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                 🚫 Counter Unless Pays
               </div>
               <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.6)', marginBottom: 12, lineHeight: 1.5 }}>
-                <strong style={{ color: '#e0a040' }}>{sacPlayer.name}</strong> sacrificed <strong style={{ color: '#d4b44a' }}>{sacCard.name}</strong> to counter{' '}
+                <strong style={{ color: '#e0a040' }}>{sacPlayer.name}</strong> {sacCounterChoice.isSpellCounter ? 'cast' : 'sacrificed'} <strong style={{ color: '#d4b44a' }}>{sacCard.name}</strong> to counter{' '}
                 <strong style={{ color: '#6cf' }}>{targetEntry.displayName}</strong>.
               </div>
               <div style={{ fontSize: 13, color: '#e8e4dc', marginBottom: 16, fontWeight: 600 }}>
