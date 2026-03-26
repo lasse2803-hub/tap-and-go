@@ -4183,6 +4183,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     if (spellResolveRequest) payload.spellResolveRequest = spellResolveRequest;
     if (pendingRemoteDraw) payload.pendingRemoteDraw = pendingRemoteDraw;
     if (pendingRemoteScry) payload.pendingRemoteScry = pendingRemoteScry;
+    if (pendingRemoteLookTop) { payload.pendingRemoteLookTop = pendingRemoteLookTop; }
     // Bundle any pending log entries into this broadcast
     // (avoids race condition where separate log broadcast triggers throttle
     // and causes the actual state sync to be dropped)
