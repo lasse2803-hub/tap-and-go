@@ -413,6 +413,7 @@ class GameRoom {
       if (update.abilityActivated !== undefined) this.gameState.abilityActivated = update.abilityActivated;
       if (update.pendingRemoteDraw !== undefined) this.gameState.pendingRemoteDraw = update.pendingRemoteDraw;
       if (update.pendingRemoteScry !== undefined) this.gameState.pendingRemoteScry = update.pendingRemoteScry;
+      if (update.pendingRemoteLookTop !== undefined) this.gameState.pendingRemoteLookTop = update.pendingRemoteLookTop;
       if (update.lookTopView !== undefined) this.gameState.lookTopView = update.lookTopView;
       if (update.putLandFromHand !== undefined) this.gameState.putLandFromHand = update.putLandFromHand;
 

@@ -4184,6 +4184,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     if (spellResolveRequest) payload.spellResolveRequest = spellResolveRequest;
     if (pendingRemoteDraw) payload.pendingRemoteDraw = pendingRemoteDraw;
     if (pendingRemoteScry) payload.pendingRemoteScry = pendingRemoteScry;
+    if (pendingRemoteLookTop) payload.pendingRemoteLookTop = pendingRemoteLookTop;
     // Bundle any pending log entries into this broadcast
     // (avoids race condition where separate log broadcast triggers throttle
     // and causes the actual state sync to be dropped)
@@ -4412,6 +4413,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     if (onlineState.abilityActivated !== undefined) _setAbilityActivated(onlineState.abilityActivated);
     if (onlineState.pendingRemoteDraw !== undefined) _setPendingRemoteDraw(onlineState.pendingRemoteDraw);
     if (onlineState.pendingRemoteScry !== undefined) _setPendingRemoteScry(onlineState.pendingRemoteScry);
+    if (onlineState.pendingRemoteLookTop !== undefined) _setPendingRemoteLookTop(onlineState.pendingRemoteLookTop);
     if (onlineState.putLandFromHand !== undefined) _setPutLandFromHand(onlineState.putLandFromHand);
 
     // Receive game log entries from opponent (supports both array and single entry)
@@ -4542,6 +4544,30 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     } : null;
     setScryView({ pIdx: pendingRemoteScry.pIdx, count: pendingRemoteScry.count || 1, mode: pendingRemoteScry.mode || 'scry', onComplete });
   }, [pendingRemoteScry, onlineMode]);
+
+  // Online mode: opponent resolved a spell with look_top effects targeting us (Impulse, Memory Deluge, etc.)
+  // Our library is hidden on their client, so they sent pendingRemoteLookTop instead.
+  // We open the look-top UI here where we have our actual library data.
+  useEffect(() => {
+    if (!onlineMode || !pendingRemoteLookTop) return;
+    if (pendingRemoteLookTopHandledRef.current === pendingRemoteLookTop.timestamp) return;
+    if (pendingRemoteLookTop.pIdx !== onlinePlayerIndex) return;
+    pendingRemoteLookTopHandledRef.current = pendingRemoteLookTop.timestamp;
+    _setPendingRemoteLookTop(null);
+    const lib = getState(pendingRemoteLookTop.pIdx).library;
+    const lookCount = pendingRemoteLookTop.count || 4;
+    const topCards = lib.slice(0, Math.min(lookCount, lib.length));
+    if (topCards.length > 0) {
+      setLookTopView({
+        pIdx: pendingRemoteLookTop.pIdx,
+        cards: topCards,
+        toHand: pendingRemoteLookTop.toHand || 1,
+        selected: new Set(),
+        toBattlefield: pendingRemoteLookTop.toBattlefield || false,
+        selectFilter: pendingRemoteLookTop.selectFilter || null,
+      });
+    }
+  }, [pendingRemoteLookTop, onlineMode]);
 
   // Wire up star P/T resolution to access game state
   _starPTStateGetter = getState;
@@ -6955,8 +6981,11 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
   const setPendingRemoteDraw = syncSetter(_setPendingRemoteDraw);
   const [pendingRemoteScry, _setPendingRemoteScry] = useState(null); // SYNCED — { pIdx, count, mode, timestamp, onDrawAfter } — tell caster to scry/surveil
   const setPendingRemoteScry = syncSetter(_setPendingRemoteScry);
+  const [pendingRemoteLookTop, _setPendingRemoteLookTop] = useState(null); // SYNCED — { pIdx, count, toHand, toBattlefield, selectFilter, timestamp }
+  const setPendingRemoteLookTop = syncSetter(_setPendingRemoteLookTop);
   const pendingRemoteDrawHandledRef = useRef(null);
   const pendingRemoteScryHandledRef = useRef(null);
+  const pendingRemoteLookTopHandledRef = useRef(null);
   const [ltbReminder, setLtbReminder] = useState(null); // { pIdx, card, effects[] }
 
   // ===== IN-GAME CHAT =====
@@ -7551,6 +7580,11 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
             lookCount = parseInt(x);
             if (isNaN(lookCount) || lookCount < 1) break;
           }
+          if (isRemotePlayer) {
+            // Caster's library is hidden — defer to caster's client
+            setPendingRemoteLookTop({ pIdx, count: lookCount, toHand: effect.toHand || 1, timestamp: Date.now() });
+            return; // Stop processing — caster handles look_top
+          }
           const lib = getState(pIdx).library;
           const topCards = lib.slice(0, Math.min(lookCount, lib.length));
           if (topCards.length > 0) {
@@ -7567,6 +7601,10 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
             const x = prompt('How many cards to look at? (X = mana spent)');
             lookCount2 = parseInt(x);
             if (isNaN(lookCount2) || lookCount2 < 1) break;
+          }
+          if (isRemotePlayer) {
+            setPendingRemoteLookTop({ pIdx, count: lookCount2, toHand: effect.toField || 2, toBattlefield: true, selectFilter: effect.selectFilter || null, timestamp: Date.now() });
+            return;
           }
           const lib2 = getState(pIdx).library;
           const topCards2 = lib2.slice(0, Math.min(lookCount2, lib2.length));
