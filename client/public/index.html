@@ -4412,7 +4412,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     if (onlineState.abilityActivated !== undefined) _setAbilityActivated(onlineState.abilityActivated);
     if (onlineState.pendingRemoteDraw !== undefined) _setPendingRemoteDraw(onlineState.pendingRemoteDraw);
     if (onlineState.pendingRemoteScry !== undefined) _setPendingRemoteScry(onlineState.pendingRemoteScry);
-    if (onlineState.pendingRemoteLookTop !== undefined) { console.log('[DBG] RECV pRLT', JSON.stringify(onlineState.pendingRemoteLookTop), 'myIdx:', myIdx); _setPendingRemoteLookTop(onlineState.pendingRemoteLookTop); }
+    if (onlineState.pendingRemoteLookTop !== undefined) _setPendingRemoteLookTop(onlineState.pendingRemoteLookTop);
     if (onlineState.putLandFromHand !== undefined) _setPutLandFromHand(onlineState.putLandFromHand);
 
     // Receive game log entries from opponent (supports both array and single entry)
