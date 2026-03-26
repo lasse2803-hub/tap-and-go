@@ -6605,6 +6605,19 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       if (isCreature(card)) {
         actions.push({ label: '👻 Create Token Copy (exile this)', fn: () => createTokenCopy(pIdx, card, 'graveyard') });
       }
+      // Steal from opponent's graveyard — Zareth San, Animate Dead, The Scarab God, etc.
+      if (!isOwner) {
+        const myPIdx = onlinePlayerIndex ?? (pIdx === 0 ? 1 : 0);
+        actions.push({ label: '🏴 Steal to Battlefield', fn: () => {
+          setState(pIdx, prev => ({ ...prev, graveyard: prev.graveyard.filter(c => c.id !== card.id) }));
+          setState(myPIdx, prev => ({
+            ...prev,
+            battlefield: [...prev.battlefield, { ...card, tapped: false, enteredThisTurn: true, originalOwner: pIdx }],
+          }));
+          SFX.playSpell();
+          addGameLog(myPIdx, '🏴', `Stole ${card.name} from ${getState(pIdx).name}'s graveyard`);
+        }});
+      }
       if (isOwner) {
         actions.push({ label: '📚 To Top of Library', fn: () => returnToLibrary(pIdx, card, 'graveyard', 'top') });
       }
