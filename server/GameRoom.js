@@ -472,6 +472,18 @@ class GameRoom {
       return { ok: true, discardedCard: { name: card.name, id: card.id } };
     }
 
+    if (action.type === 'millCards') {
+      // Mill cards from a player's library to graveyard (used when milling opponent in online mode)
+      const { targetPlayerIndex, count } = action;
+      const target = this.gameState.players[targetPlayerIndex];
+      if (!target) return { error: 'Invalid target player' };
+      const millCount = Math.min(count || 1, target.library.length);
+      const milled = target.library.splice(0, millCount);
+      target.graveyard.push(...milled);
+      this.gameState.timestamp = Date.now();
+      return { ok: true, milledCards: milled, newLibraryCount: target.library.length };
+    }
+
     if (action.type === 'peekHand') {
       // Let a player see an opponent's hand (for discard selection)
       const { targetPlayerIndex } = action;
