@@ -4051,7 +4051,12 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
   const [commanderDeathChoice, setCommanderDeathChoice] = useState(null); // { pIdx, card, destination }
   const [peekingHand, setPeekingHand] = useState(null); // { targetPIdx, allowDiscard } — view opponent's hand
   const [instantCasting, _setInstantCasting] = useState(null); // SYNCED — non-active player casting an instant
-  const setInstantCasting = syncSetter(_setInstantCasting);
+  const instantCastingVersionRef = useRef(0);
+  const _setInstantCastingSync = syncSetter(_setInstantCasting);
+  const setInstantCasting = (val) => {
+    instantCastingVersionRef.current++;
+    _setInstantCastingSync(val);
+  };
   const [scryView, setScryView] = useState(null); // { pIdx, count, mode: 'scry'|'surveil' }
   const [lookTopView, _setLookTopView] = useState(null); // SYNCED — { pIdx, cards: [], toHand: N, selected: Set }
   const setLookTopView = syncSetter(_setLookTopView);
@@ -4060,7 +4065,12 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
   const [putLandFromHand, _setPutLandFromHand] = useState(null); // SYNCED — { pIdx, source } — "you may put a land from your hand onto the battlefield"
   const setPutLandFromHand = syncSetter(_setPutLandFromHand);
   const [endOfTurnRespond, _setEndOfTurnRespond] = useState(false); // SYNCED — waiting for opponent to respond
-  const setEndOfTurnRespond = syncSetter(_setEndOfTurnRespond);
+  const endOfTurnRespondVersionRef = useRef(0);
+  const _setEndOfTurnRespondSync = syncSetter(_setEndOfTurnRespond);
+  const setEndOfTurnRespond = (val) => {
+    endOfTurnRespondVersionRef.current++;
+    _setEndOfTurnRespondSync(val);
+  };
 
   // Mulligan state — London Mulligan: draw 7, then put back cards equal to mulligans taken
   const [mulliganPhase, _setMulliganPhase] = useState(true); // SYNCED
@@ -4157,7 +4167,9 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       spellStack,
       spellStackVersion: spellStackVersionRef.current,
       instantCasting,
+      instantCastingVersion: instantCastingVersionRef.current,
       endOfTurnRespond,
+      endOfTurnRespondVersion: endOfTurnRespondVersionRef.current,
       pwAbilityOnStack,
       pwReminder,
       preventCombatDamage,
@@ -4376,9 +4388,21 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       }
     }
 
-    // Sync instant casting, end-of-turn respond, PW ability stack, prevent combat damage
-    if (onlineState.instantCasting !== undefined) _setInstantCasting(onlineState.instantCasting);
-    if (onlineState.endOfTurnRespond !== undefined) _setEndOfTurnRespond(onlineState.endOfTurnRespond);
+    // Sync instant casting, end-of-turn respond — versioned to prevent race conditions
+    if (onlineState.instantCasting !== undefined) {
+      const incomingVer = onlineState.instantCastingVersion || 0;
+      if (incomingVer >= instantCastingVersionRef.current) {
+        instantCastingVersionRef.current = incomingVer;
+        _setInstantCasting(onlineState.instantCasting);
+      }
+    }
+    if (onlineState.endOfTurnRespond !== undefined) {
+      const incomingVer = onlineState.endOfTurnRespondVersion || 0;
+      if (incomingVer >= endOfTurnRespondVersionRef.current) {
+        endOfTurnRespondVersionRef.current = incomingVer;
+        _setEndOfTurnRespond(onlineState.endOfTurnRespond);
+      }
+    }
     if (onlineState.pwAbilityOnStack !== undefined) _setPwAbilityOnStack(onlineState.pwAbilityOnStack);
     if (onlineState.pwReminder !== undefined) _setPwReminder(onlineState.pwReminder);
     if (onlineState.preventCombatDamage !== undefined) _setPreventCombatDamage(onlineState.preventCombatDamage);

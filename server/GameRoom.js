@@ -388,8 +388,22 @@ class GameRoom {
       }
       if (update.sacCounterChoice !== undefined) this.gameState.sacCounterChoice = update.sacCounterChoice;
       if (update.librarySearch !== undefined) this.gameState.librarySearch = update.librarySearch;
-      if (update.instantCasting !== undefined) this.gameState.instantCasting = update.instantCasting;
-      if (update.endOfTurnRespond !== undefined) this.gameState.endOfTurnRespond = update.endOfTurnRespond;
+      if (update.instantCasting !== undefined) {
+        const incomingVer = update.instantCastingVersion || 0;
+        const currentVer = this.gameState.instantCastingVersion || 0;
+        if (incomingVer >= currentVer) {
+          this.gameState.instantCasting = update.instantCasting;
+          this.gameState.instantCastingVersion = incomingVer;
+        }
+      }
+      if (update.endOfTurnRespond !== undefined) {
+        const incomingVer = update.endOfTurnRespondVersion || 0;
+        const currentVer = this.gameState.endOfTurnRespondVersion || 0;
+        if (incomingVer >= currentVer) {
+          this.gameState.endOfTurnRespond = update.endOfTurnRespond;
+          this.gameState.endOfTurnRespondVersion = incomingVer;
+        }
+      }
       if (update.pwAbilityOnStack !== undefined) this.gameState.pwAbilityOnStack = update.pwAbilityOnStack;
       if (update.pwReminder !== undefined) this.gameState.pwReminder = update.pwReminder;
       if (update.preventCombatDamage !== undefined) this.gameState.preventCombatDamage = update.preventCombatDamage;
