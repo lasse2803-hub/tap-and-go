@@ -4058,8 +4058,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     _setInstantCastingSync(val);
   };
   const [scryView, setScryView] = useState(null); // { pIdx, count, mode: 'scry'|'surveil' }
-  const [lookTopView, _setLookTopView] = useState(null); // SYNCED — { pIdx, cards: [], toHand: N, selected: Set }
-  const setLookTopView = syncSetter(_setLookTopView);
+  const [lookTopView, setLookTopView] = useState(null); // LOCAL ONLY — { pIdx, cards: [], toHand: N, selected: Set } — not synced (opponent's sync would overwrite it)
   const [librarySearch, _setLibrarySearch] = useState(null); // SYNCED — { pIdx, filter, tapped, source }
   const setLibrarySearch = syncSetter(_setLibrarySearch);
   const [putLandFromHand, _setPutLandFromHand] = useState(null); // SYNCED — { pIdx, source } — "you may put a land from your hand onto the battlefield"
@@ -4176,7 +4175,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       modalChoice,
       searchExile,
       abilityActivated,
-      lookTopView,
+      // lookTopView removed from sync — it's a local UI overlay (opponent's null would overwrite it)
       putLandFromHand,
     };
     // Only include spellResolveRequest when non-null.
@@ -4377,7 +4376,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
 
     // Sync library search state (Solemn Simulacrum etc.)
     if (onlineState.librarySearch !== undefined) _setLibrarySearch(onlineState.librarySearch);
-    if (onlineState.lookTopView !== undefined) _setLookTopView(onlineState.lookTopView);
+    // lookTopView removed from receiver — local UI only (opponent's null would overwrite it via race condition)
 
     // Sync spell stack (so opponent sees spells being cast)
     // Use version counter to prevent race conditions: only accept newer versions

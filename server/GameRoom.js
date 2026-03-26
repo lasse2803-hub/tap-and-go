@@ -414,7 +414,7 @@ class GameRoom {
       if (update.pendingRemoteDraw !== undefined) this.gameState.pendingRemoteDraw = update.pendingRemoteDraw;
       if (update.pendingRemoteScry !== undefined) this.gameState.pendingRemoteScry = update.pendingRemoteScry;
       if (update.pendingRemoteLookTop !== undefined) this.gameState.pendingRemoteLookTop = update.pendingRemoteLookTop;
-      if (update.lookTopView !== undefined) this.gameState.lookTopView = update.lookTopView;
+      // lookTopView removed from server sync — it's a local UI overlay only
       if (update.putLandFromHand !== undefined) this.gameState.putLandFromHand = update.putLandFromHand;
 
       // Forward game log entries from one player to the other
