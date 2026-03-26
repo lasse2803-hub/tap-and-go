@@ -4211,9 +4211,9 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     const isOwnEcho = onlineLastAction && onlineLastAction.by === myIdx;
 
     // Update opponent's state from server (public zones)
-    // Skip opponent state updates for our own echo — local state is already correct
+    // Always apply — even on own echo, the server may include opponent changes we haven't seen
     const serverOpp = onlineState.players?.[oppIdx];
-    if (serverOpp && !isOwnEcho) {
+    if (serverOpp) {
       const setOpp = oppIdx === 0 ? setP1 : setP2;
       setOpp(prev => {
         // === Detect opponent's actions and play appropriate SFX ===
@@ -4327,7 +4327,14 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         };
         // Accept zone changes only when opponent caused this update
         if (opponentCausedUpdate) {
-          next.battlefield = serverMe.battlefield || prev.battlefield;
+          // Preserve local enteredThisTurn flags — prevents stale server data
+          // from overwriting our untap step's clearing of summoning sickness
+          const serverBF = serverMe.battlefield || prev.battlefield;
+          next.battlefield = serverBF.map(c => {
+            const local = prev.battlefield.find(lc => lc.id === c.id);
+            if (local) return { ...c, enteredThisTurn: local.enteredThisTurn };
+            return c;
+          });
           next.graveyard = serverMe.graveyard || prev.graveyard;
           next.exile = serverMe.exile || prev.exile;
           next.commandZone = serverMe.commandZone || prev.commandZone;
