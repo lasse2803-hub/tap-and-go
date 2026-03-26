@@ -6108,7 +6108,21 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
   };
 
   const millCards = (pIdx, count) => {
-    if (onlineMode && pIdx !== onlinePlayerIndex) return;
+    if (onlineMode && pIdx !== onlinePlayerIndex && serverGameAction) {
+      // Mill opponent: their library is hidden, so the server handles it
+      serverGameAction({ type: 'millCards', targetPlayerIndex: pIdx, count }).then(res => {
+        if (res && res.milledCards && res.milledCards.length > 0) {
+          setState(pIdx, prev => ({
+            ...prev,
+            graveyard: [...prev.graveyard, ...res.milledCards],
+            libraryCount: res.newLibraryCount ?? prev.libraryCount,
+          }));
+          SFX.mill();
+          addGameLog(pIdx, '\u{1F480}', `Milled ${res.milledCards.length} card${res.milledCards.length > 1 ? 's' : ''}`);
+        }
+      });
+      return;
+    }
     SFX.mill();
     setState(pIdx, prev => {
       const milled = prev.library.slice(0, count);
@@ -10684,7 +10698,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
             {isActive && <button className="btn text-xs" onClick={() => untapAll(pIdx)}>Untap All</button>}
             {isActive && !(onlineMode && pIdx !== onlinePlayerIndex) && <button className="btn text-xs" onClick={() => shuffleLibrary(pIdx)}>Shuffle</button>}
             {!(onlineMode && pIdx !== onlinePlayerIndex) && <button className="btn text-xs btn-gold" onClick={() => setShowTokenCreator(pIdx)}>+ Token</button>}
-            {!(onlineMode && pIdx !== onlinePlayerIndex) && <button className="btn text-xs" onClick={() => millCards(pIdx, 1)}>Mill</button>}
+            <button className="btn text-xs" onClick={() => millCards(pIdx, 1)}>Mill</button>
             {!isActive && !(onlineMode && pIdx !== onlinePlayerIndex) && p.hand.some(c => canCastAtInstantSpeed(c) || getCyclingCost(c) || ((c.type_line || '').toLowerCase().includes('sorcery') && hasSorceryFlash(pIdx))) && (
               <button className="btn text-xs" style={{ borderColor: 'rgba(60,180,220,0.4)', color: '#60c8e8', background: 'rgba(60,180,220,0.08)' }}
                 onClick={() => setInstantCasting({ pIdx })}>
