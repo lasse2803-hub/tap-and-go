@@ -1744,9 +1744,11 @@ const parseSpellEffects = (card) => {
     effects.push({ type: 'lose_life', amount: parseInt(loseLifeMatch[1]), description: `You lose ${loseLifeMatch[1]} life` });
   }
 
-  // Look at / reveal opponent's hand (e.g. Thoughtseize, Duress)
-  if (/target (player|opponent) reveals (their|his or her) hand/.test(allText) ||
-      /look at target (player|opponent)'?s? hand/.test(allText)) {
+  // Look at / reveal opponent's hand (e.g. Gitaxian Probe — peek only, no discard)
+  // Skip if 'discard' effect already covers this (e.g. Thoughtseize, Duress — they peek AND discard)
+  if ((/target (player|opponent) reveals (their|his or her) hand/.test(allText) ||
+      /look at target (player|opponent)'?s? hand/.test(allText)) &&
+      !effects.some(e => e.type === 'discard')) {
     effects.push({ type: 'peek_hand', description: 'Look at opponent\'s hand' });
   }
 
