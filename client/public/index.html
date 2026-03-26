@@ -4198,6 +4198,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
   // IMPORTANT: Use raw _set* functions here to avoid triggering a broadcast loop!
   const onlineStateTimestampRef = useRef(0);
   useEffect(() => {
+    if (onlineState && onlineState.pendingRemoteLookTop) console.log('[DBG] RECV-TOP pRLT:', JSON.stringify(onlineState.pendingRemoteLookTop), 'ts:', onlineState.timestamp, 'ref:', onlineStateTimestampRef.current);
     if (!onlineMode || !onlineState || !onlineState.timestamp) return;
     // Skip if we've already processed this timestamp
     if (onlineState.timestamp <= onlineStateTimestampRef.current) return;
@@ -14313,6 +14314,7 @@ function useGameSocket() {
     });
 
     s.on('stateUpdate', ({ state, lastAction: la }) => {
+      if (state && state.pendingRemoteLookTop) console.log('[DBG] SOCKET got pRLT:', JSON.stringify(state.pendingRemoteLookTop));
       setGameState(state);
       setLastAction(la || null);
     });
