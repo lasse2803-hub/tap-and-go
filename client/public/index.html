@@ -11955,7 +11955,12 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
             <div className="spell-stack-buttons">
               {(!onlineMode || onlinePlayerIndex === (stackTop.pIdx === 0 ? 1 : 0)) && (
                 <button className="btn-resolve" onClick={() => {
-                  resolveTopOfStack();
+                  if (onlineMode) {
+                    // Signal the caster to resolve — they have access to their own library/hand data
+                    setSpellResolveRequest({ timestamp: Date.now() });
+                  } else {
+                    resolveTopOfStack();
+                  }
                 }}>✓ Resolve</button>
               )}
               {(!onlineMode || onlinePlayerIndex === (stackTop.pIdx === 0 ? 1 : 0)) && (
