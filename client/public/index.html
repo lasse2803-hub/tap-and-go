@@ -11766,10 +11766,14 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                   // Fetch token art from Scryfall
                   (async () => {
                     try {
-                      const res = await fetch('https://api.scryfall.com/cards/search?q=' + encodeURIComponent('t:token ' + creatureType.toLowerCase()) + '&unique=art&order=released&dir=desc');
+                      const isShark = creatureType.toLowerCase() === 'shark';
+                      const url = isShark
+                        ? 'https://api.scryfall.com/cards/tdsc/4'
+                        : 'https://api.scryfall.com/cards/search?q=' + encodeURIComponent('t:token ' + creatureType.toLowerCase()) + '&unique=art&order=released&dir=desc';
+                      const res = await fetch(url);
                       if (res.ok) {
                         const data = await res.json();
-                        const match = data.data?.find(c => c.image_uris && (c.name || '').toLowerCase().includes(creatureType.toLowerCase()));
+                        const match = data.image_uris ? data : data.data?.find(c => c.image_uris && (c.name || '').toLowerCase().includes(creatureType.toLowerCase()));
                         if (match?.image_uris) {
                           setState(pIdx, prev => ({
                             ...prev,
