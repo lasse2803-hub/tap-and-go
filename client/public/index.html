@@ -4183,7 +4183,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     if (spellResolveRequest) payload.spellResolveRequest = spellResolveRequest;
     if (pendingRemoteDraw) payload.pendingRemoteDraw = pendingRemoteDraw;
     if (pendingRemoteScry) payload.pendingRemoteScry = pendingRemoteScry;
-    if (pendingRemoteLookTop) payload.pendingRemoteLookTop = pendingRemoteLookTop;
+    if (pendingRemoteLookTop) { payload.pendingRemoteLookTop = pendingRemoteLookTop; console.log('[IMP] SYNC OUT: pendingRemoteLookTop in payload', JSON.stringify(pendingRemoteLookTop)); }
     // Bundle any pending log entries into this broadcast
     // (avoids race condition where separate log broadcast triggers throttle
     // and causes the actual state sync to be dropped)
@@ -4412,7 +4412,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     if (onlineState.abilityActivated !== undefined) _setAbilityActivated(onlineState.abilityActivated);
     if (onlineState.pendingRemoteDraw !== undefined) _setPendingRemoteDraw(onlineState.pendingRemoteDraw);
     if (onlineState.pendingRemoteScry !== undefined) _setPendingRemoteScry(onlineState.pendingRemoteScry);
-    if (onlineState.pendingRemoteLookTop !== undefined) _setPendingRemoteLookTop(onlineState.pendingRemoteLookTop);
+    if (onlineState.pendingRemoteLookTop !== undefined) { console.log('[IMP] RECEIVER: got pendingRemoteLookTop', JSON.stringify(onlineState.pendingRemoteLookTop), 'myIdx:', myIdx); _setPendingRemoteLookTop(onlineState.pendingRemoteLookTop); }
     if (onlineState.putLandFromHand !== undefined) _setPutLandFromHand(onlineState.putLandFromHand);
 
     // Receive game log entries from opponent (supports both array and single entry)
@@ -4548,15 +4548,18 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
   // Our library is hidden on their client, so they sent pendingRemoteLookTop instead.
   // We open the look-top UI here where we have our actual library data.
   useEffect(() => {
+    console.log('[IMP] useEffect: pendingRemoteLookTop=', pendingRemoteLookTop ? JSON.stringify({pIdx: pendingRemoteLookTop.pIdx, count: pendingRemoteLookTop.count, ts: pendingRemoteLookTop.timestamp}) : null, 'onlineMode:', onlineMode, 'onlinePlayerIndex:', onlinePlayerIndex);
     if (!onlineMode || !pendingRemoteLookTop) return;
-    if (pendingRemoteLookTopHandledRef.current === pendingRemoteLookTop.timestamp) return;
-    if (pendingRemoteLookTop.pIdx !== onlinePlayerIndex) return;
+    if (pendingRemoteLookTopHandledRef.current === pendingRemoteLookTop.timestamp) { console.log('[IMP] useEffect: SKIPPED — already handled'); return; }
+    if (pendingRemoteLookTop.pIdx !== onlinePlayerIndex) { console.log('[IMP] useEffect: SKIPPED — pIdx mismatch', pendingRemoteLookTop.pIdx, '!=', onlinePlayerIndex); return; }
+    console.log('[IMP] useEffect: PROCESSING!');
     pendingRemoteLookTopHandledRef.current = pendingRemoteLookTop.timestamp;
     _setPendingRemoteLookTop(null);
     const lib = getState(pendingRemoteLookTop.pIdx).library;
-    const lookCount = pendingRemoteLookTop.count || 4;
-    const topCards = lib.slice(0, Math.min(lookCount, lib.length));
+    console.log('[IMP] useEffect: library length:', lib.length);
+    const topCards = lib.slice(0, Math.min(pendingRemoteLookTop.count || 4, lib.length));
     if (topCards.length > 0) {
+      console.log('[IMP] useEffect: OPENING lookTopView with', topCards.length, 'cards');
       setLookTopView({
         pIdx: pendingRemoteLookTop.pIdx,
         cards: topCards,
@@ -4565,6 +4568,8 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         toBattlefield: pendingRemoteLookTop.toBattlefield || false,
         selectFilter: pendingRemoteLookTop.selectFilter || null,
       });
+    } else {
+      console.log('[IMP] useEffect: NO cards — library empty!');
     }
   }, [pendingRemoteLookTop, onlineMode]);
 
@@ -7579,12 +7584,16 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
             lookCount = parseInt(x);
             if (isNaN(lookCount) || lookCount < 1) break;
           }
+          console.log('[IMP] look_top case hit! isRemotePlayer:', isRemotePlayer, 'pIdx:', pIdx, 'onlinePlayerIndex:', onlinePlayerIndex, 'lookCount:', lookCount);
           if (isRemotePlayer) {
             // Caster's library is hidden — defer to caster's client
+            console.log('[IMP] isRemotePlayer=true → calling setPendingRemoteLookTop');
             setPendingRemoteLookTop({ pIdx, count: lookCount, toHand: effect.toHand || 1, timestamp: Date.now() });
             return; // Stop processing — caster handles look_top
           }
+          console.log('[IMP] isRemotePlayer=false → opening lookTopView locally');
           const lib = getState(pIdx).library;
+          console.log('[IMP] library length:', lib.length);
           const topCards = lib.slice(0, Math.min(lookCount, lib.length));
           if (topCards.length > 0) {
             setLookTopView({ pIdx, cards: topCards, toHand: effect.toHand || 1, selected: new Set() });
@@ -7882,12 +7891,14 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       }));
 
       const effects = parseSpellEffects(card);
+      console.log('[IMP] parseSpellEffects for', card.name, '→', JSON.stringify(effects.map(e => e.type)));
       const targetedEffects = effects.filter(e => ['destroy', 'exile', 'bounce', 'damage', 'boost', 'counter_add', 'fight'].includes(e.type));
       const nonTargetedEffects = effects.filter(e => !['destroy', 'exile', 'bounce', 'damage', 'boost', 'counter_add', 'fight'].includes(e.type));
 
       // Apply non-targeted effects (scry, draw, gain life, etc.) — also for pre-targeted spells
       // NOTE: Non-targeted effects from pendingCast were stored, apply them here
       const ntEffects = stackEntry.nonTargetedEffects || nonTargetedEffects;
+      console.log('[IMP] ntEffects:', JSON.stringify(ntEffects.map(e => ({type: e.type, count: e.count, toHand: e.toHand}))));
 
       // SFX: Only play generic playSpell() if the spell has NO effects that produce their own sounds.
       // Effect handlers (applyResolvedTargets, applyNonTargetedEffects, moveCard) each play
@@ -7897,6 +7908,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       if (!hasEffectSounds) SFX.playSpell();
 
       if (ntEffects.length > 0) {
+        console.log('[IMP] calling applyNonTargetedEffects, pIdx:', pIdx, 'onlineMode:', onlineMode, 'onlinePlayerIndex:', onlinePlayerIndex);
         applyNonTargetedEffects(pIdx, card, ntEffects);
       }
 
@@ -8011,8 +8023,10 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
 
   // Resolve the top spell on the stack with auto-counter logic
   const resolveTopOfStack = () => {
+    console.log('[IMP] resolveTopOfStack called, stack length:', spellStack.length);
     if (spellStack.length === 0) return;
     const topSpell = spellStack[spellStack.length - 1];
+    console.log('[IMP] resolving:', topSpell.displayName || topSpell.card?.name, 'pIdx:', topSpell.pIdx, 'onlinePlayerIndex:', onlinePlayerIndex);
     const spellBelow = spellStack.length > 1 ? spellStack[spellStack.length - 2] : null;
 
     // For modal "choose one" spells (e.g. Decisive Denial), only counter if user chose counter mode
