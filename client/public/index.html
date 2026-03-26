@@ -11376,6 +11376,11 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                     <button className="btn" style={{ padding: '4px 10px', fontSize: 10, borderColor: accentColor + '0.3)', color: textColor }}
                       onClick={() => {
                         const cb = scryView.onComplete;
+                        // Move this card to position 0 (top) of library
+                        setState(scryView.pIdx, prev => {
+                          const lib = prev.library.filter(c => c.id !== card.id);
+                          return { ...prev, library: [card, ...lib] };
+                        });
                         setScryView(null);
                         if (cb) setTimeout(cb, 50);
                       }} title="Keep on top">📚 Top</button>
