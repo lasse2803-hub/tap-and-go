@@ -4199,7 +4199,6 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
   // IMPORTANT: Use raw _set* functions here to avoid triggering a broadcast loop!
   const onlineStateTimestampRef = useRef(0);
   useEffect(() => {
-    if (onlineState && onlineState.pendingRemoteLookTop) console.log('[DBG] RECV-TOP pRLT:', JSON.stringify(onlineState.pendingRemoteLookTop), 'ts:', onlineState.timestamp, 'ref:', onlineStateTimestampRef.current);
     if (!onlineMode || !onlineState || !onlineState.timestamp) return;
     // Skip if we've already processed this timestamp
     if (onlineState.timestamp <= onlineStateTimestampRef.current) return;
@@ -4549,11 +4548,9 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
   // Our library is hidden on their client, so they sent pendingRemoteLookTop instead.
   // We open the look-top UI here where we have our actual library data.
   useEffect(() => {
-    if (pendingRemoteLookTop) console.log('[DBG] UE pendingRemoteLookTop', JSON.stringify(pendingRemoteLookTop), 'mode:', onlineMode, 'myIdx:', onlinePlayerIndex);
     if (!onlineMode || !pendingRemoteLookTop) return;
-    if (pendingRemoteLookTopHandledRef.current === pendingRemoteLookTop.timestamp) { console.log('[DBG] UE SKIP dup ts'); return; }
-    if (pendingRemoteLookTop.pIdx !== onlinePlayerIndex) { console.log('[DBG] UE SKIP pIdx', pendingRemoteLookTop.pIdx, '!=', onlinePlayerIndex); return; }
-    console.log('[DBG] UE PROCESSING lib:', getState(pendingRemoteLookTop.pIdx).library.length);
+    if (pendingRemoteLookTopHandledRef.current === pendingRemoteLookTop.timestamp) return;
+    if (pendingRemoteLookTop.pIdx !== onlinePlayerIndex) return;
     pendingRemoteLookTopHandledRef.current = pendingRemoteLookTop.timestamp;
     _setPendingRemoteLookTop(null);
     const lib = getState(pendingRemoteLookTop.pIdx).library;
@@ -7582,9 +7579,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
             lookCount = parseInt(x);
             if (isNaN(lookCount) || lookCount < 1) break;
           }
-          console.log('[DBG] look_top isRemote:', isRemotePlayer, 'pIdx:', pIdx, 'cnt:', lookCount);
           if (isRemotePlayer) {
-            console.log('[DBG] calling setPendingRemoteLookTop');
             // Caster's library is hidden — defer to caster's client
             setPendingRemoteLookTop({ pIdx, count: lookCount, toHand: effect.toHand || 1, timestamp: Date.now() });
             return; // Stop processing — caster handles look_top
@@ -8016,10 +8011,8 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
 
   // Resolve the top spell on the stack with auto-counter logic
   const resolveTopOfStack = () => {
-    console.log('[DBG] resolveTop stack:', spellStack.length, 'myIdx:', onlinePlayerIndex);
     if (spellStack.length === 0) return;
     const topSpell = spellStack[spellStack.length - 1];
-    console.log('[DBG] resolving:', topSpell.card?.name, 'pIdx:', topSpell.pIdx);
     const spellBelow = spellStack.length > 1 ? spellStack[spellStack.length - 2] : null;
 
     // For modal "choose one" spells (e.g. Decisive Denial), only counter if user chose counter mode
@@ -14315,7 +14308,6 @@ function useGameSocket() {
     });
 
     s.on('stateUpdate', ({ state, lastAction: la }) => {
-      if (state && state.pendingRemoteLookTop) console.log('[DBG] SOCKET got pRLT:', JSON.stringify(state.pendingRemoteLookTop));
       setGameState(state);
       setLastAction(la || null);
     });
