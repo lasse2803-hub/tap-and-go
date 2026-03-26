@@ -377,7 +377,15 @@ class GameRoom {
       // Spell stack, overlays, and shared game state
       // These must be forwarded so the opponent sees spells on the stack,
       // counter-choice overlays, library search state, instant casting, etc.
-      if (update.spellStack !== undefined) this.gameState.spellStack = update.spellStack;
+      if (update.spellStack !== undefined) {
+        // Only accept spellStack updates with a higher version to prevent race conditions
+        const incomingVer = update.spellStackVersion || 0;
+        const currentVer = this.gameState.spellStackVersion || 0;
+        if (incomingVer >= currentVer) {
+          this.gameState.spellStack = update.spellStack;
+          this.gameState.spellStackVersion = incomingVer;
+        }
+      }
       if (update.sacCounterChoice !== undefined) this.gameState.sacCounterChoice = update.sacCounterChoice;
       if (update.librarySearch !== undefined) this.gameState.librarySearch = update.librarySearch;
       if (update.instantCasting !== undefined) this.gameState.instantCasting = update.instantCasting;

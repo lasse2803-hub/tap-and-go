@@ -4155,6 +4155,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       sacCounterChoice,
       librarySearch,
       spellStack,
+      spellStackVersion: spellStackVersionRef.current,
       instantCasting,
       endOfTurnRespond,
       pwAbilityOnStack,
@@ -4366,7 +4367,14 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     if (onlineState.lookTopView !== undefined) _setLookTopView(onlineState.lookTopView);
 
     // Sync spell stack (so opponent sees spells being cast)
-    if (onlineState.spellStack !== undefined) _setSpellStack(onlineState.spellStack);
+    // Use version counter to prevent race conditions: only accept newer versions
+    if (onlineState.spellStack !== undefined) {
+      const incomingVer = onlineState.spellStackVersion || 0;
+      if (incomingVer >= spellStackVersionRef.current) {
+        spellStackVersionRef.current = incomingVer;
+        _setSpellStack(onlineState.spellStack);
+      }
+    }
 
     // Sync instant casting, end-of-turn respond, PW ability stack, prevent combat damage
     if (onlineState.instantCasting !== undefined) _setInstantCasting(onlineState.instantCasting);
@@ -6891,7 +6899,12 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
   const pendingCastRef = useRef(null); // { pIdx, card, asAdventure, fromExile, displayName, nonTargetedEffects }
   const pendingSpellModalRef = useRef(null); // { pIdx, card, asAdventure, fromExile, displayName, spellToCheck } — for "choose one" spells
   const [spellStack, _setSpellStack] = useState([]); // SYNCED — LIFO stack: [{ pIdx, card, asAdventure, fromExile, displayName, resolvedTargets? }, ...]
-  const setSpellStack = syncSetter(_setSpellStack);
+  const spellStackVersionRef = useRef(0); // Version counter to prevent race conditions in online sync
+  const _setSpellStackSync = syncSetter(_setSpellStack);
+  const setSpellStack = (valOrFn) => {
+    spellStackVersionRef.current++;
+    _setSpellStackSync(valOrFn);
+  };
   const stackTop = spellStack.length > 0 ? spellStack[spellStack.length - 1] : null;
   const [stackMinimized, setStackMinimized] = useState(false); // LOCAL — temporarily minimize spell stack overlay to interact with battlefield (e.g. sacrifice Cursecatcher)
   const [sacCounterChoice, _setSacCounterChoice] = useState(null); // SYNCED — { sacPIdx, sacCard, targetEntry, payAmount } — "counter unless pays" choice
@@ -8321,13 +8334,31 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     // - Pre-cast targeting completion (creature/player target selected)
     // - cancelSpellTargeting()
     // - Modal spell mode handlers
-    // Adventure cards with instant adventure face: ALWAYS cast as adventure at instant speed
-    // (e.g. Bonecrusher Giant → Stomp). Note: can't use !isInstant(card) because the combined
-    // type_line includes "Instant" from the adventure face, making isInstant() return true.
+    // Adventure cards: if the adventure face is an instant, we can cast it as adventure.
+    // But if the creature face ALSO has flash, give the player a choice (e.g. Brazen Borrower
+    // has Flash creature + Instant adventure). If only the adventure is instant, auto-cast adventure.
     if (isAdventureCard(card)) {
       const advFace = card.card_faces?.[1];
-      if (advFace && advFace.type_line && advFace.type_line.toLowerCase().includes('instant')) {
+      const advIsInstant = advFace && advFace.type_line && advFace.type_line.toLowerCase().includes('instant');
+      const creatureFace = card.card_faces?.[0];
+      const creatureHasFlash = creatureFace && (
+        (creatureFace.keywords && (creatureFace.keywords.includes('Flash') || creatureFace.keywords.includes('flash'))) ||
+        (creatureFace.oracle_text && creatureFace.oracle_text.toLowerCase().includes('flash'))
+      );
+      // Also check top-level keywords for flash
+      const topLevelFlash = card.keywords && (card.keywords.includes('Flash') || card.keywords.includes('flash'));
+      if (advIsInstant && (creatureHasFlash || topLevelFlash)) {
+        // Both sides castable at instant speed → show choice modal
+        setAdventureChoice({ pIdx, card });
+        return;
+      }
+      if (advIsInstant) {
         castCard(pIdx, card, true); // asAdventure = true
+        return;
+      }
+      // Creature has flash but adventure is not instant → cast as creature
+      if (creatureHasFlash || topLevelFlash) {
+        castCard(pIdx, card, false);
         return;
       }
     }
@@ -14171,7 +14202,19 @@ function useGameSocket() {
     const serverUrl = window.location.origin;
     const s = io(serverUrl, { transports: ['websocket', 'polling'] });
 
-    s.on('connect', () => { setConnected(true); setError(null); });
+    s.on('connect', () => {
+      setConnected(true);
+      setError(null);
+      // On reconnect, request full state from server to resync
+      if (s._reconnecting) {
+        s.emit('requestState', (res) => {
+          if (res?.ok && res.state) {
+            setGameState(res.state);
+          }
+        });
+      }
+      s._reconnecting = true; // After first connect, all future connects are reconnects
+    });
     s.on('disconnect', () => setConnected(false));
     s.on('connect_error', (err) => setError('Connection failed: ' + err.message));
 
