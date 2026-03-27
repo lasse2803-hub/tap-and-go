@@ -1,5 +1,5 @@
 /**
- * GameRoom — Manages a single game session between two players.
+ * GameRoom â Manages a single game session between two players.
  *
  * Handles:
  * - Player connections/disconnections
@@ -64,7 +64,7 @@ class GameRoom {
       }
     }
 
-    // New player joining — find an open slot
+    // New player joining â find an open slot
     // Player 0 (host) is always pre-created, so check if they need to connect
     if (!this.players[0].connected && this.players[0].socketId === null) {
       // Host connecting for the first time
@@ -143,7 +143,7 @@ class GameRoom {
             cards.push(card);
           }
         } else {
-          // Raw card object — add an ID if missing
+          // Raw card object â add an ID if missing
           if (!entry.id) entry.id = require('crypto').randomBytes(8).toString('hex');
           cards.push(entry);
         }
@@ -228,7 +228,7 @@ class GameRoom {
   }
 
   /**
-   * Report a game win in a match — updates score, checks for match winner
+   * Report a game win in a match â updates score, checks for match winner
    */
   gameWon(winnerIndex) {
     if (winnerIndex < 0 || winnerIndex > 1) return { error: 'Invalid winner' };
@@ -251,7 +251,7 @@ class GameRoom {
       return { matchOver: true, winner: winnerIndex, matchScore: [...this.matchScore] };
     }
 
-    // Match continues — next game
+    // Match continues â next game
     this.status = 'between-games';
     const loserIndex = winnerIndex === 0 ? 1 : 0;
     return { matchOver: false, loser: loserIndex, nextGame: this.matchGame + 1, matchScore: [...this.matchScore] };
@@ -271,7 +271,7 @@ class GameRoom {
   }
 
   /**
-   * Start the next game in a Bo3 match — re-shuffles same decks, new hands
+   * Start the next game in a Bo3 match â re-shuffles same decks, new hands
    */
   startNextGame(firstPlayerIndex) {
     this.matchGame++;
@@ -292,7 +292,7 @@ class GameRoom {
     const state = JSON.parse(JSON.stringify(this.gameState)); // deep clone
     const opponentIndex = playerIndex === 0 ? 1 : 0;
 
-    // Hide opponent's hand — only send count and card backs
+    // Hide opponent's hand â only send count and card backs
     const opponentHand = state.players[opponentIndex].hand;
     state.players[opponentIndex].hand = opponentHand.map(() => ({
       hidden: true,
@@ -300,7 +300,7 @@ class GameRoom {
     }));
     state.players[opponentIndex].handCount = opponentHand.length;
 
-    // Hide opponent's library — only send count
+    // Hide opponent's library â only send count
     // Keep viewer's own library so they can draw/search
     state.players[opponentIndex].libraryCount = state.players[opponentIndex].library.length;
     state.players[opponentIndex].library = [];
@@ -326,7 +326,7 @@ class GameRoom {
     // For MVP: the client sends the updated state for its own zones.
     // Server merges and broadcasts.
     if (action.type === 'stateSync') {
-      // Client sends its view of the full state — server merges
+      // Client sends its view of the full state â server merges
       const update = action.state;
 
       // Merge player states
@@ -335,7 +335,7 @@ class GameRoom {
           const u = update.players[i];
           const s = this.gameState.players[i];
 
-          // Update public zones (any player can modify — e.g. combat affects opponent)
+          // Update public zones (any player can modify â e.g. combat affects opponent)
           if (u.life !== undefined) s.life = u.life;
           if (u.poison !== undefined) s.poison = u.poison;
           if (u.battlefield) s.battlefield = u.battlefield;
@@ -414,7 +414,7 @@ class GameRoom {
       if (update.pendingRemoteDraw !== undefined) this.gameState.pendingRemoteDraw = update.pendingRemoteDraw;
       if (update.pendingRemoteScry !== undefined) this.gameState.pendingRemoteScry = update.pendingRemoteScry;
       if (update.pendingRemoteLookTop !== undefined) this.gameState.pendingRemoteLookTop = update.pendingRemoteLookTop;
-      // lookTopView removed from server sync — it's a local UI overlay only
+      // lookTopView removed from server sync â it's a local UI overlay only
       if (update.putLandFromHand !== undefined) this.gameState.putLandFromHand = update.putLandFromHand;
 
       // Forward game log entries from one player to the other
@@ -424,7 +424,7 @@ class GameRoom {
       this.gameState.timestamp = Date.now();
     }
 
-    // ── Server-side cross-visibility actions ──────────────────
+    // ââ Server-side cross-visibility actions ââââââââââââââââââ
     // These actions modify an opponent's hand or library, which can't
     // be done through the normal stateSync path (visibility filter blocks it).
     // The server operates on the true (unfiltered) game state.
@@ -459,7 +459,43 @@ class GameRoom {
       this.gameState.timestamp = Date.now();
     }
 
-    if (action.type === 'discardFromHand') {
+    if (action.type === 'bounceAll') {
+      // Mass bounce: return all nonland permanents (or creatures) to owners' hands
+      // Used by overloaded Cyclone Rift, Evacuation, Whelming Wave, etc.
+      const { targetPlayerIndex, filter, exceptions } = action;
+      // filter: 'nonland' | 'creatures' | 'nonland permanents' | 'all'
+      // exceptions: optional array of subtypes to exclude (e.g. ['kraken', 'leviathan'])
+      const target = this.gameState.players[targetPlayerIndex];
+      if (!target) return { error: 'Invalid target player' };
+      const isLand = (c) => (c.type_line || '').toLowerCase().includes('land');
+      const isCreature = (c) => (c.type_line || '').toLowerCase().includes('creature');
+      const excList = (exceptions || []).map(e => e.toLowerCase());
+      const shouldBounce = (c) => {
+        if (filter === 'nonland' || filter === 'nonland permanents') { if (isLand(c)) return false; }
+        else if (filter === 'creatures') { if (!isCreature(c)) return false; }
+        // Check exceptions (creature subtypes like Kraken, Leviathan, etc.)
+        if (excList.length > 0) {
+          const typeLine = (c.type_line || '').toLowerCase();
+          for (const ex of excList) { if (typeLine.includes(ex)) return false; }
+        }
+        return true;
+      };
+      const toBounce = target.battlefield.filter(shouldBounce);
+      target.battlefield = target.battlefield.filter(c => !shouldBounce(c));
+      // Clean up bounced cards and add to hand
+      for (const card of toBounce) {
+        const cleaned = { ...card, tapped: false, enteredThisTurn: false };
+        if (cleaned.counters) cleaned.counters = {};
+        if (cleaned.animatedCreature) { delete cleaned.animatedCreature; delete cleaned.power; delete cleaned.toughness; delete cleaned.keywords; }
+        delete cleaned.temporaryControl; delete cleaned.originalOwner; delete cleaned.grantedHaste;
+        delete cleaned.tempBuffs; delete cleaned.damagePrevented;
+        target.hand.push(cleaned);
+      }
+      this.gameState.timestamp = Date.now();
+      return { ok: true, bouncedCount: toBounce.length };
+    }
+
+        if (action.type === 'discardFromHand') {
       // Force-discard a specific card from a player's hand (by card index)
       // Used by discard effects (Thoughtseize, Duress, etc.)
       const { targetPlayerIndex, cardIndex } = action;
@@ -564,7 +600,7 @@ class GameRoom {
   }
 
   /**
-   * Start a cleanup timer — if no one reconnects, the room is cleaned up
+   * Start a cleanup timer â if no one reconnects, the room is cleaned up
    */
   startCleanupTimer(onCleanup, timeoutMs = 5 * 60 * 1000) {
     // Only start timer if BOTH players are disconnected
