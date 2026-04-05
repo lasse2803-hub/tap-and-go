@@ -4582,16 +4582,8 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     if (onlineState.endOfTurnRespond !== undefined) {
       const incomingVer = onlineState.endOfTurnRespondVersion || 0;
       if (incomingVer >= endOfTurnRespondVersionRef.current) {
-        // Safeguard: only accept endOfTurnRespond=true if the phase is 'end'.
-        // Prevents stale syncs from prematurely showing the end-of-turn overlay
-        // (e.g. after resolving a creature with ETB triggers).
-        const incomingPhase = onlineState.currentPhase || currentPhase;
-        if (onlineState.endOfTurnRespond && incomingPhase !== 'end') {
-          // Ignore stale endOfTurnRespond=true when phase is not 'end'
-        } else {
-          endOfTurnRespondVersionRef.current = incomingVer;
-          _setEndOfTurnRespond(onlineState.endOfTurnRespond);
-        }
+        endOfTurnRespondVersionRef.current = incomingVer;
+        _setEndOfTurnRespond(onlineState.endOfTurnRespond);
       }
     }
     if (onlineState.pwAbilityOnStack !== undefined) _setPwAbilityOnStack(onlineState.pwAbilityOnStack);

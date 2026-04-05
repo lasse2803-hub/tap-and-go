@@ -361,13 +361,14 @@ class GameRoom {
       }
 
       // Update game-level state
-      // activePlayer: only accept changes from the current active player
-      // (prevents stale syncs from the non-active player reverting the turn)
+      // activePlayer: accept changes from the current active player,
+      // OR from the non-active player during end-of-turn (they click "Proceed")
       if (update.activePlayer !== undefined && update.activePlayer !== this.gameState.activePlayer) {
-        if (playerIndex === this.gameState.activePlayer || this.gameState.mulliganPhase) {
+        const isActivePlayer = playerIndex === this.gameState.activePlayer;
+        const isEndOfTurnProceed = this.gameState.endOfTurnRespond && !isActivePlayer;
+        if (isActivePlayer || isEndOfTurnProceed || this.gameState.mulliganPhase) {
           this.gameState.activePlayer = update.activePlayer;
           // Reset end-of-turn state when the active player changes (new turn)
-          // Prevents stale endOfTurnRespond from carrying over and causing desync
           this.gameState.endOfTurnRespond = false;
         }
       }
