@@ -4512,6 +4512,16 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
           next.graveyard = serverMe.graveyard || prev.graveyard;
           next.exile = serverMe.exile || prev.exile;
           next.commandZone = serverMe.commandZone || prev.commandZone;
+          // Accept hand updates from server when opponent's action added cards
+          // (e.g. bounce spells return our creatures to our hand via server).
+          // Merge: add any cards the server has that we don't have locally.
+          if (serverMe.hand) {
+            const localIds = new Set(prev.hand.map(c => c.id));
+            const newCards = serverMe.hand.filter(c => !c.hidden && !localIds.has(c.id));
+            if (newCards.length > 0) {
+              next.hand = [...prev.hand, ...newCards];
+            }
+          }
         }
         return next;
       });
