@@ -350,7 +350,7 @@
   .pt-badge .reduced { color: #ef5555; }
 
   /* ===== SETUP SCREEN ===== */
-  .setup-screen { max-width: 560px; margin: 40px auto; padding: 24px; overflow-y: auto; max-height: calc(100vh - 40px); }
+  .setup-screen { max-width: 560px; margin: 20px auto; padding: 24px; overflow-y: auto; max-height: calc(100vh - 40px); }
   .setup-screen h1 { font-size: 28px; margin-bottom: 6px; letter-spacing: -0.5px; font-weight: 800; color: #e8e4dc; }
   .setup-screen p { opacity: 0.4; margin-bottom: 28px; line-height: 1.6; font-size: 14px; }
   .player-setup {
@@ -462,12 +462,20 @@
     to { transform: translateY(0) scale(1); opacity: 1; }
   }
   .spell-stack-card > .spell-stack-main-card {
-    width: 280px; height: auto; border-radius: 12px;
+    width: 280px; border-radius: 12px;
     box-shadow: 0 0 40px rgba(200,170,60,0.3), 0 8px 32px rgba(0,0,0,0.5);
-    object-fit: contain; max-height: 60vh;
+  }
+  .spell-stack-card > img.spell-stack-main-card {
+    height: auto; object-fit: contain;
+  }
+  .spell-stack-card > div.spell-stack-main-card {
+    height: auto;
+  }
+  .spell-stack-card > div.spell-stack-main-card img {
+    width: 100%; height: auto; display: block;
   }
   .spell-stack-card img {
-    border-radius: 8px; object-fit: contain;
+    border-radius: 8px;
   }
   .spell-stack-caster {
     font-size: 13px; color: rgba(255,255,255,0.7);
@@ -521,10 +529,12 @@
     max-width: 420px;
     animation: stackSlideIn 0.3s ease;
   }
-  .pw-ability-card img {
+  .pw-ability-card > img, .pw-ability-card > div {
     width: 260px; border-radius: 12px;
     box-shadow: 0 0 40px rgba(200,170,60,0.3), 0 8px 32px rgba(0,0,0,0.5);
   }
+  .pw-ability-card > img { height: auto; }
+  .pw-ability-card > div img { width: 100%; height: auto; display: block; }
   .pw-ability-caster {
     font-size: 13px; color: rgba(255,255,255,0.7);
     letter-spacing: 0.5px; font-weight: 600;
@@ -1309,7 +1319,7 @@ const PRESET_DECKS = [
 4 Soaring Thought-Thief
 4 Merfolk Windrobber
 4 Ruin Crab
-2 Zareth San, the Trickster
+2 Rankle, Master of Pranks (CMM) 519
 2 Brazen Borrower (SPG)
 4 Thoughtseize
 4 Drown in the Loch
@@ -1321,6 +1331,53 @@ const PRESET_DECKS = [
 2 Darkslick Shores
 6 Island (THB) 251
 6 Swamp (THB) 252`,
+  },
+  {
+    name: 'Rakdos Midrange',
+    level: 2,
+    description: 'Black-red value — efficient removal, discard, delirium synergy, and recursive threats',
+    list: `4 Dragon's Rage Channeler (MH2)
+4 Bloodtithe Harvester (VOW)
+3 Bonecrusher Giant (PELD) 115p
+4 Seasoned Pyromancer (MH1)
+3 Kroxa, Titan of Death's Hunger (THB)
+4 Fable of the Mirror-Breaker (NEO)
+4 Thoughtseize (THS)
+4 Fatal Push (KLR)
+4 Unholy Heat (MH2)
+2 Kolaghan's Command (DTK)
+1 The Meathook Massacre (MID)
+4 Blood Crypt (RNA)
+4 Blightstep Pathway (KHM)
+4 Haunted Ridge (MID)
+2 Den of the Bugbear (AFR)
+2 Hive of the Eye Tyrant (AFR)
+1 Takenuma, Abandoned Mire (NEO)
+1 Sokenzan, Crucible of Defiance (NEO)
+1 Castle Locthwain (ELD)
+3 Swamp (THB) 252
+1 Mountain (THB) 253`,
+  },
+  {
+    name: 'Gruul Dinosaurs',
+    level: 2,
+    description: 'Red-green ramp — tribal dinosaurs, fight removal, and massive hasty threats',
+    list: `4 Llanowar Elves (DAR)
+4 Otepec Huntmaster (XLN)
+4 Rampaging Ferocidon (XLN)
+4 Commune with Dinosaurs (XLN)
+2 Thunderherd Migration (RIX)
+4 Ripjaw Raptor (XLN)
+4 Regisaur Alpha (XLN)
+3 Carnage Tyrant (XLN)
+2 Ghalta, Primal Hunger (RIX)
+2 Shifting Ceratops (M20)
+3 Domri, Anarch of Bolas (WAR)
+4 Stomping Ground (RNA)
+4 Rootbound Crag (DAR)
+4 Cragcrown Pathway (ZNR)
+7 Forest (THB) 254
+5 Mountain (THB) 253`,
   },
 ];
 
@@ -1418,13 +1475,7 @@ const loadDeckFromList = async (entries, onProgress) => {
       }
       if (res.ok) {
         const card = await res.json();
-        // Filter out Saga cards — they require complex chapter tracking not supported
-        if (card.type_line && card.type_line.includes('Saga')) {
-          skipped.push({ name: card.name, reason: 'Saga (not supported)', qty: entry.qty });
-          loaded++;
-          if (onProgress) onProgress(loaded, entries.length);
-          continue;
-        }
+        // Saga cards are now supported with manual lore counter tracking
         // Attach reskin data if present
         if (entry.reskin) {
           card._reskin = entry.reskin;
@@ -1672,6 +1723,18 @@ const parseSpellEffects = (card) => {
 
   // === NON-TARGETED / SELF EFFECTS ===
 
+  // Scry / Surveil — parse BEFORE draw so effects array order matches "surveil X, then draw"
+  // (applyNonTargetedEffects uses array index to detect scry-before-draw ordering)
+  const scryMatch = allText.match(/scry (\d+)/);
+  if (scryMatch) {
+    const scryCount = parseInt(scryMatch[1]) || 1;
+    effects.push({ type: 'scry', count: scryCount, mode: 'scry', description: `Scry ${scryCount}` });
+  }
+  const surveilMatch = allText.match(/surveil (\d+)/);
+  if (surveilMatch && !scryMatch) {
+    const surveilCount = parseInt(surveilMatch[1]) || 1;
+    effects.push({ type: 'scry', count: surveilCount, mode: 'surveil', description: `Surveil ${surveilCount}` });
+  }
   // Draw cards
   const drawMatch = allText.match(/draw (\w+|\d+) cards?/);
   if (drawMatch) {
@@ -1682,17 +1745,6 @@ const parseSpellEffects = (card) => {
   // "You may put a land card from your hand onto the battlefield" (Growth Spiral, Explore)
   if (/you may put a land card from your hand onto the battlefield/.test(allText)) {
     effects.push({ type: 'extra_land_drop', description: 'You may put a land onto the battlefield' });
-  }
-  // Scry / Surveil / Look at top
-  const scryMatch = allText.match(/scry (\d+)/);
-  if (scryMatch) {
-    const scryCount = parseInt(scryMatch[1]) || 1;
-    effects.push({ type: 'scry', count: scryCount, mode: 'scry', description: `Scry ${scryCount}` });
-  }
-  const surveilMatch = allText.match(/surveil (\d+)/);
-  if (surveilMatch && !scryMatch) {
-    const surveilCount = parseInt(surveilMatch[1]) || 1;
-    effects.push({ type: 'scry', count: surveilCount, mode: 'surveil', description: `Surveil ${surveilCount}` });
   }
 
   // "Look at the top X cards" + "put N into your hand/onto the battlefield" (Memory Deluge, Dig Through Time, Collected Company, etc.)
@@ -1739,9 +1791,11 @@ const parseSpellEffects = (card) => {
     effects.push({ type: 'lose_life', amount: parseInt(loseLifeMatch[1]), description: `You lose ${loseLifeMatch[1]} life` });
   }
 
-  // Look at / reveal opponent's hand (e.g. Thoughtseize, Duress)
-  if (/target (player|opponent) reveals (their|his or her) hand/.test(allText) ||
-      /look at target (player|opponent)'?s? hand/.test(allText)) {
+  // Look at / reveal opponent's hand (e.g. Gitaxian Probe — peek only, no discard)
+  // Skip if 'discard' effect already covers this (e.g. Thoughtseize, Duress — they peek AND discard)
+  if ((/target (player|opponent) reveals (their|his or her) hand/.test(allText) ||
+      /look at target (player|opponent)'?s? hand/.test(allText)) &&
+      !effects.some(e => e.type === 'discard')) {
     effects.push({ type: 'peek_hand', description: 'Look at opponent\'s hand' });
   }
 
@@ -2189,6 +2243,7 @@ const isLand = (card) => card.type_line && card.type_line.toLowerCase().includes
 const isEnchantment = (card) => card.type_line && card.type_line.toLowerCase().includes('enchantment');
 const isArtifact = (card) => card.type_line && card.type_line.toLowerCase().includes('artifact');
 const isPlaneswalker = (card) => card.type_line && card.type_line.toLowerCase().includes('planeswalker');
+const isSaga = (card) => card.type_line && card.type_line.toLowerCase().includes('saga');
 // Check if a card enters the battlefield tapped, respecting "unless" and "if" conditions
 const checkSelfEntersTapped = (card, battlefield) => {
   const oracle = [card.oracle_text || '', ...(card.card_faces || []).map(f => f.oracle_text || '')].join(' ').toLowerCase();
@@ -2265,9 +2320,25 @@ const canCastAtInstantSpeed = (card) => {
   }
   return false;
 };
-const hasHexproof = (card) => {
+// Check if a keyword on a card is conditional (e.g. monstrosity) — returns true only when condition is met
+const isConditionalKeyword = (card, keyword) => {
   const allText = getOracleText(card);
-  return card.keywords?.includes('Hexproof') || card.keywords?.includes('hexproof') || allText.includes('hexproof') || (card.tempBuffs?.keywords || []).includes('hexproof');
+  const kw = keyword.toLowerCase();
+  // Monstrosity conditional: "if ... is monstrous, it has hexproof and indestructible"
+  if (new RegExp('if .* is monstrous.*' + kw, 'i').test(allText)) {
+    return { conditional: true, active: !!card.monstrous };
+  }
+  // Other conditional patterns
+  if (new RegExp('has ' + kw + ' as long as|' + kw + ' if |gains ' + kw, 'i').test(allText)) {
+    return { conditional: true, active: false };
+  }
+  return { conditional: false };
+};
+const hasHexproof = (card) => {
+  if ((card.tempBuffs?.keywords || []).includes('hexproof')) return true;
+  const check = isConditionalKeyword(card, 'hexproof');
+  if (check.conditional) return check.active;
+  return card.keywords?.includes('Hexproof') || card.keywords?.includes('hexproof') || getOracleText(card).includes('hexproof');
 };
 const hasShroud = (card) => {
   return card.keywords?.includes('Shroud') || card.keywords?.includes('shroud') || (card.tempBuffs?.keywords || []).includes('shroud');
@@ -2406,12 +2477,80 @@ const getConditionalBuffs = (card) => {
       }
     }
   }
+  // ===== DELIRIUM buff: "As long as there are four or more card types among cards in your graveyard" =====
+  // Matches Dragon's Rage Channeler, and similar delirium creatures
+  const deliriumMatch = oracle.match(/as long as there are four or more card types among cards in your graveyard.*?gets? \+(\d+)\/\+(\d+)(?: and has (\w[\w ]*?))?/i);
+  if (deliriumMatch) {
+    let ownerIdx = -1;
+    for (let i = 0; i < allStates.length; i++) {
+      if (allStates[i] && allStates[i].battlefield && allStates[i].battlefield.some(function(c) { return c.id === card.id; })) { ownerIdx = i; break; }
+    }
+    if (ownerIdx >= 0 && hasDelirium(allStates[ownerIdx])) {
+      powerBuff += parseInt(deliriumMatch[1]);
+      toughnessBuff += parseInt(deliriumMatch[2]);
+      if (deliriumMatch[3]) {
+        deliriumMatch[3].split(/\s+and\s+/).forEach(function(kw) { extraKeywords.push(kw.trim().toLowerCase()); });
+      }
+    }
+  }
+
   return { power: powerBuff, toughness: toughnessBuff, keywords: extraKeywords };
+};
+
+// ===== DELIRIUM: Check if a player has 4+ card types in their graveyard =====
+const hasDelirium = (playerState) => {
+  if (!playerState || !playerState.graveyard) return false;
+  const types = new Set();
+  const typeKeywords = ['creature', 'instant', 'sorcery', 'artifact', 'enchantment', 'land', 'planeswalker', 'tribal', 'battle', 'kindred'];
+  for (const c of playerState.graveyard) {
+    const tl = (c.type_line || '').toLowerCase();
+    for (const tk of typeKeywords) { if (tl.includes(tk)) types.add(tk); }
+    if (types.size >= 4) return true; // Early exit
+  }
+  return types.size >= 4;
+};
+
+// Count unique card types in graveyard (for display)
+const countGraveyardTypes = (playerState) => {
+  if (!playerState || !playerState.graveyard) return 0;
+  const types = new Set();
+  const typeKeywords = ['creature', 'instant', 'sorcery', 'artifact', 'enchantment', 'land', 'planeswalker', 'tribal', 'battle', 'kindred'];
+  for (const c of playerState.graveyard) {
+    const tl = (c.type_line || '').toLowerCase();
+    for (const tk of typeKeywords) { if (tl.includes(tk)) types.add(tk); }
+  }
+  return types.size;
+};
+
+// ===== SAGA: Parse chapter abilities from oracle text =====
+const parseSagaChapters = (card) => {
+  const oracle = [card.oracle_text || '', ...(card.card_faces || []).map(f => f.oracle_text || '')].filter(Boolean).join('\n');
+  const chapters = [];
+  // Match patterns like "I —", "II —", "III —", "I, II —", "II, III —" etc.
+  const chapterRegex = /([IVX]+(?:,\s*[IVX]+)*)\s*[—\-]\s*([^\n]+(?:\n(?![IVX]+[\s,]*[—\-])[^\n]*)*)/g;
+  let match;
+  while ((match = chapterRegex.exec(oracle)) !== null) {
+    const romanNums = match[1].split(',').map(s => s.trim());
+    const text = match[2].trim();
+    // Convert roman to number
+    const romanToNum = (r) => {
+      const map = { 'I': 1, 'II': 2, 'III': 3, 'IV': 4, 'V': 5 };
+      return map[r] || 0;
+    };
+    const nums = romanNums.map(romanToNum).filter(n => n > 0);
+    chapters.push({ nums, text: text.length > 60 ? text.slice(0, 57) + '...' : text });
+  }
+  return chapters;
 };
 
 // Get all keywords for a creature including base, temp, and attachment keywords
 const getCreatureKeywords = (card, attachments = []) => {
-  const base = (card.keywords || []).map(k => k.toLowerCase());
+  // Filter out conditional keywords from Scryfall base data (e.g. Fleecemane Lion's hexproof/indestructible)
+  const base = (card.keywords || []).map(k => k.toLowerCase()).filter(kw => {
+    const check = isConditionalKeyword(card, kw);
+    if (check.conditional) return check.active;
+    return true;
+  });
   const temp = card.tempBuffs?.keywords || [];
   const fromAttachments = [];
   for (const att of attachments) {
@@ -3161,6 +3300,34 @@ function CardDisplay({ card, size = 60, onClick, onContext, showPreview, extraCl
   const ec = extraClass ? ' ' + extraClass : '';
   const counterEntries = card.counters ? Object.entries(card.counters).filter(([,v]) => v > 0) : [];
 
+  // Purple glow for protection keywords (hexproof, indestructible, shroud, ward, protection from)
+  const protectionGlow = (() => {
+    const kws = (card.keywords || []).map(k => k.toLowerCase());
+    const oracle = ((card.oracle_text || '') + ' ' + ((card.card_faces || []).map(f => f.oracle_text || '').join(' '))).toLowerCase();
+    const protectionKeywords = ['hexproof', 'indestructible', 'shroud', 'ward'];
+    const hasProtectionFrom = /protection from/.test(oracle) && !/protection from.*you don't control/.test(oracle);
+    let hasActiveProtection = hasProtectionFrom;
+    if (!hasActiveProtection) {
+      for (const kw of protectionKeywords) {
+        if (!kws.includes(kw) && !oracle.includes(kw)) continue;
+        // Check if conditional (Fleecemane Lion etc.)
+        if (new RegExp('if .* is monstrous.*' + kw, 'i').test(oracle)) {
+          if (card.monstrous) { hasActiveProtection = true; break; }
+          continue;
+        }
+        if (new RegExp('has ' + kw + ' as long as|' + kw + ' if |gains ' + kw, 'i').test(oracle)) continue;
+        hasActiveProtection = true; break;
+      }
+    }
+    // Also check tempBuffs for granted keywords
+    if (!hasActiveProtection && card.tempBuffs?.keywords) {
+      const buffed = card.tempBuffs.keywords.map(k => k.toLowerCase());
+      if (protectionKeywords.some(kw => buffed.includes(kw))) hasActiveProtection = true;
+    }
+    return hasActiveProtection;
+  })();
+  const protectionStyle = protectionGlow ? { boxShadow: '0 0 10px 2px rgba(160,80,220,0.7), inset 0 0 8px rgba(160,80,220,0.15)', borderRadius: 8 } : {};
+
   // Check if this card uses devotion
   const devInfo = devotionData ? getDevotionInfo(card) : null;
   const devBadge = devInfo && devotionData ? (() => {
@@ -3180,7 +3347,7 @@ function CardDisplay({ card, size = 60, onClick, onContext, showPreview, extraCl
       {counterEntries.length > 0 && (
         <div className="card-counters">
           {counterEntries.filter(([type]) => type !== 'loyalty').map(([type, count]) => (
-            <span key={type} className="counter-badge">{count > 1 ? count : ''}{type === '+1/+1' ? '+1' : type === '-1/-1' ? '-1' : type.charAt(0).toUpperCase()}</span>
+            <span key={type} className="counter-badge">{type === 'lore' ? `Ch.${count}` : (count > 1 ? count : '') + (type === '+1/+1' ? '+1' : type === '-1/-1' ? '-1' : type.charAt(0).toUpperCase())}</span>
           ))}
         </div>
       )}
@@ -3233,12 +3400,12 @@ function CardDisplay({ card, size = 60, onClick, onContext, showPreview, extraCl
             className={`card-img${tappedClass}${ec}`}
             src={card.tokenImageSmall}
             alt={getDisplayName(card)}
-            style={{ height: size * 1.4, width: size }}
+            style={{ height: size * 1.4, width: size, ...protectionStyle }}
             onClick={() => onClick && onClick(card)}
           />
         ) : (
           <div className={`token-card${tappedClass}${ec}`}
-            style={{ width: size, height: size * 1.4 }}
+            style={{ width: size, height: size * 1.4, ...protectionStyle }}
             onClick={() => onClick && onClick(card)}>
             {card.power !== undefined && <div className="token-pt">{card.power}/{card.toughness}</div>}
             <div className="token-name">{getDisplayName(card)}</div>
@@ -3249,7 +3416,7 @@ function CardDisplay({ card, size = 60, onClick, onContext, showPreview, extraCl
         <CardImg card={card} size="normal"
           className={`card-img${tappedClass}${ec}`}
           alt={getDisplayName(card)}
-          style={{ height: size * 1.4, width: size }}
+          style={{ height: size * 1.4, width: size, ...protectionStyle }}
           onClick={() => onClick && onClick(card)}
         />
       )}
@@ -4046,16 +4213,25 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
   const [commanderDeathChoice, setCommanderDeathChoice] = useState(null); // { pIdx, card, destination }
   const [peekingHand, setPeekingHand] = useState(null); // { targetPIdx, allowDiscard } — view opponent's hand
   const [instantCasting, _setInstantCasting] = useState(null); // SYNCED — non-active player casting an instant
-  const setInstantCasting = syncSetter(_setInstantCasting);
+  const instantCastingVersionRef = useRef(0);
+  const _setInstantCastingSync = syncSetter(_setInstantCasting);
+  const setInstantCasting = (val) => {
+    instantCastingVersionRef.current++;
+    _setInstantCastingSync(val);
+  };
   const [scryView, setScryView] = useState(null); // { pIdx, count, mode: 'scry'|'surveil' }
-  const [lookTopView, _setLookTopView] = useState(null); // SYNCED — { pIdx, cards: [], toHand: N, selected: Set }
-  const setLookTopView = syncSetter(_setLookTopView);
+  const [lookTopView, setLookTopView] = useState(null); // LOCAL ONLY — { pIdx, cards: [], toHand: N, selected: Set } — not synced (opponent's sync would overwrite it)
   const [librarySearch, _setLibrarySearch] = useState(null); // SYNCED — { pIdx, filter, tapped, source }
   const setLibrarySearch = syncSetter(_setLibrarySearch);
   const [putLandFromHand, _setPutLandFromHand] = useState(null); // SYNCED — { pIdx, source } — "you may put a land from your hand onto the battlefield"
   const setPutLandFromHand = syncSetter(_setPutLandFromHand);
   const [endOfTurnRespond, _setEndOfTurnRespond] = useState(false); // SYNCED — waiting for opponent to respond
-  const setEndOfTurnRespond = syncSetter(_setEndOfTurnRespond);
+  const endOfTurnRespondVersionRef = useRef(0);
+  const _setEndOfTurnRespondSync = syncSetter(_setEndOfTurnRespond);
+  const setEndOfTurnRespond = (val) => {
+    endOfTurnRespondVersionRef.current++;
+    _setEndOfTurnRespondSync(val);
+  };
 
   // Mulligan state — London Mulligan: draw 7, then put back cards equal to mulligans taken
   const [mulliganPhase, _setMulliganPhase] = useState(true); // SYNCED
@@ -4121,10 +4297,16 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
   // Online sync: schedule a broadcast after state changes
   const onlineSyncNeededRef = useRef(false);
   const pendingLogEntriesRef = useRef([]); // log entries queued for next broadcast
+  // Track which player indices have been modified locally (dirty tracking).
+  // Only dirty player data is included in sync payloads — prevents one player
+  // from overwriting the other's state with stale data (e.g. Collected Company
+  // creatures disappearing because opponent sent stale battlefield).
+  const dirtyPlayersRef = useRef(new Set());
 
   const setState = (pIdx, fn) => {
     if (pIdx === 0) setP1(fn); else setP2(fn);
     if (onlineMode && onStateChange) {
+      dirtyPlayersRef.current.add(pIdx);
       onlineSyncNeededRef.current = true;
     }
   };
@@ -4138,8 +4320,13 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     if (!onlineMode || !onStateChange) return;
     if (!onlineSyncNeededRef.current) return;
     onlineSyncNeededRef.current = false;
+    // Only include player data that was locally modified (dirty tracking).
+    // This prevents stale overwrites: e.g. player A clicking Resolve sends
+    // their stale view of player B's battlefield, overwriting B's real changes.
+    const dirty = dirtyPlayersRef.current;
+    dirtyPlayersRef.current = new Set();
     const payload = {
-      players: [p1, p2],
+      players: [dirty.has(0) ? p1 : null, dirty.has(1) ? p2 : null],
       activePlayer,
       currentPhase,
       turnNumber: turnCount,
@@ -4150,18 +4337,28 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       sacCounterChoice,
       librarySearch,
       spellStack,
+      spellStackVersion: spellStackVersionRef.current,
       instantCasting,
+      instantCastingVersion: instantCastingVersionRef.current,
       endOfTurnRespond,
+      endOfTurnRespondVersion: endOfTurnRespondVersionRef.current,
       pwAbilityOnStack,
       pwReminder,
       preventCombatDamage,
       modalChoice,
       searchExile,
-      spellResolveRequest,
       abilityActivated,
-      lookTopView,
+      // lookTopView removed from sync — it's a local UI overlay (opponent's null would overwrite it)
       putLandFromHand,
+      discardChoice: discardChoice ? { pIdx: discardChoice.pIdx } : null, // sync flag only (no card details)
     };
+    // Only include spellResolveRequest when non-null. Prevents race condition where
+    // caster's sync (with null) overwrites the non-caster's pending resolve signal.
+    if (spellResolveRequest) payload.spellResolveRequest = spellResolveRequest;
+    // Only include pending remote effects when non-null (same race condition protection)
+    if (pendingRemoteDraw) payload.pendingRemoteDraw = pendingRemoteDraw;
+    if (pendingRemoteScry) payload.pendingRemoteScry = pendingRemoteScry;
+    if (pendingRemoteLookTop) { payload.pendingRemoteLookTop = pendingRemoteLookTop; }
     // Bundle any pending log entries into this broadcast
     // (avoids race condition where separate log broadcast triggers throttle
     // and causes the actual state sync to be dropped)
@@ -4187,9 +4384,9 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     const isOwnEcho = onlineLastAction && onlineLastAction.by === myIdx;
 
     // Update opponent's state from server (public zones)
-    // Skip opponent state updates for our own echo — local state is already correct
+    // Always apply — even on own echo, the server may include opponent changes we haven't seen
     const serverOpp = onlineState.players?.[oppIdx];
-    if (serverOpp && !isOwnEcho) {
+    if (serverOpp) {
       const setOpp = oppIdx === 0 ? setP1 : setP2;
       setOpp(prev => {
         // === Detect opponent's actions and play appropriate SFX ===
@@ -4274,7 +4471,14 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         if (opponentCausedUpdate) {
           try {
             const newLife = serverMe.life ?? prev.life;
-            if (newLife < prev.life) { SFX.lifeLoss(); }
+            // During combat, use combat damage sound instead of spell life-loss sound
+            if (newLife < prev.life) {
+              if (combatStateRef.current && combatStateRef.current.phase === 'damage') {
+                SFX.combatDamage();
+              } else {
+                SFX.lifeLoss();
+              }
+            }
             const prevBF = prev.battlefield || [];
             const newBF = serverMe.battlefield || prevBF;
             const prevBFIds = new Set(prevBF.map(c => c.id));
@@ -4296,7 +4500,14 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         };
         // Accept zone changes only when opponent caused this update
         if (opponentCausedUpdate) {
-          next.battlefield = serverMe.battlefield || prev.battlefield;
+          // Preserve local enteredThisTurn flags — prevents stale server data
+          // from overwriting our untap step's clearing of summoning sickness
+          const serverBF = serverMe.battlefield || prev.battlefield;
+          next.battlefield = serverBF.map(c => {
+            const local = prev.battlefield.find(lc => lc.id === c.id);
+            if (local) return { ...c, enteredThisTurn: local.enteredThisTurn };
+            return c;
+          });
           next.graveyard = serverMe.graveyard || prev.graveyard;
           next.exile = serverMe.exile || prev.exile;
           next.commandZone = serverMe.commandZone || prev.commandZone;
@@ -4323,12 +4534,17 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     if (onlineState.currentPhase) _setCurrentPhase(onlineState.currentPhase);
     if (onlineState.turnNumber) _setTurnCount(onlineState.turnNumber);
     if (onlineState.combatState !== undefined) {
-      const incomingVer = onlineState.combatState?._v || 0;
-      const currentVer = combatStateVersionRef.current;
-      // Only accept if incoming version is newer (prevents stale overwrites)
-      if (incomingVer >= currentVer) {
-        combatStateVersionRef.current = incomingVer;
-        _setCombatState(onlineState.combatState);
+      // null means "combat ended" — always accept it.
+      // For non-null, only accept if incoming version is newer (prevents stale overwrites).
+      if (onlineState.combatState === null) {
+        _setCombatState(null);
+      } else {
+        const incomingVer = onlineState.combatState._v || 0;
+        const currentVer = combatStateVersionRef.current;
+        if (incomingVer >= currentVer) {
+          combatStateVersionRef.current = incomingVer;
+          _setCombatState(onlineState.combatState);
+        }
       }
     }
 
@@ -4342,14 +4558,33 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
 
     // Sync library search state (Solemn Simulacrum etc.)
     if (onlineState.librarySearch !== undefined) _setLibrarySearch(onlineState.librarySearch);
-    if (onlineState.lookTopView !== undefined) _setLookTopView(onlineState.lookTopView);
+    // lookTopView removed from receiver — local UI only (opponent's null would overwrite it via race condition)
 
     // Sync spell stack (so opponent sees spells being cast)
-    if (onlineState.spellStack !== undefined) _setSpellStack(onlineState.spellStack);
+    // Use version counter to prevent race conditions: only accept newer versions
+    if (onlineState.spellStack !== undefined) {
+      const incomingVer = onlineState.spellStackVersion || 0;
+      if (incomingVer >= spellStackVersionRef.current) {
+        spellStackVersionRef.current = incomingVer;
+        _setSpellStack(onlineState.spellStack);
+      }
+    }
 
-    // Sync instant casting, end-of-turn respond, PW ability stack, prevent combat damage
-    if (onlineState.instantCasting !== undefined) _setInstantCasting(onlineState.instantCasting);
-    if (onlineState.endOfTurnRespond !== undefined) _setEndOfTurnRespond(onlineState.endOfTurnRespond);
+    // Sync instant casting, end-of-turn respond — versioned to prevent race conditions
+    if (onlineState.instantCasting !== undefined) {
+      const incomingVer = onlineState.instantCastingVersion || 0;
+      if (incomingVer >= instantCastingVersionRef.current) {
+        instantCastingVersionRef.current = incomingVer;
+        _setInstantCasting(onlineState.instantCasting);
+      }
+    }
+    if (onlineState.endOfTurnRespond !== undefined) {
+      const incomingVer = onlineState.endOfTurnRespondVersion || 0;
+      if (incomingVer >= endOfTurnRespondVersionRef.current) {
+        endOfTurnRespondVersionRef.current = incomingVer;
+        _setEndOfTurnRespond(onlineState.endOfTurnRespond);
+      }
+    }
     if (onlineState.pwAbilityOnStack !== undefined) _setPwAbilityOnStack(onlineState.pwAbilityOnStack);
     if (onlineState.pwReminder !== undefined) _setPwReminder(onlineState.pwReminder);
     if (onlineState.preventCombatDamage !== undefined) _setPreventCombatDamage(onlineState.preventCombatDamage);
@@ -4357,7 +4592,11 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     if (onlineState.searchExile !== undefined) _setSearchExile(onlineState.searchExile);
     if (onlineState.spellResolveRequest !== undefined) _setSpellResolveRequest(onlineState.spellResolveRequest);
     if (onlineState.abilityActivated !== undefined) _setAbilityActivated(onlineState.abilityActivated);
+    if (onlineState.pendingRemoteDraw !== undefined) _setPendingRemoteDraw(onlineState.pendingRemoteDraw);
+    if (onlineState.pendingRemoteScry !== undefined) _setPendingRemoteScry(onlineState.pendingRemoteScry);
+    if (onlineState.pendingRemoteLookTop !== undefined) _setPendingRemoteLookTop(onlineState.pendingRemoteLookTop);
     if (onlineState.putLandFromHand !== undefined) _setPutLandFromHand(onlineState.putLandFromHand);
+    if (onlineState.discardChoice !== undefined) _setDiscardChoice(onlineState.discardChoice);
 
     // Receive game log entries from opponent (supports both array and single entry)
     const logEntries = onlineState.__logEntries || (onlineState.__logEntry ? [onlineState.__logEntry] : []);
@@ -4442,22 +4681,77 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     }, 300);
   });
 
-  // Online mode: when opponent clicks "Resolve" on our spell, they send a spellResolveRequest.
-  // We (the caster) run the actual resolution here because we have our own library/hand data.
-  // The opponent's client can't resolve because the server hides our library (empty array).
+  // Online mode: when opponent clicks "Resolve", they send a spellResolveRequest signal
+  // instead of resolving directly. The CASTER runs the actual resolution here because
+  // they have their own library/hand data. The opponent's client can't resolve draw/scry/
+  // surveil because the server hides the other player's library (appears as empty array).
+  // IMPORTANT: The non-caster must NOT clear or mark the request as handled — doing so
+  // would wipe it from state before the sync broadcast carries it to the caster's client.
   useEffect(() => {
     if (!onlineMode || !spellResolveRequest) return;
     if (spellResolveHandledRef.current === spellResolveRequest.timestamp) return; // already handled
-    if (spellStack.length === 0) return;
+    if (spellStack.length === 0) return; // stack empty — wait for sync
     const topSpell = spellStack[spellStack.length - 1];
-    // Only the caster should resolve (the one whose library is available locally)
+    // Only the caster should resolve (the one whose library is available locally).
+    // Non-caster: do NOT clear or mark handled — let sync carry the request to caster.
     if (topSpell.pIdx !== onlinePlayerIndex) return;
+    // We ARE the caster — resolve on our client where we have full library data
     spellResolveHandledRef.current = spellResolveRequest.timestamp;
-    // Clear the request signal
-    setSpellResolveRequest(null);
-    // Now resolve on our client where we have full library data
+    _setSpellResolveRequest(null);
     resolveTopOfStack();
-  }, [spellResolveRequest, onlineMode, spellStack]);
+  }); // No dependency array — Babel const→var hoisting makes deps always undefined. Ref dedup prevents double-processing.
+
+  // Online mode: opponent resolved a spell with draw effects targeting us.
+  // Our library is hidden on their client, so they sent pendingRemoteDraw instead.
+  // We execute the draw here where we have our actual library data.
+  useEffect(() => {
+    if (!onlineMode || !pendingRemoteDraw) return;
+    if (pendingRemoteDrawHandledRef.current === pendingRemoteDraw.timestamp) return;
+    if (pendingRemoteDraw.pIdx !== onlinePlayerIndex) return; // not for us
+    pendingRemoteDrawHandledRef.current = pendingRemoteDraw.timestamp;
+    _setPendingRemoteDraw(null);
+    for (let i = 0; i < (pendingRemoteDraw.count || 1); i++) drawCard(pendingRemoteDraw.pIdx);
+  }); // No dependency array — Babel const→var hoisting makes deps always undefined. Ref dedup prevents double-processing.
+
+  // Online mode: opponent resolved a spell with scry/surveil targeting us.
+  // Our library is hidden on their client, so they sent pendingRemoteScry instead.
+  // We open the scry UI here where we have our actual library data.
+  useEffect(() => {
+    if (!onlineMode || !pendingRemoteScry) return;
+    if (pendingRemoteScryHandledRef.current === pendingRemoteScry.timestamp) return;
+    if (pendingRemoteScry.pIdx !== onlinePlayerIndex) return; // not for us
+    pendingRemoteScryHandledRef.current = pendingRemoteScry.timestamp;
+    _setPendingRemoteScry(null);
+    const drawAfterCount = pendingRemoteScry.drawAfter || 0;
+    const onComplete = drawAfterCount > 0 ? () => {
+      for (let i = 0; i < drawAfterCount; i++) drawCard(pendingRemoteScry.pIdx);
+    } : null;
+    setScryView({ pIdx: pendingRemoteScry.pIdx, count: pendingRemoteScry.count || 1, mode: pendingRemoteScry.mode || 'scry', onComplete });
+  }); // No dependency array — Babel const→var hoisting makes deps always undefined. Ref dedup prevents double-processing.
+
+  // Online mode: opponent resolved a spell with look_top effects targeting us (Impulse, Memory Deluge, etc.)
+  // Our library is hidden on their client, so they sent pendingRemoteLookTop instead.
+  // We open the look-top UI here where we have our actual library data.
+  useEffect(() => {
+    if (!onlineMode || !pendingRemoteLookTop) return;
+    if (pendingRemoteLookTopHandledRef.current === pendingRemoteLookTop.timestamp) return;
+    if (pendingRemoteLookTop.pIdx !== onlinePlayerIndex) return;
+    pendingRemoteLookTopHandledRef.current = pendingRemoteLookTop.timestamp;
+    _setPendingRemoteLookTop(null);
+    const lib = getState(pendingRemoteLookTop.pIdx).library;
+    const lookCount = pendingRemoteLookTop.count || 4;
+    const topCards = lib.slice(0, Math.min(lookCount, lib.length));
+    if (topCards.length > 0) {
+      setLookTopView({
+        pIdx: pendingRemoteLookTop.pIdx,
+        cards: topCards,
+        toHand: pendingRemoteLookTop.toHand || 1,
+        selected: new Set(),
+        toBattlefield: pendingRemoteLookTop.toBattlefield || false,
+        selectFilter: pendingRemoteLookTop.selectFilter || null,
+      });
+    }
+  }); // No dependency array — Babel converts const→var, so deps would always be undefined due to hoisting. Ref-based dedup prevents double-processing.
 
   // Wire up star P/T resolution to access game state
   _starPTStateGetter = getState;
@@ -4489,9 +4783,13 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
 
       // BOUNCE / RETURN TO HAND: moving opponent's card to their hand from any zone
       if (isOpponent && to === 'hand') {
-        // Remove from source zone locally (visual feedback), server will add to hand
+        // Visual-only removal — use raw React setter (NOT setState) to avoid marking
+        // the opponent as dirty. If we use setState, the dirty sync reaches the server
+        // before the bounce action and removes the card from the server's battlefield,
+        // causing the bounce to fail with "Card not found" → card disappears entirely.
         if (from !== 'hand') {
-          setState(pIdx, prev => ({ ...prev, [from]: (prev[from] || []).filter(c => c.id !== card.id) }));
+          const rawSet = pIdx === 0 ? setP1 : setP2;
+          rawSet(prev => ({ ...prev, [from]: (prev[from] || []).filter(c => c.id !== card.id) }));
         }
         serverGameAction({ type: 'bounce', targetPlayerIndex: pIdx, cardId: card.id });
         addGameLog(pIdx, '↩️', `${card.name} returned to hand`);
@@ -4829,6 +5127,11 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
           }
         }
       }
+      // Set starting lore counter when a Saga enters the battlefield
+      if (to === 'battlefield' && isSaga(movedCard)) {
+        movedCard.counters = { ...(movedCard.counters || {}), lore: 1 };
+        addGameLog(pIdx, '📖', `${movedCard.name} enters with 1 lore counter (Chapter I)`);
+      }
       // === Auto-tap: "enters the battlefield tapped" ===
       if (to === 'battlefield') {
         const selfEntersTapped = checkSelfEntersTapped(movedCard, prev.battlefield || []);
@@ -4939,6 +5242,11 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
   const drawCard = (pIdx) => {
     const p = getState(pIdx);
     if (p.library.length === 0) {
+      // In online mode, the server hides the opponent's library (sends []).
+      // If we're trying to draw for a remote player, their library APPEARS empty
+      // but isn't actually empty. Skip the game-over check — the owning client
+      // will handle draw via spellResolveRequest.
+      if (onlineMode && pIdx !== onlinePlayerIndex) return;
       // Drawing from empty library = lose the game
       const opponent = getState(pIdx === 0 ? 1 : 0);
       if (!gameOver) {
@@ -5992,7 +6300,21 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
   };
 
   const millCards = (pIdx, count) => {
-    if (onlineMode && pIdx !== onlinePlayerIndex) return;
+    if (onlineMode && pIdx !== onlinePlayerIndex && serverGameAction) {
+      // Mill opponent: their library is hidden, so the server handles it
+      serverGameAction({ type: 'millCards', targetPlayerIndex: pIdx, count }).then(res => {
+        if (res && res.milledCards && res.milledCards.length > 0) {
+          setState(pIdx, prev => ({
+            ...prev,
+            graveyard: [...prev.graveyard, ...res.milledCards],
+            libraryCount: res.newLibraryCount ?? prev.libraryCount,
+          }));
+          SFX.mill();
+          addGameLog(pIdx, '💀', `Milled ${res.milledCards.length} card${res.milledCards.length > 1 ? 's' : ''}`);
+        }
+      });
+      return;
+    }
     SFX.mill();
     setState(pIdx, prev => {
       const milled = prev.library.slice(0, count);
@@ -6233,6 +6555,29 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
           actions.push({ label: '➕ Add Loyalty', fn: () => addCounter(pIdx, card.id, 'loyalty') });
           actions.push({ label: '➖ Remove Loyalty', fn: () => removeCounter(pIdx, card.id, 'loyalty') });
         }
+        // Saga chapter activation
+        if (isSaga(card)) {
+          actions.push({ sep: true });
+          const currentLore = (card.counters && card.counters['lore']) || 0;
+          const chapters = parseSagaChapters(card);
+          const romanNumerals = ['', 'I', 'II', 'III', 'IV', 'V'];
+          actions.push({ label: `📖 Lore: ${currentLore} (Chapter ${romanNumerals[currentLore] || currentLore})`, fn: () => {} });
+          // Show chapter text for current lore count
+          chapters.forEach(ch => {
+            const isActive = ch.nums.includes(currentLore);
+            const chLabel = ch.nums.map(n => romanNumerals[n] || n).join(', ');
+            actions.push({ label: `${isActive ? '▶️' : '  '} [${chLabel}]: ${ch.text}`, fn: () => {} });
+          });
+          actions.push({ sep: true });
+          actions.push({ label: '📖 Advance Chapter (add lore counter)', fn: () => {
+            addCounter(pIdx, card.id, 'lore');
+            const newLore = currentLore + 1;
+            const chapterText = chapters.find(ch => ch.nums.includes(newLore));
+            addGameLog(pIdx, '📖', `${card.name} → Chapter ${romanNumerals[newLore] || newLore}${chapterText ? ': ' + chapterText.text : ''}`);
+            SFX.playSpell && SFX.playSpell();
+          }});
+          actions.push({ label: '📖 Remove Lore Counter', fn: () => removeCounter(pIdx, card.id, 'lore') });
+        }
         actions.push({ sep: true });
         if (!isPlaneswalker(card)) {
           actions.push({ label: '➕ +1/+1 Counter', fn: () => addCounter(pIdx, card.id, '+1/+1') });
@@ -6468,6 +6813,21 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       if (isCreature(card)) {
         actions.push({ label: '👻 Create Token Copy (exile this)', fn: () => createTokenCopy(pIdx, card, 'graveyard') });
       }
+      // Steal from opponent's graveyard — Zareth San, Animate Dead, The Scarab God, etc.
+      if (!isOwner) {
+        const myPIdx = onlinePlayerIndex ?? (pIdx === 0 ? 1 : 0);
+        actions.push({ label: '🏴 Steal to Battlefield', fn: () => {
+          // Remove from opponent's graveyard
+          setState(pIdx, prev => ({ ...prev, graveyard: prev.graveyard.filter(c => c.id !== card.id) }));
+          // Add to our battlefield under our control, tagged with original owner
+          setState(myPIdx, prev => ({
+            ...prev,
+            battlefield: [...prev.battlefield, { ...card, tapped: false, enteredThisTurn: true, originalOwner: pIdx }],
+          }));
+          SFX.playSpell();
+          addGameLog(myPIdx, '🏴', `Stole ${card.name} from ${getState(pIdx).name}'s graveyard`);
+        }});
+      }
       if (isOwner) {
         actions.push({ label: '📚 To Top of Library', fn: () => returnToLibrary(pIdx, card, 'graveyard', 'top') });
       }
@@ -6565,7 +6925,8 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
   const setModalChoice = syncSetter(_setModalChoice);
   const [farewellChoice, setFarewellChoice] = useState(null); // { pIdx, card, categories, selected: Set } — Farewell "choose one or more" modal
   const [cardInfoOverlay, setCardInfoOverlay] = useState(null); // { card } — shows card info & rulings overlay
-  const [discardChoice, setDiscardChoice] = useState(null); // { pIdx, selected: [cardId, ...] } — cleanup step discard to hand size
+  const [discardChoice, _setDiscardChoice] = useState(null); // { pIdx, selected: [cardId, ...] } — cleanup step discard to hand size
+  const setDiscardChoice = syncSetter(_setDiscardChoice);
 
   // ===== GAME ACTION LOG =====
   const [gameLog, setGameLog] = useState([]); // [{ id, time, pIdx, icon, text, highlight? }]
@@ -6825,7 +7186,12 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
   const pendingCastRef = useRef(null); // { pIdx, card, asAdventure, fromExile, displayName, nonTargetedEffects }
   const pendingSpellModalRef = useRef(null); // { pIdx, card, asAdventure, fromExile, displayName, spellToCheck } — for "choose one" spells
   const [spellStack, _setSpellStack] = useState([]); // SYNCED — LIFO stack: [{ pIdx, card, asAdventure, fromExile, displayName, resolvedTargets? }, ...]
-  const setSpellStack = syncSetter(_setSpellStack);
+  const spellStackVersionRef = useRef(0); // Version counter to prevent race conditions in online sync
+  const _setSpellStackSync = syncSetter(_setSpellStack);
+  const setSpellStack = (valOrFn) => {
+    spellStackVersionRef.current++;
+    _setSpellStackSync(valOrFn);
+  };
   const stackTop = spellStack.length > 0 ? spellStack[spellStack.length - 1] : null;
   const [stackMinimized, setStackMinimized] = useState(false); // LOCAL — temporarily minimize spell stack overlay to interact with battlefield (e.g. sacrifice Cursecatcher)
   const [sacCounterChoice, _setSacCounterChoice] = useState(null); // SYNCED — { sacPIdx, sacCard, targetEntry, payAmount } — "counter unless pays" choice
@@ -6848,6 +7214,15 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
   const spellResolveHandledRef = useRef(null); // track which resolve request we already processed
   const [abilityActivated, _setAbilityActivated] = useState(null); // SYNCED — { pIdx, cardName, abilityText, cardImage } — broadcast ability activation
   const setAbilityActivated = syncSetter(_setAbilityActivated);
+  const [pendingRemoteDraw, _setPendingRemoteDraw] = useState(null); // SYNCED — { pIdx, count, timestamp } — tell caster to draw cards
+  const setPendingRemoteDraw = syncSetter(_setPendingRemoteDraw);
+  const [pendingRemoteScry, _setPendingRemoteScry] = useState(null); // SYNCED — { pIdx, count, mode, timestamp, onDrawAfter } — tell caster to scry/surveil
+  const setPendingRemoteScry = syncSetter(_setPendingRemoteScry);
+  const [pendingRemoteLookTop, _setPendingRemoteLookTop] = useState(null); // SYNCED — { pIdx, count, toHand, toBattlefield, selectFilter, timestamp }
+  const setPendingRemoteLookTop = syncSetter(_setPendingRemoteLookTop);
+  const pendingRemoteDrawHandledRef = useRef(null);
+  const pendingRemoteScryHandledRef = useRef(null);
+  const pendingRemoteLookTopHandledRef = useRef(null);
   const [ltbReminder, setLtbReminder] = useState(null); // { pIdx, card, effects[] }
 
   // ===== IN-GAME CHAT =====
@@ -7035,11 +7410,21 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     const drawIdx = effects.findIndex(e => e.type === 'draw');
     const hasScryBeforeDraw = scryIdx !== -1 && drawIdx !== -1 && scryIdx < drawIdx;
 
+    // In online mode, draw/scry/surveil access private zones (library/hand).
+    // If pIdx is a remote player, their library is hidden ([]). Defer these
+    // effects to the owning client via pendingRemoteDraw/pendingRemoteScry.
+    const isRemotePlayer = onlineMode && pIdx !== onlinePlayerIndex;
+
     for (let ei = 0; ei < effects.length; ei++) {
       const effect = effects[ei];
       switch (effect.type) {
         case 'draw':
-          for (let i = 0; i < (effect.amount || 1); i++) drawCard(pIdx);
+          if (isRemotePlayer) {
+            // Tell the caster's client to draw via synced state
+            setPendingRemoteDraw({ pIdx, count: effect.amount || 1, timestamp: Date.now() });
+          } else {
+            for (let i = 0; i < (effect.amount || 1); i++) drawCard(pIdx);
+          }
           break;
         case 'extra_land_drop':
           // Growth Spiral / Explore: "you may put a land card from your hand onto the battlefield"
@@ -7050,13 +7435,20 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
             const landsInHand = playerHand.filter(c => isLand(c));
             if (landsInHand.length > 0) {
               setPutLandFromHand({ pIdx, source: card.name || 'Spell' });
-            } else {
+            } else if (!isRemotePlayer) {
               setCastError({ pIdx, message: '🌿 No land cards in hand to put onto the battlefield' });
               setTimeout(() => setCastError(null), 2500);
             }
           }
           break;
         case 'scry': {
+          if (isRemotePlayer) {
+            // Tell the caster's client to scry via synced state
+            const remainingEffects = hasScryBeforeDraw ? effects.slice(ei + 1) : [];
+            const drawAfter = remainingEffects.find(e => e.type === 'draw');
+            setPendingRemoteScry({ pIdx, count: effect.count || 1, mode: effect.mode || 'scry', drawAfter: drawAfter ? (drawAfter.amount || 1) : 0, timestamp: Date.now() });
+            return; // Stop processing — caster handles scry + remaining draw
+          }
           // Collect remaining effects after scry to run on complete
           const remainingEffects = hasScryBeforeDraw ? effects.slice(ei + 1) : [];
           const onComplete = remainingEffects.length > 0 ? () => {
@@ -7252,7 +7644,8 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                 for (const c of prev.battlefield) {
                   if (!isCreature(c)) { surviving.push(c); continue; }
                   const toughness = getEffectiveToughness(c);
-                  const isIndestructible = (c.keywords || []).some(k => k.toLowerCase() === 'indestructible');
+                  const indChk = isConditionalKeyword(c, 'indestructible');
+                  const isIndestructible = indChk.conditional ? indChk.active : (c.keywords || []).some(k => k.toLowerCase() === 'indestructible');
                   if (isIndestructible) {
                     surviving.push(c); // indestructible survives damage
                     survived++;
@@ -7336,25 +7729,33 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
             let bounced = 0;
             const exceptions = (effect.exceptions || []).map(e => e.toLowerCase());
             const targetPlayers = effect.opponentOnly ? [opponentIdx] : [0, 1];
+            const shouldBounce = (c) => {
+              if (effect.target === 'creatures' && !isCreature(c)) return false;
+              if (effect.target === 'nonland permanents' && isLand(c)) return false;
+              if (exceptions.length > 0) {
+                const typeLine = (c.type_line || '').toLowerCase();
+                for (const ex of exceptions) { if (typeLine.includes(ex)) return false; }
+              }
+              return true;
+            };
             targetPlayers.forEach(pi => {
-              setState(pi, prev => {
-                const toBounce = prev.battlefield.filter(c => {
-                  // Determine what gets bounced based on target type
-                  if (effect.target === 'creatures' && !isCreature(c)) return false;
-                  if (effect.target === 'nonland permanents' && isLand(c)) return false;
-                  // Check exceptions (creature subtypes like Kraken, Leviathan, etc.)
-                  if (exceptions.length > 0) {
-                    const typeLine = (c.type_line || '').toLowerCase();
-                    for (const ex of exceptions) {
-                      if (typeLine.includes(ex)) return false;
-                    }
-                  }
-                  return true;
+              if (onlineMode && serverGameAction && pi !== onlinePlayerIndex) {
+                // Online mode: opponent's cards must go through server action
+                const rawSet = pi === 0 ? setP1 : setP2;
+                rawSet(prev => {
+                  bounced += prev.battlefield.filter(shouldBounce).length;
+                  return { ...prev, battlefield: prev.battlefield.filter(c => !shouldBounce(c)) };
                 });
-                const rest = prev.battlefield.filter(c => !toBounce.includes(c));
-                bounced += toBounce.length;
-                return { ...prev, battlefield: rest, hand: [...prev.hand, ...toBounce.map(c => ({ ...c, tapped: false, counters: {}, tempBuffs: null, damagePrevented: undefined }))] };
-              });
+                serverGameAction({ type: 'bounceAll', targetPlayerIndex: pi, filter: effect.target || 'all', exceptions: effect.exceptions });
+              } else {
+                // Own cards or offline: direct state modification
+                setState(pi, prev => {
+                  const toBounce = prev.battlefield.filter(shouldBounce);
+                  const rest = prev.battlefield.filter(c => !shouldBounce(c));
+                  bounced += toBounce.length;
+                  return { ...prev, battlefield: rest, hand: [...prev.hand, ...toBounce.map(c => ({ ...c, tapped: false, counters: {}, tempBuffs: null, damagePrevented: undefined }))] };
+                });
+              }
             });
             SFX.massReturn();
             const excStr = exceptions.length > 0 ? ` (except ${exceptions.join(', ')})` : '';
@@ -7426,6 +7827,11 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
             lookCount = parseInt(x);
             if (isNaN(lookCount) || lookCount < 1) break;
           }
+          if (isRemotePlayer) {
+            // Caster's library is hidden — defer to caster's client
+            setPendingRemoteLookTop({ pIdx, count: lookCount, toHand: effect.toHand || 1, timestamp: Date.now() });
+            return; // Stop processing — caster handles look_top
+          }
           const lib = getState(pIdx).library;
           const topCards = lib.slice(0, Math.min(lookCount, lib.length));
           if (topCards.length > 0) {
@@ -7442,6 +7848,10 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
             const x = prompt('How many cards to look at? (X = mana spent)');
             lookCount2 = parseInt(x);
             if (isNaN(lookCount2) || lookCount2 < 1) break;
+          }
+          if (isRemotePlayer) {
+            setPendingRemoteLookTop({ pIdx, count: lookCount2, toHand: effect.toField || 2, toBattlefield: true, selectFilter: effect.selectFilter || null, timestamp: Date.now() });
+            return;
           }
           const lib2 = getState(pIdx).library;
           const topCards2 = lib2.slice(0, Math.min(lookCount2, lib2.length));
@@ -7625,32 +8035,74 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       // Cyclonic Rift: "Return target nonland permanent you don't control to its owner's hand"
       // → Overloaded: Return each nonland permanent you don't control to its owner's hand
       if (/return.*nonland permanent.*to its owner's hand/i.test(oracle)) {
-        let bounced = 0;
-        setState(opponentIdx, prev => {
-          const toBounce = prev.battlefield.filter(c => !isLand(c));
-          const rest = prev.battlefield.filter(c => isLand(c));
-          bounced = toBounce.length;
-          return { ...prev, battlefield: rest, hand: [...prev.hand, ...toBounce.map(c => ({ ...c, tapped: false, counters: {}, tempBuffs: null, damagePrevented: undefined }))] };
-        });
-        SFX.massReturn();
-        setCastError({ pIdx, message: `🌊 Overload! Bounced ${bounced} nonland permanent(s) to hand` });
-        setTimeout(() => setCastError(null), 2500);
-        addGameLog(pIdx, '🌊', `${getDisplayName(card)} (Overload): Returned all opponent nonland permanents to hand`);
-        setTimeout(() => cleanupAttachments([opponentIdx]), 50);
-      } else if (/return.*creature.*to its owner's hand/i.test(oracle)) {
-        // Generic creature bounce overload
-        let bounced = 0;
-        [0, 1].forEach(pi => {
-          setState(pi, prev => {
-            const toBounce = prev.battlefield.filter(c => isCreature(c));
-            const rest = prev.battlefield.filter(c => !isCreature(c));
-            bounced += toBounce.length;
+        if (onlineMode && serverGameAction && opponentIdx !== onlinePlayerIndex) {
+          // Online mode: use server action to bounce opponent's cards.
+          // Direct setState on opponent's hand is rejected by server (only owning player can update hand).
+          // Visual-only: remove nonlands from opponent's battlefield locally (raw setter, no dirty marking)
+          const rawSet = opponentIdx === 0 ? setP1 : setP2;
+          let bounced = 0;
+          rawSet(prev => {
+            const toBounce = prev.battlefield.filter(c => !isLand(c));
+            bounced = toBounce.length;
+            return { ...prev, battlefield: prev.battlefield.filter(c => isLand(c)) };
+          });
+          serverGameAction({ type: 'bounceAll', targetPlayerIndex: opponentIdx, filter: 'nonland' });
+          SFX.massReturn();
+          setCastError({ pIdx, message: `🌊 Overload! Bounced nonland permanents to hand` });
+          setTimeout(() => setCastError(null), 2500);
+          addGameLog(pIdx, '🌊', `${getDisplayName(card)} (Overload): Returned all opponent nonland permanents to hand`);
+          setTimeout(() => cleanupAttachments([opponentIdx]), 50);
+        } else {
+          // Local/offline mode or bouncing own cards: direct state modification is fine
+          let bounced = 0;
+          setState(opponentIdx, prev => {
+            const toBounce = prev.battlefield.filter(c => !isLand(c));
+            const rest = prev.battlefield.filter(c => isLand(c));
+            bounced = toBounce.length;
             return { ...prev, battlefield: rest, hand: [...prev.hand, ...toBounce.map(c => ({ ...c, tapped: false, counters: {}, tempBuffs: null, damagePrevented: undefined }))] };
           });
-        });
-        SFX.massReturn();
-        setCastError({ pIdx, message: `🌊 Overload! Bounced ${bounced} creature(s) to hand` });
-        setTimeout(() => setCastError(null), 2500);
+          SFX.massReturn();
+          setCastError({ pIdx, message: `🌊 Overload! Bounced ${bounced} nonland permanent(s) to hand` });
+          setTimeout(() => setCastError(null), 2500);
+          addGameLog(pIdx, '🌊', `${getDisplayName(card)} (Overload): Returned all opponent nonland permanents to hand`);
+          setTimeout(() => cleanupAttachments([opponentIdx]), 50);
+        }
+      } else if (/return.*creature.*to its owner's hand/i.test(oracle)) {
+        // Generic creature bounce overload
+        if (onlineMode && serverGameAction) {
+          // In online mode, bounce each player's creatures through the appropriate path
+          [0, 1].forEach(pi => {
+            if (pi !== onlinePlayerIndex) {
+              // Opponent's creatures: use server action
+              const rawSet = pi === 0 ? setP1 : setP2;
+              rawSet(prev => ({ ...prev, battlefield: prev.battlefield.filter(c => !isCreature(c)) }));
+              serverGameAction({ type: 'bounceAll', targetPlayerIndex: pi, filter: 'creatures' });
+            } else {
+              // Own creatures: direct state modification
+              setState(pi, prev => {
+                const toBounce = prev.battlefield.filter(c => isCreature(c));
+                const rest = prev.battlefield.filter(c => !isCreature(c));
+                return { ...prev, battlefield: rest, hand: [...prev.hand, ...toBounce.map(c => ({ ...c, tapped: false, counters: {}, tempBuffs: null, damagePrevented: undefined }))] };
+              });
+            }
+          });
+          SFX.massReturn();
+          setCastError({ pIdx, message: `🌊 Overload! Bounced creatures to hand` });
+          setTimeout(() => setCastError(null), 2500);
+        } else {
+          let bounced = 0;
+          [0, 1].forEach(pi => {
+            setState(pi, prev => {
+              const toBounce = prev.battlefield.filter(c => isCreature(c));
+              const rest = prev.battlefield.filter(c => !isCreature(c));
+              bounced += toBounce.length;
+              return { ...prev, battlefield: rest, hand: [...prev.hand, ...toBounce.map(c => ({ ...c, tapped: false, counters: {}, tempBuffs: null, damagePrevented: undefined }))] };
+            });
+          });
+          SFX.massReturn();
+          setCastError({ pIdx, message: `🌊 Overload! Bounced ${bounced} creature(s) to hand` });
+          setTimeout(() => setCastError(null), 2500);
+        }
       } else if (/deals?\s+(\d+)\s+damage\s+to\s+(?:target|any target)/i.test(oracle)) {
         // Damage overload (e.g. "deal X damage to target creature" → each creature)
         const dmgMatch = oracle.match(/deals?\s+(\d+)\s+damage/i);
@@ -7711,7 +8163,8 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       return;
     }
 
-    if (isSpellCard(card)) {
+    // Adventure cards have combined type_line with "Instant" — skip spell path when cast as creature
+    if (isSpellCard(card) && !(isAdventureCard(card) && !asAdventure)) {
       // Move spell to graveyard (card already removed from hand/exile on cast)
       setState(pIdx, prev => ({
         ...prev,
@@ -7881,6 +8334,19 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         setCastError({ pIdx: opponentPIdx, message: `⚠️ ${spellBelow.displayName} can't be countered! ${topSpell.displayName} fizzles.` });
         setTimeout(() => setCastError(null), 3000);
         addGameLog(topSpell.pIdx, '⚠️', `${topSpell.displayName} fizzled — ${spellBelow.displayName} can't be countered`);
+      } else if (/unless.*pays\s*\{(\d+)\}/i.test(counterOracle)) {
+        // "Counter unless pays {X}" — offer the opponent a choice (Make Disappear, Mana Leak, etc.)
+        const payMatch = counterOracle.match(/unless.*pays\s*\{(\d+)\}/i);
+        const payAmount = payMatch ? parseInt(payMatch[1]) : 1;
+        // Remove counterspell from stack (it resolved), move to graveyard
+        setSpellStack(prev => prev.slice(0, -1));
+        setState(topSpell.pIdx, prev => ({
+          ...prev,
+          graveyard: [...prev.graveyard, { ...topSpell.card, tapped: false }],
+        }));
+        SFX.playSpell();
+        // Show pay-or-counter choice to the target spell's owner
+        setSacCounterChoice({ sacPIdx: topSpell.pIdx, sacCard: topSpell.card, targetEntry: spellBelow, payAmount, isSpellCounter: true });
       } else {
         // Counter succeeds — remove both top and target from stack
         setSpellStack(prev => prev.slice(0, -2));
@@ -7895,6 +8361,17 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         const opponentPIdx = topSpell.pIdx === 0 ? 1 : 0;
         setCastError({ pIdx: opponentPIdx, message: `✕ ${spellBelow.displayName} was countered by ${topSpell.displayName}!` });
         setTimeout(() => setCastError(null), 2500);
+        // Handle counterspell additional effects (e.g. Absorb "You gain 3 life", Undermine "loses 3 life")
+        if (/you gain (\d+) life/i.test(counterOracle)) {
+          const lifeGain = parseInt(RegExp.$1, 10);
+          setState(topSpell.pIdx, prev => ({ ...prev, life: prev.life + lifeGain }));
+          addGameLog(topSpell.pIdx, '💚', `${topSpell.displayName} — gained ${lifeGain} life`);
+        }
+        if (/(?:opponent|that player|that spell's controller) loses (\d+) life/i.test(counterOracle)) {
+          const lifeLoss = parseInt(RegExp.$1, 10);
+          setState(spellBelow.pIdx, prev => ({ ...prev, life: prev.life - lifeLoss }));
+          addGameLog(spellBelow.pIdx, '🩸', `${topSpell.displayName} — lost ${lifeLoss} life`);
+        }
         // Post-counter search & exile (Test of Talents: "search...exile cards with the same name")
         if (/search.*(?:graveyard|hand|library).*exile/i.test(counterOracle) ||
             /exile.*cards? with the same name/i.test(counterOracle)) {
@@ -7980,7 +8457,10 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       ? { ...card, oracle_text: getAdventureFace(card).oracle_text, type_line: getAdventureFace(card).type_line }
       : card;
 
-    if (isSpellCard(card) || (asAdventure && isAdventure(card))) {
+    // Adventure cards (e.g. Bonecrusher Giant) have combined type_line "Creature — Giant // Instant — Adventure"
+    // which makes isSpellCard() return true. When cast as creature (asAdventure=false), skip spell path.
+    const treatAsSpell = (isSpellCard(card) && !(isAdventureCard(card) && !asAdventure)) || (asAdventure && isAdventure(card));
+    if (treatAsSpell) {
       // ===== MODAL SPELL DETECTION ("choose one" — e.g. Decisive Denial) =====
       const spellOracle = (spellToCheck.oracle_text || '').toLowerCase();
       if (/choose one/i.test(spellOracle)) {
@@ -8206,13 +8686,31 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     // - Pre-cast targeting completion (creature/player target selected)
     // - cancelSpellTargeting()
     // - Modal spell mode handlers
-    // Adventure cards with instant adventure face: ALWAYS cast as adventure at instant speed
-    // (e.g. Bonecrusher Giant → Stomp). Note: can't use !isInstant(card) because the combined
-    // type_line includes "Instant" from the adventure face, making isInstant() return true.
+    // Adventure cards: if the adventure face is an instant, we can cast it as adventure.
+    // But if the creature face ALSO has flash, give the player a choice (e.g. Brazen Borrower
+    // has Flash creature + Instant adventure). If only the adventure is instant, auto-cast adventure.
     if (isAdventureCard(card)) {
       const advFace = card.card_faces?.[1];
-      if (advFace && advFace.type_line && advFace.type_line.toLowerCase().includes('instant')) {
+      const advIsInstant = advFace && advFace.type_line && advFace.type_line.toLowerCase().includes('instant');
+      const creatureFace = card.card_faces?.[0];
+      const creatureHasFlash = creatureFace && (
+        (creatureFace.keywords && (creatureFace.keywords.includes('Flash') || creatureFace.keywords.includes('flash'))) ||
+        (creatureFace.oracle_text && creatureFace.oracle_text.toLowerCase().includes('flash'))
+      );
+      // Also check top-level keywords for flash
+      const topLevelFlash = card.keywords && (card.keywords.includes('Flash') || card.keywords.includes('flash'));
+      if (advIsInstant && (creatureHasFlash || topLevelFlash)) {
+        // Both sides castable at instant speed → show choice modal
+        setAdventureChoice({ pIdx, card });
+        return;
+      }
+      if (advIsInstant) {
         castCard(pIdx, card, true); // asAdventure = true
+        return;
+      }
+      // Creature has flash but adventure is not instant → cast as creature
+      if (creatureHasFlash || topLevelFlash) {
+        castCard(pIdx, card, false);
         return;
       }
     }
@@ -8346,7 +8844,9 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         }
         // Indestructible: warn (don't block) for destroy effects
         const hasDestroyEffect = spellTargeting.effects.some(e => e.type === 'destroy');
-        if (hasDestroyEffect && card.keywords?.some(k => k.toLowerCase() === 'indestructible')) {
+        const indCheck = isConditionalKeyword(card, 'indestructible');
+        const cardIsIndestructible = indCheck.conditional ? indCheck.active : card.keywords?.some(k => k.toLowerCase() === 'indestructible');
+        if (hasDestroyEffect && cardIsIndestructible) {
           setCastError({ pIdx: casterIdx, message: `⚠️ ${card.name} is indestructible — destroy has no effect!`, background: '#4a3a1a' });
           setTimeout(() => setCastError(null), 2500);
           return;
@@ -8544,6 +9044,20 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
   const [preventCombatDamage, _setPreventCombatDamage] = useState(false); // SYNCED
   const setPreventCombatDamage = syncSetter(_setPreventCombatDamage);
   // { phase: 'attackers'|'pw-targets'|'combat-respond'|'blockers'|'damage', attackers: [cardId], attackTargets: { attackerId: 'player'|pwCardId }, blocks: { attackerId: [blockerId] }, selectedBlocker: cardId|null }
+
+  // Safety net: auto-clear stuck 'damage' phase after 5 seconds.
+  // This prevents "Resolving Damage..." from getting stuck on screen.
+  useEffect(() => {
+    if (combatState && combatState.phase === 'damage') {
+      const timer = setTimeout(() => {
+        if (combatStateRef.current && combatStateRef.current.phase === 'damage') {
+          setCombatState(null);
+          setCurrentPhase('main2');
+        }
+      }, 5000);
+      return () => clearTimeout(timer);
+    }
+  }, [combatState]);
 
   // Auto-log ETB/LTB reminders to the game log
   useEffect(() => {
@@ -8992,11 +9506,17 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         const oracle = [attacker.oracle_text || '', ...(attacker.card_faces || []).map(f => f.oracle_text || '')].join(' ').toLowerCase();
         const nameLower = (attacker.name || '').toLowerCase();
         const nameEscaped = nameLower.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        // For legendary creatures like "Kari Zev, Skyship Raider", oracle text uses the short name "Kari Zev"
+        const shortName = nameLower.includes(',') ? nameLower.split(',')[0].trim() : null;
+        const shortNameEscaped = shortName ? shortName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') : null;
         // Match patterns: "whenever [name] attacks", "whenever [name] attacks or blocks", "whenever [name] enters the battlefield or attacks"
         const selfAttackPattern = new RegExp('whenever ' + nameEscaped + '(?:\\s+enters the battlefield or)?\\s+attacks(?:\\s+or\\s+blocks)?');
+        const shortNameAttackPattern = shortNameEscaped ? new RegExp('whenever ' + shortNameEscaped + '(?:\\s+enters the battlefield or)?\\s+attacks(?:\\s+or\\s+blocks)?') : null;
         // Also match generic "~ attacks" or "this creature attacks" patterns as fallback
         const genericAttackPattern = /whenever (?:~|this creature)(?:\s+enters the battlefield or)?\s+attacks(?:\s+or\s+blocks)?/;
-        if (selfAttackPattern.test(oracle) || genericAttackPattern.test(oracle) || /whenever you attack/.test(oracle)) {
+        // "whenever you attack" but NOT graveyard-only triggers like Phoenix Chick ("return this card from your graveyard")
+        const hasYouAttack = /whenever you attack/.test(oracle) && !/from your graveyard/.test(oracle);
+        if (selfAttackPattern.test(oracle) || (shortNameAttackPattern && shortNameAttackPattern.test(oracle)) || genericAttackPattern.test(oracle) || hasYouAttack) {
           try {
             const parsedTrigger = parseCombatTrigger(attacker, oracle, 'attack');
             if (parsedTrigger) attackTriggers.push(parsedTrigger);
@@ -9539,10 +10059,14 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       const oracle = [blocker.oracle_text || '', ...(blocker.card_faces || []).map(f => f.oracle_text || '')].join(' ').toLowerCase();
       const nameLower = (blocker.name || '').toLowerCase();
       const nameEscaped = nameLower.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      // For legendary creatures, oracle text uses the short name (before comma)
+      const shortName = nameLower.includes(',') ? nameLower.split(',')[0].trim() : null;
+      const shortNameEscaped = shortName ? shortName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') : null;
       // Match "whenever [name] blocks" or "whenever [name] attacks or blocks"
       const selfBlockPattern = new RegExp('whenever ' + nameEscaped + '(?:\\s+attacks\\s+or)?\\s+blocks');
+      const shortNameBlockPattern = shortNameEscaped ? new RegExp('whenever ' + shortNameEscaped + '(?:\\s+attacks\\s+or)?\\s+blocks') : null;
       const genericBlockPattern = /whenever (?:~|this creature)(?:\s+attacks\s+or)?\s+blocks/;
-      if (selfBlockPattern.test(oracle) || genericBlockPattern.test(oracle)) {
+      if (selfBlockPattern.test(oracle) || (shortNameBlockPattern && shortNameBlockPattern.test(oracle)) || genericBlockPattern.test(oracle)) {
         try {
           const parsedTrigger = parseCombatTrigger(blocker, oracle, 'block');
           if (parsedTrigger) blockTriggers.push(parsedTrigger);
@@ -10040,7 +10564,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
 
   // Render SVG lines connecting blockers to their assigned attackers
   const BlockerLines = () => {
-    if (!combatState || combatState.phase !== 'blockers') return null;
+    if (!combatState || !combatState.blocks || !['blockers', 'combat-respond', 'damage'].includes(combatState.phase)) return null;
     const blockEntries = Object.entries(combatState.blocks);
     if (blockEntries.length === 0) return null;
 
@@ -10287,6 +10811,25 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
               <span style={{ cursor: 'pointer', opacity: 0.5, fontSize: 10 }} onClick={() => { SFX.damage(); updatePlayer(pIdx, { poison: p.poison + 1 }); }}>▲</span>
               <span style={{ cursor: 'pointer', opacity: 0.5, fontSize: 10 }} onClick={() => { updatePlayer(pIdx, { poison: Math.max(0, p.poison - 1) }); }}>▼</span>
             </div>
+          {/* Delirium indicator */}
+            {(() => {
+              const gyTypes = countGraveyardTypes(p);
+              const deliriumActive = gyTypes >= 4;
+              if (gyTypes === 0) return null;
+              return (
+                <div style={{
+                  display: 'flex', alignItems: 'center', gap: 3, fontSize: 11,
+                  color: deliriumActive ? '#e8a0ff' : 'rgba(255,255,255,0.3)',
+                  padding: '1px 5px', borderRadius: 4,
+                  background: deliriumActive ? 'rgba(160,80,220,0.15)' : 'transparent',
+                  transition: 'all 0.3s ease',
+                }}>
+                  <span style={{ fontSize: 12 }}>{deliriumActive ? '🔥' : '◇'}</span>
+                  <span style={{ fontWeight: 700, minWidth: 10, textAlign: 'center' }}>{gyTypes}</span>
+                  <span style={{ opacity: 0.6, fontSize: 10 }}>types</span>
+                </div>
+              );
+            })()}
           {isCommander && (
               <div style={{ display: 'flex', alignItems: 'center', gap: 3, fontSize: 11, color: 'rgba(200,170,60,0.7)' }}>
                 <span style={{ fontSize: 11 }}>⚔</span>
@@ -10349,6 +10892,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
               // Highlight: this player's GY count matters for opponent's Drown in the Loch etc.
               const threshold = gyCount >= 8;
               return (
+                <>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 3, fontSize: 10, padding: '1px 6px', borderRadius: 4, cursor: 'pointer',
                   background: threshold ? 'rgba(180,60,220,0.12)' : 'rgba(255,255,255,0.03)',
                   border: threshold ? '1px solid rgba(180,60,220,0.25)' : '1px solid rgba(255,255,255,0.04)', transition: 'all 0.3s' }}
@@ -10374,6 +10918,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                     </div>
                   );
                 })()}
+                </>
               );
             })()}
           </div>
@@ -10391,7 +10936,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
             {isActive && <button className="btn text-xs" onClick={() => untapAll(pIdx)}>Untap All</button>}
             {isActive && !(onlineMode && pIdx !== onlinePlayerIndex) && <button className="btn text-xs" onClick={() => shuffleLibrary(pIdx)}>Shuffle</button>}
             {!(onlineMode && pIdx !== onlinePlayerIndex) && <button className="btn text-xs btn-gold" onClick={() => setShowTokenCreator(pIdx)}>+ Token</button>}
-            {!(onlineMode && pIdx !== onlinePlayerIndex) && <button className="btn text-xs" onClick={() => millCards(pIdx, 1)}>Mill</button>}
+            <button className="btn text-xs" onClick={() => millCards(pIdx, 1)}>Mill</button>
             {!isActive && !(onlineMode && pIdx !== onlinePlayerIndex) && p.hand.some(c => canCastAtInstantSpeed(c) || getCyclingCost(c) || ((c.type_line || '').toLowerCase().includes('sorcery') && hasSorceryFlash(pIdx))) && (
               <button className="btn text-xs" style={{ borderColor: 'rgba(60,180,220,0.4)', color: '#60c8e8', background: 'rgba(60,180,220,0.08)' }}
                 onClick={() => setInstantCasting({ pIdx })}>
@@ -10443,7 +10988,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                 // Online mode: disable library context menu for opponent
                 if (onlineMode && pIdx !== onlinePlayerIndex) return;
                 const actions = [];
-                actions.push({ label: `📚 Library (${p.libraryCount ?? p.library.length} cards)`, disabled: true });
+                actions.push({ label: `📚 Library (${p.library.length > 0 ? p.library.length : (p.libraryCount ?? 0)} cards)`, disabled: true });
                 actions.push({ sep: true });
                 actions.push({ label: '🔍 Search Library', fn: () => setShowLibrarySearch(pIdx) });
                 actions.push({ label: '👁 Look at Top 1', fn: () => setScryView({ pIdx, count: 1, mode: 'scry' }) });
@@ -10503,7 +11048,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                 }});
                 setContextMenu({ x: e.clientX, y: e.clientY, items: actions });
               }}>
-              Lib ({p.libraryCount ?? p.library.length})
+              Lib ({p.library.length > 0 ? p.library.length : (p.libraryCount ?? 0)})
             </button>
           </div>
         </div>
@@ -10768,19 +11313,8 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                  combatState.phase === 'combat-respond' ? '⚡ Before Damage' :
                  combatState.phase === 'damage' ? '💥 Resolving Damage...' : 'Combat'}
               </span>
-              {combatState.phase === 'damage' && (!onlineMode || activePlayer === onlinePlayerIndex) && (
-                <button className="btn" style={{ fontSize: 10, marginLeft: 8, borderColor: 'rgba(220,60,40,0.4)', color: '#dc8060' }}
-                  onClick={() => {
-                    resolveCombatDamage();
-                    // If still stuck, force end combat
-                    setTimeout(() => {
-                      if (combatStateRef.current && combatStateRef.current.phase === 'damage') {
-                        setCombatState(null);
-                        setCurrentPhase('main2');
-                      }
-                    }, 1000);
-                  }}>⚡ Force Resolve</button>
-              )}
+              {/* Force Resolve removed — the root cause (combatState null not syncing)
+                  is now fixed. Combat damage resolves automatically. */}
               <span className="combat-hint">
                 {combatState.phase === 'attackers'
                   ? `${getState(activePlayer).name}: Click creatures to attack (${combatState.attackers.length} selected)`
@@ -10789,9 +11323,11 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                   : combatState.phase === 'post-attackers'
                   ? `Both players may cast instants or activate abilities before blockers`
                   : combatState.phase === 'blockers'
-                  ? combatState.selectedBlocker
-                    ? `Now click an attacker to block it`
-                    : `${getState(activePlayer === 0 ? 1 : 0).name}: Click your creature to block with, then the attacker`
+                  ? (onlineMode && onlinePlayerIndex === activePlayer)
+                    ? `Waiting for ${getState(activePlayer === 0 ? 1 : 0).name} to declare blockers...`
+                    : combatState.selectedBlocker
+                      ? `Now click an attacker to block it`
+                      : `${getState(activePlayer === 0 ? 1 : 0).name}: Click your creature to block with, then the attacker`
                   : combatState.phase === 'combat-respond'
                   ? `${getState(activePlayer).name}: Cast spells before damage, or proceed`
                   : ''}
@@ -10928,10 +11464,16 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                           confirmBlockers();
                         }}>Confirm Blockers</button>
                         <button className="btn" style={{ fontSize: 10 }} onClick={() => {
-                          SFX.block();
-                          confirmBlockers();
+                          // Clear all blocks first, then confirm (no blocks)
+                          setCombatState(prev => ({ ...prev, blocks: {} }));
+                          setTimeout(() => { SFX.block(); confirmBlockers(); }, 50);
                         }}>No Blocks</button>
                       </>
+                    )}
+                    {castError && castError.pIdx === (activePlayer === 0 ? 1 : 0) && (
+                      <span style={{ fontSize: 11, color: '#ff6060', fontWeight: 600, animation: 'fadeIn 0.2s ease' }}>
+                        ⚠ {castError.message}
+                      </span>
                     )}
                   </>
                 );
@@ -11101,6 +11643,11 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                     <button className="btn" style={{ padding: '4px 10px', fontSize: 10, borderColor: accentColor + '0.3)', color: textColor }}
                       onClick={() => {
                         const cb = scryView.onComplete;
+                        // Move this card to position 0 (top) of library
+                        setState(scryView.pIdx, prev => {
+                          const lib = prev.library.filter(c => c.id !== card.id);
+                          return { ...prev, library: [card, ...lib] };
+                        });
                         setScryView(null);
                         if (cb) setTimeout(cb, 50);
                       }} title="Keep on top">📚 Top</button>
@@ -11527,12 +12074,20 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                   createToken(pIdx, token, true, true);
                   addGameLog(pIdx, '🔄', `${cycleXChoice.cardName}: Cycling — created ${x}/${x} ${creatureType}${keywords.length > 0 ? ' with ' + keywords.join(', ') : ''}`);
                   // Fetch token art from Scryfall
+                  // For Shark Typhoon specifically, use the known token (tdsc/4)
                   (async () => {
                     try {
-                      const res = await fetch('https://api.scryfall.com/cards/search?q=' + encodeURIComponent('t:token ' + creatureType.toLowerCase()) + '&unique=art&order=released&dir=desc');
+                      const isShark = creatureType.toLowerCase() === 'shark';
+                      const url = isShark
+                        ? 'https://api.scryfall.com/cards/tdsc/4'
+                        : 'https://api.scryfall.com/cards/search?q=' + encodeURIComponent('t:token ' + creatureType.toLowerCase()) + '&unique=art&order=released&dir=desc';
+                      const res = await fetch(url);
                       if (res.ok) {
                         const data = await res.json();
-                        const match = data.data?.find(c => c.image_uris && (c.name || '').toLowerCase().includes(creatureType.toLowerCase()));
+                        // Direct card fetch returns a single card; search returns { data: [...] }
+                        const match = data.image_uris
+                          ? data
+                          : data.data?.find(c => c.image_uris && (c.name || '').toLowerCase().includes(creatureType.toLowerCase()));
                         if (match?.image_uris) {
                           setState(pIdx, prev => ({
                             ...prev,
@@ -11660,9 +12215,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
               {(!onlineMode || onlinePlayerIndex === (stackTop.pIdx === 0 ? 1 : 0)) && (
                 <button className="btn-resolve" onClick={() => {
                   if (onlineMode) {
-                    // In online mode, signal the CASTER's client to resolve the spell.
-                    // The caster has full access to their own library/hand data.
-                    // The opponent's client can't resolve because the caster's library is hidden.
+                    // Signal the caster to resolve — they have access to their own library/hand data
                     setSpellResolveRequest({ timestamp: Date.now() });
                   } else {
                     resolveTopOfStack();
@@ -11747,7 +12300,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                 🚫 Counter Unless Pays
               </div>
               <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.6)', marginBottom: 12, lineHeight: 1.5 }}>
-                <strong style={{ color: '#e0a040' }}>{sacPlayer.name}</strong> sacrificed <strong style={{ color: '#d4b44a' }}>{sacCard.name}</strong> to counter{' '}
+                <strong style={{ color: '#e0a040' }}>{sacPlayer.name}</strong> {sacCounterChoice.isSpellCounter ? 'cast' : 'sacrificed'} <strong style={{ color: '#d4b44a' }}>{sacCard.name}</strong> to counter{' '}
                 <strong style={{ color: '#6cf' }}>{targetEntry.displayName}</strong>.
               </div>
               <div style={{ fontSize: 13, color: '#e8e4dc', marginBottom: 16, fontWeight: 600 }}>
@@ -12084,6 +12637,20 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         );
       })()}
 
+      {/* ===== Opponent Discarding Notification (online mode) ===== */}
+      {onlineMode && discardChoice && onlinePlayerIndex !== discardChoice.pIdx && (
+        <div style={{
+          position: 'fixed', bottom: 80, left: '50%', transform: 'translateX(-50%)',
+          background: 'linear-gradient(160deg, #2a1a1a, #1a1218)', borderRadius: 10,
+          padding: '10px 24px', border: '1px solid rgba(220,80,60,0.4)',
+          boxShadow: '0 4px 20px rgba(0,0,0,0.5)', zIndex: 9990,
+          color: 'rgba(255,200,160,0.9)', fontSize: 12, fontWeight: 600,
+          textAlign: 'center', letterSpacing: 0.5,
+        }}>
+          ⏳ {getState(discardChoice.pIdx).name} is discarding to hand size...
+        </div>
+      )}
+
       {/* ===== Card Info & Rulings Overlay ===== */}
       {cardInfoOverlay && (() => {
         const { card } = cardInfoOverlay;
@@ -12176,7 +12743,6 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
             </div>
             <CardImg card={pwAbilityOnStack.card}
               alt={pwAbilityOnStack.card.name}
-              style={{ height: 280 }}
             />
             <div className="pw-ability-text">
               <span className="pw-ability-cost">[{pwAbilityOnStack.ability.cost}]</span>
@@ -13996,7 +14562,19 @@ function useGameSocket() {
     const serverUrl = window.location.origin;
     const s = io(serverUrl, { transports: ['websocket', 'polling'] });
 
-    s.on('connect', () => { setConnected(true); setError(null); });
+    s.on('connect', () => {
+      setConnected(true);
+      setError(null);
+      // On reconnect, request full state from server to resync
+      if (s._reconnecting) {
+        s.emit('requestState', (res) => {
+          if (res?.ok && res.state) {
+            setGameState(res.state);
+          }
+        });
+      }
+      s._reconnecting = true; // After first connect, all future connects are reconnects
+    });
     s.on('disconnect', () => setConnected(false));
     s.on('connect_error', (err) => setError('Connection failed: ' + err.message));
 
