@@ -96,6 +96,7 @@
     background: linear-gradient(180deg, rgba(100,60,180,0.06), rgba(100,60,180,0.02));
     border: 1px solid rgba(100,60,180,0.08);
     min-height: 40px; padding: 5px 10px;
+    justify-content: flex-start;
   }
 
   /* ===== HAND — Arena style with overlap ===== */
@@ -4581,8 +4582,16 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     if (onlineState.endOfTurnRespond !== undefined) {
       const incomingVer = onlineState.endOfTurnRespondVersion || 0;
       if (incomingVer >= endOfTurnRespondVersionRef.current) {
-        endOfTurnRespondVersionRef.current = incomingVer;
-        _setEndOfTurnRespond(onlineState.endOfTurnRespond);
+        // Safeguard: only accept endOfTurnRespond=true if the phase is 'end'.
+        // Prevents stale syncs from prematurely showing the end-of-turn overlay
+        // (e.g. after resolving a creature with ETB triggers).
+        const incomingPhase = onlineState.currentPhase || currentPhase;
+        if (onlineState.endOfTurnRespond && incomingPhase !== 'end') {
+          // Ignore stale endOfTurnRespond=true when phase is not 'end'
+        } else {
+          endOfTurnRespondVersionRef.current = incomingVer;
+          _setEndOfTurnRespond(onlineState.endOfTurnRespond);
+        }
       }
     }
     if (onlineState.pwAbilityOnStack !== undefined) _setPwAbilityOnStack(onlineState.pwAbilityOnStack);
@@ -6994,57 +7003,65 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
   const parseETBEffects = (card) => {
     const allText = getOracleText(card);
     if (!allText.includes('enters the battlefield') && !allText.includes('enters, ')) return [];
+    // Extract ONLY the ETB sentence(s) — stop at the first period or newline after "enters".
+    // This prevents false matches from activated abilities, reminder text, and token rules text.
+    // e.g. Bloodtithe Harvester: "When ~ enters the battlefield, create a Blood token."
+    //   — the Blood token's reminder text contains "draw" and "discard" which must NOT be matched.
+    const sentences = allText.split(/(?<=\.)\s+|\n/);
+    const etbSentences = sentences.filter(s => /enters the battlefield|enters,/.test(s));
+    if (etbSentences.length === 0) return [];
+    const etbText = etbSentences.join(' ');
     const effects = [];
     // Damage to target player or planeswalker (Viashino Pyromancer)
-    const dmgPlayerPWMatch = allText.match(/enters.*(?:deals?|it deals) (\d+) damage to target (player or planeswalker|opponent or planeswalker)/);
+    const dmgPlayerPWMatch = etbText.match(/enters.*(?:deals?|it deals) (\d+) damage to target (player or planeswalker|opponent or planeswalker)/);
     if (dmgPlayerPWMatch) {
       effects.push({ icon: '🔥', text: `Deal ${dmgPlayerPWMatch[1]} damage to target ${dmgPlayerPWMatch[2]}`, actionType: 'etb_damage_player_pw', damage: parseInt(dmgPlayerPWMatch[1]) });
     }
     // Damage to opponent/player (generic)
-    const dmgMatch = !dmgPlayerPWMatch && allText.match(/enters.*(?:deals?|it deals) (\d+) damage to (?:target )?(opponent|player|each opponent|any target)/);
+    const dmgMatch = !dmgPlayerPWMatch && etbText.match(/enters.*(?:deals?|it deals) (\d+) damage to (?:target )?(opponent|player|each opponent|any target)/);
     if (dmgMatch) effects.push({ icon: '🔥', text: `Deal ${dmgMatch[1]} damage to ${dmgMatch[2]}` });
     // Opponent loses life
-    const loseLifeMatch = allText.match(/enters.*(?:target )?(?:opponent|player) loses (\d+) life/);
+    const loseLifeMatch = etbText.match(/enters.*(?:target )?(?:opponent|player) loses (\d+) life/);
     if (loseLifeMatch) effects.push({ icon: '💀', text: `Target opponent loses ${loseLifeMatch[1]} life` });
     // Each opponent loses life (Gary-style)
-    const eachLoseMatch = allText.match(/enters.*each opponent loses (?:life equal to|(\d+) life)/);
+    const eachLoseMatch = etbText.match(/enters.*each opponent loses (?:life equal to|(\d+) life)/);
     if (eachLoseMatch) effects.push({ icon: '💀', text: eachLoseMatch[1] ? `Each opponent loses ${eachLoseMatch[1]} life` : 'Each opponent loses life equal to devotion' });
     // Gain life
-    const lifeMatch = allText.match(/enters.*gain (\d+) life/);
+    const lifeMatch = etbText.match(/enters.*gain (\d+) life/);
     if (lifeMatch) effects.push({ icon: '💚', text: `Gain ${lifeMatch[1]} life` });
     // Draw cards
-    const drawMatch = allText.match(/enters.*draw (\w+|\d+) cards?/);
+    const drawMatch = etbText.match(/enters.*draw (\w+|\d+) cards?/);
     if (drawMatch) effects.push({ icon: '📘', text: `Draw ${drawMatch[1]} card(s)` });
     // Destroy/exile target
-    if (/enters.*destroy target/.test(allText)) effects.push({ icon: '💀', text: 'Destroy target permanent' });
-    if (/enters.*exile target/.test(allText)) effects.push({ icon: '🚫', text: 'Exile target permanent' });
+    if (/enters.*destroy target/.test(etbText)) effects.push({ icon: '💀', text: 'Destroy target permanent' });
+    if (/enters.*exile target/.test(etbText)) effects.push({ icon: '🚫', text: 'Exile target permanent' });
     // Return to hand (bounce)
-    if (/enters.*return target.*to.*hand/.test(allText)) effects.push({ icon: '🤚', text: 'Return target to hand' });
-    if (/enters.*return up to \w+ target.*to.*hand/.test(allText)) effects.push({ icon: '🤚', text: 'Return target(s) to hand' });
+    if (/enters.*return target.*to.*hand/.test(etbText)) effects.push({ icon: '🤚', text: 'Return target to hand' });
+    if (/enters.*return up to \w+ target.*to.*hand/.test(etbText)) effects.push({ icon: '🤚', text: 'Return target(s) to hand' });
     // +1/+1 counters
-    if (/enters.*\+1\/\+1 counter/.test(allText)) effects.push({ icon: '⬆', text: 'Put +1/+1 counter(s)' });
+    if (/enters.*\+1\/\+1 counter/.test(etbText)) effects.push({ icon: '⬆', text: 'Put +1/+1 counter(s)' });
     // Create token
-    if (/enters.*create/.test(allText)) {
-      const tokenMatch = allText.match(/enters.*create (\w+) ([\d\/]+ )?(\w[\w ]*?) (creature )?token/);
+    if (/enters.*create/.test(etbText)) {
+      const tokenMatch = etbText.match(/enters.*create (\w+) ([\d\/]+ )?(\w[\w ]*?) (creature )?token/);
       if (tokenMatch) effects.push({ icon: '✦', text: `Create ${tokenMatch[1]} ${tokenMatch[3]} token(s)` });
       else effects.push({ icon: '✦', text: 'Create token(s)' });
     }
     // Search library for land (Solemn Simulacrum, Farhaven Elf, etc.)
-    if (/enters.*search your library for a basic land/i.test(allText)) {
-      const tapped = /tapped/.test(allText);
+    if (/enters.*search your library for a basic land/i.test(etbText)) {
+      const tapped = /tapped/.test(etbText);
       effects.push({ icon: '🔍', text: `Search library for a basic land${tapped ? ' (tapped)' : ''}`, actionType: 'search_basic_land', tapped });
-    } else if (/enters.*search your library for a land/i.test(allText)) {
-      const tapped = /tapped/.test(allText);
+    } else if (/enters.*search your library for a land/i.test(etbText)) {
+      const tapped = /tapped/.test(etbText);
       effects.push({ icon: '🔍', text: `Search library for a land${tapped ? ' (tapped)' : ''}`, actionType: 'search_land', tapped });
     }
     // Discard
-    if (/enters.*discard/.test(allText)) effects.push({ icon: '🗑', text: 'Target discards' });
+    if (/enters.*discard/.test(etbText)) effects.push({ icon: '🗑', text: 'Target discards' });
     // Scry/surveil
-    if (/enters.*scry (\d+)/.test(allText)) effects.push({ icon: '🔮', text: 'Scry' });
+    if (/enters.*scry (\d+)/.test(etbText)) effects.push({ icon: '🔮', text: 'Scry' });
     // Generic ETB — if none matched but it mentions "enters the battlefield"
-    if (effects.length === 0 && (allText.includes('enters the battlefield') || allText.includes('enters, '))) {
+    if (effects.length === 0 && (etbText.includes('enters the battlefield') || etbText.includes('enters, '))) {
       // Extract a short snippet of the ETB ability
-      const etbMatch = allText.match(/(when.*?enters.*?(?:\.|$))/);
+      const etbMatch = etbText.match(/(when.*?enters.*?(?:\.|$))/);
       if (etbMatch) effects.push({ icon: '⚡', text: etbMatch[1].slice(0, 80) });
     }
     return effects;

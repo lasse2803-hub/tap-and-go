@@ -347,12 +347,11 @@ class GameRoom {
           if (u.commandZone) s.commandZone = u.commandZone;
           if (u.commanderDamageReceived) s.commanderDamageReceived = u.commanderDamageReceived;
           if (u.untilNextTurnEffects) s.untilNextTurnEffects = u.untilNextTurnEffects;
-          // Library must be public so spell resolution (e.g. Light Up the Stage exile-from-library)
-          // can be applied by the resolving player (opponent), not just the owning player.
-          if (u.library) s.library = u.library;
-
-          // Semi-private game tracking (only owning player updates these)
+          // Library & hand: only the owning player can update these.
+          // The opponent's client receives library as [] (filtered/hidden),
+          // so accepting their sync would wipe the real library data.
           if (i === playerIndex) {
+            if (u.library) s.library = u.library;
             if (u.hand) s.hand = u.hand;
             if (u.landPlayedThisTurn !== undefined) s.landPlayedThisTurn = u.landPlayedThisTurn;
             if (u.dealtDamageThisTurn !== undefined) s.dealtDamageThisTurn = u.dealtDamageThisTurn;
@@ -362,10 +361,22 @@ class GameRoom {
       }
 
       // Update game-level state
-      if (update.activePlayer !== undefined) this.gameState.activePlayer = update.activePlayer;
+      // activePlayer: only accept changes from the current active player
+      // (prevents stale syncs from the non-active player reverting the turn)
+      if (update.activePlayer !== undefined && update.activePlayer !== this.gameState.activePlayer) {
+        if (playerIndex === this.gameState.activePlayer || this.gameState.mulliganPhase) {
+          this.gameState.activePlayer = update.activePlayer;
+          // Reset end-of-turn state when the active player changes (new turn)
+          // Prevents stale endOfTurnRespond from carrying over and causing desync
+          this.gameState.endOfTurnRespond = false;
+        }
+      }
       if (update.currentPhase) this.gameState.currentPhase = update.currentPhase;
       if (update.currentStep) this.gameState.currentStep = update.currentStep;
-      if (update.turnNumber) this.gameState.turnNumber = update.turnNumber;
+      // turnNumber: only accept if >= current (can only increase, prevents stale regression)
+      if (update.turnNumber && update.turnNumber >= (this.gameState.turnNumber || 1)) {
+        this.gameState.turnNumber = update.turnNumber;
+      }
       if (update.stack) this.gameState.stack = update.stack;
       if (update.combatState !== undefined) this.gameState.combatState = update.combatState;
       if (update.priorityPlayer !== undefined) this.gameState.priorityPlayer = update.priorityPlayer;
@@ -378,11 +389,33 @@ class GameRoom {
       // Spell stack, overlays, and shared game state
       // These must be forwarded so the opponent sees spells on the stack,
       // counter-choice overlays, library search state, instant casting, etc.
-      if (update.spellStack !== undefined) this.gameState.spellStack = update.spellStack;
+      if (update.spellStack !== undefined) {
+        // Only accept spellStack updates with a higher version to prevent race conditions
+        const incomingVer = update.spellStackVersion || 0;
+        const currentVer = this.gameState.spellStackVersion || 0;
+        if (incomingVer >= currentVer) {
+          this.gameState.spellStack = update.spellStack;
+          this.gameState.spellStackVersion = incomingVer;
+        }
+      }
       if (update.sacCounterChoice !== undefined) this.gameState.sacCounterChoice = update.sacCounterChoice;
       if (update.librarySearch !== undefined) this.gameState.librarySearch = update.librarySearch;
-      if (update.instantCasting !== undefined) this.gameState.instantCasting = update.instantCasting;
-      if (update.endOfTurnRespond !== undefined) this.gameState.endOfTurnRespond = update.endOfTurnRespond;
+      if (update.instantCasting !== undefined) {
+        const incomingVer = update.instantCastingVersion || 0;
+        const currentVer = this.gameState.instantCastingVersion || 0;
+        if (incomingVer >= currentVer) {
+          this.gameState.instantCasting = update.instantCasting;
+          this.gameState.instantCastingVersion = incomingVer;
+        }
+      }
+      if (update.endOfTurnRespond !== undefined) {
+        const incomingVer = update.endOfTurnRespondVersion || 0;
+        const currentVer = this.gameState.endOfTurnRespondVersion || 0;
+        if (incomingVer >= currentVer) {
+          this.gameState.endOfTurnRespond = update.endOfTurnRespond;
+          this.gameState.endOfTurnRespondVersion = incomingVer;
+        }
+      }
       if (update.pwAbilityOnStack !== undefined) this.gameState.pwAbilityOnStack = update.pwAbilityOnStack;
       if (update.pwReminder !== undefined) this.gameState.pwReminder = update.pwReminder;
       if (update.preventCombatDamage !== undefined) this.gameState.preventCombatDamage = update.preventCombatDamage;
@@ -390,7 +423,12 @@ class GameRoom {
       if (update.searchExile !== undefined) this.gameState.searchExile = update.searchExile;
       if (update.spellResolveRequest !== undefined) this.gameState.spellResolveRequest = update.spellResolveRequest;
       if (update.abilityActivated !== undefined) this.gameState.abilityActivated = update.abilityActivated;
-      if (update.lookTopView !== undefined) this.gameState.lookTopView = update.lookTopView;
+      if (update.pendingRemoteDraw !== undefined) this.gameState.pendingRemoteDraw = update.pendingRemoteDraw;
+      if (update.pendingRemoteScry !== undefined) this.gameState.pendingRemoteScry = update.pendingRemoteScry;
+      if (update.pendingRemoteLookTop !== undefined) this.gameState.pendingRemoteLookTop = update.pendingRemoteLookTop;
+      // lookTopView removed from server sync — it's a local UI overlay only
+      if (update.putLandFromHand !== undefined) this.gameState.putLandFromHand = update.putLandFromHand;
+      if (update.discardChoice !== undefined) this.gameState.discardChoice = update.discardChoice;
 
       // Forward game log entries from one player to the other
       if (update.__logEntries) this.gameState.__logEntries = update.__logEntries;
@@ -434,6 +472,42 @@ class GameRoom {
       this.gameState.timestamp = Date.now();
     }
 
+    if (action.type === 'bounceAll') {
+      // Mass bounce: return all nonland permanents (or creatures) to owners' hands
+      // Used by overloaded Cyclone Rift, Evacuation, Whelming Wave, etc.
+      const { targetPlayerIndex, filter, exceptions } = action;
+      // filter: 'nonland' | 'creatures' | 'nonland permanents' | 'all'
+      // exceptions: optional array of subtypes to exclude (e.g. ['kraken', 'leviathan'])
+      const target = this.gameState.players[targetPlayerIndex];
+      if (!target) return { error: 'Invalid target player' };
+      const isLand = (c) => (c.type_line || '').toLowerCase().includes('land');
+      const isCreature = (c) => (c.type_line || '').toLowerCase().includes('creature');
+      const excList = (exceptions || []).map(e => e.toLowerCase());
+      const shouldBounce = (c) => {
+        if (filter === 'nonland' || filter === 'nonland permanents') { if (isLand(c)) return false; }
+        else if (filter === 'creatures') { if (!isCreature(c)) return false; }
+        // Check exceptions (creature subtypes like Kraken, Leviathan, etc.)
+        if (excList.length > 0) {
+          const typeLine = (c.type_line || '').toLowerCase();
+          for (const ex of excList) { if (typeLine.includes(ex)) return false; }
+        }
+        return true;
+      };
+      const toBounce = target.battlefield.filter(shouldBounce);
+      target.battlefield = target.battlefield.filter(c => !shouldBounce(c));
+      // Clean up bounced cards and add to hand
+      for (const card of toBounce) {
+        const cleaned = { ...card, tapped: false, enteredThisTurn: false };
+        if (cleaned.counters) cleaned.counters = {};
+        if (cleaned.animatedCreature) { delete cleaned.animatedCreature; delete cleaned.power; delete cleaned.toughness; delete cleaned.keywords; }
+        delete cleaned.temporaryControl; delete cleaned.originalOwner; delete cleaned.grantedHaste;
+        delete cleaned.tempBuffs; delete cleaned.damagePrevented;
+        target.hand.push(cleaned);
+      }
+      this.gameState.timestamp = Date.now();
+      return { ok: true, bouncedCount: toBounce.length };
+    }
+
     if (action.type === 'discardFromHand') {
       // Force-discard a specific card from a player's hand (by card index)
       // Used by discard effects (Thoughtseize, Duress, etc.)
@@ -445,6 +519,18 @@ class GameRoom {
       target.graveyard.push(card);
       this.gameState.timestamp = Date.now();
       return { ok: true, discardedCard: { name: card.name, id: card.id } };
+    }
+
+    if (action.type === 'millCards') {
+      // Mill cards from a player's library to graveyard (used when milling opponent in online mode)
+      const { targetPlayerIndex, count } = action;
+      const target = this.gameState.players[targetPlayerIndex];
+      if (!target) return { error: 'Invalid target player' };
+      const millCount = Math.min(count || 1, target.library.length);
+      const milled = target.library.splice(0, millCount);
+      target.graveyard.push(...milled);
+      this.gameState.timestamp = Date.now();
+      return { ok: true, milledCards: milled, newLibraryCount: target.library.length };
     }
 
     if (action.type === 'peekHand') {
