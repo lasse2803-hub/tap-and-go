@@ -7193,6 +7193,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
   };
 
   const [adventureChoice, setAdventureChoice] = useState(null); // { pIdx, card }
+  const [mdfcLandChoice, setMdfcLandChoice] = useState(null); // { pIdx, card } — MDFC pathway land face selection
   const [gameOver, setGameOver] = useState(null); // { winner, loser, reason }
   const [concedeConfirm, setConcedeConfirm] = useState(false); // show confirmation dialog
   const [spellTargeting, setSpellTargeting] = useState(null); // { pIdx, card, effects, targetMode }
@@ -8779,6 +8780,50 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     if (onlineMode && pIdx !== onlinePlayerIndex) return;
     if (pIdx !== activePlayer) return;
     const p = getState(pIdx);
+
+    // MDFC (Modal Double-Faced Card) lands: Pathway cards, etc.
+    // If both faces are lands, let the player choose which face to play.
+    if (card.layout === 'modal_dfc' && card.card_faces && card.card_faces.length >= 2) {
+      const face0 = card.card_faces[0];
+      const face1 = card.card_faces[1];
+      const f0IsLand = face0.type_line && face0.type_line.toLowerCase().includes('land');
+      const f1IsLand = face1.type_line && face1.type_line.toLowerCase().includes('land');
+      if (f0IsLand && f1IsLand) {
+        if (p.landPlayedThisTurn) {
+          setCastError({ pIdx, message: 'Already played a land this turn' });
+          setTimeout(() => setCastError(null), 2000);
+          return;
+        }
+        // Show MDFC face selection modal
+        setMdfcLandChoice({ pIdx, card });
+        return;
+      }
+      // If only one face is a land, check which and play it directly
+      if (f0IsLand || f1IsLand) {
+        if (p.landPlayedThisTurn) {
+          setCastError({ pIdx, message: 'Already played a land this turn' });
+          setTimeout(() => setCastError(null), 2000);
+          return;
+        }
+        const landFace = f0IsLand ? face0 : face1;
+        // Extract produced mana from the chosen face's oracle text
+        const faceMana = [];
+        const faceOracle = (landFace.oracle_text || '').toLowerCase();
+        const manaSymbols = faceOracle.match(/add \{([wubrgc])\}/gi) || [];
+        for (const m of manaSymbols) {
+          const color = m.match(/\{([wubrgc])\}/i)?.[1]?.toUpperCase();
+          if (color && !faceMana.includes(color)) faceMana.push(color);
+        }
+        const landCard = { ...card, _mdfcFace: f0IsLand ? 0 : 1, _mdfcFaceName: landFace.name, name: landFace.name };
+        if (faceMana.length > 0) landCard.produced_mana = faceMana;
+        if (landFace.image_uris) landCard.image_uris = landFace.image_uris;
+        if (landFace.oracle_text) landCard.oracle_text = landFace.oracle_text;
+        if (landFace.type_line) landCard.type_line = landFace.type_line;
+        moveCard(pIdx, landCard, 'hand', 'battlefield');
+        setState(pIdx, prev => ({ ...prev, landPlayedThisTurn: true }));
+        return;
+      }
+    }
 
     // Lands: free to play, but max 1 per turn
     if (isLand(card)) {
@@ -14272,6 +14317,61 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                 </button>
               </div>
               <button className="btn text-xs" style={{ marginTop: 12, opacity: 0.5 }} onClick={() => setAdventureChoice(null)}>Cancel</button>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* MDFC Land Choice Modal (Pathway cards, etc.) */}
+      {mdfcLandChoice && (() => {
+        const card = mdfcLandChoice.card;
+        const face0 = card.card_faces[0];
+        const face1 = card.card_faces[1];
+        const getManaLabel = (face) => {
+          const oracle = (face.oracle_text || '');
+          const symbols = oracle.match(/\{([WUBRGC])\}/gi) || [];
+          return symbols.map(s => s.replace(/[{}]/g, '')).join(', ') || '?';
+        };
+        const playFace = (faceIdx) => {
+          const face = faceIdx === 0 ? face0 : face1;
+          const faceMana = [];
+          const faceOracle = (face.oracle_text || '').toLowerCase();
+          const manaSymbols = faceOracle.match(/add \{([wubrgc])\}/gi) || [];
+          for (const m of manaSymbols) {
+            const color = m.match(/\{([wubrgc])\}/i)?.[1]?.toUpperCase();
+            if (color && !faceMana.includes(color)) faceMana.push(color);
+          }
+          const landCard = { ...card, _mdfcFace: faceIdx, _mdfcFaceName: face.name, name: face.name };
+          if (faceMana.length > 0) landCard.produced_mana = faceMana;
+          if (face.image_uris) landCard.image_uris = face.image_uris;
+          if (face.oracle_text) landCard.oracle_text = face.oracle_text;
+          if (face.type_line) landCard.type_line = face.type_line;
+          setMdfcLandChoice(null);
+          moveCard(mdfcLandChoice.pIdx, landCard, 'hand', 'battlefield');
+          setState(mdfcLandChoice.pIdx, prev => ({ ...prev, landPlayedThisTurn: true }));
+        };
+        return (
+          <div style={{
+            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000,
+          }}>
+            <div style={{
+              background: '#1e1c30', borderRadius: 12, padding: 24, maxWidth: 420, textAlign: 'center',
+              border: '1px solid rgba(200,170,60,0.2)', boxShadow: '0 8px 40px rgba(0,0,0,0.5)',
+            }}>
+              <h3 style={{ color: '#d4b44a', marginBottom: 4 }}>{card.name}</h3>
+              <p className="text-sm" style={{ opacity: 0.5, marginBottom: 16 }}>Choose which face to play</p>
+              <div style={{ display: 'flex', gap: 10, justifyContent: 'center' }}>
+                <button className="btn btn-gold" style={{ padding: '10px 16px' }} onClick={() => playFace(0)}>
+                  <div style={{ fontWeight: 700, fontSize: 13 }}>{face0.name}</div>
+                  <div style={{ fontSize: 10, opacity: 0.6, marginTop: 2 }}>Land — Add {getManaLabel(face0)}</div>
+                </button>
+                <button className="btn btn-primary" style={{ padding: '10px 16px' }} onClick={() => playFace(1)}>
+                  <div style={{ fontWeight: 700, fontSize: 13 }}>{face1.name}</div>
+                  <div style={{ fontSize: 10, opacity: 0.6, marginTop: 2 }}>Land — Add {getManaLabel(face1)}</div>
+                </button>
+              </div>
+              <button className="btn text-xs" style={{ marginTop: 12, opacity: 0.5 }} onClick={() => setMdfcLandChoice(null)}>Cancel</button>
             </div>
           </div>
         );
