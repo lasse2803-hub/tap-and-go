@@ -22,6 +22,9 @@ app.use(express.json());
 // Serve static client files
 app.use(express.static(path.join(__dirname, '..', 'client', 'public')));
 
+// Serve custom card images (Pokemon, Star Wars, etc.)
+app.use('/cards', express.static(path.join(__dirname, '..', 'MTG Billeder')));
+
 // ─── Room Manager ───────────────────────────────────────────
 const roomManager = new RoomManager();
 
