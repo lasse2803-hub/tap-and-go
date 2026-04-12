@@ -7119,9 +7119,31 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     if (/enters.*\+1\/\+1 counter/.test(etbText)) effects.push({ icon: '⬆', text: 'Put +1/+1 counter(s)' });
     // Create token
     if (/enters.*create/.test(etbText)) {
-      const tokenMatch = etbText.match(/enters.*create (\w+) ([\d\/]+ )?(\w[\w ]*?) (creature )?token/);
-      if (tokenMatch) effects.push({ icon: '✦', text: `Create ${tokenMatch[1]} ${tokenMatch[3]} token(s)` });
-      else effects.push({ icon: '✦', text: 'Create token(s)' });
+      const tokenMatch = etbText.match(/enters.*create (\w+) (\d+)\/(\d+) (\w[\w ]*?) creature token/);
+      if (tokenMatch) {
+        const qty = tokenMatch[1] === 'a' ? 1 : tokenMatch[1] === 'two' ? 2 : tokenMatch[1] === 'three' ? 3 : parseInt(tokenMatch[1]) || 1;
+        const tPower = tokenMatch[2];
+        const tToughness = tokenMatch[3];
+        const tDesc = tokenMatch[4].trim();
+        const colorMap = { 'white': 'W', 'blue': 'U', 'black': 'B', 'red': 'R', 'green': 'G' };
+        const tColors = [];
+        for (const [cName, cCode] of Object.entries(colorMap)) {
+          if (tDesc.toLowerCase().includes(cName)) tColors.push(cCode);
+        }
+        const typeWords = tDesc.replace(/white|blue|black|red|green|and/gi, '').trim().split(/\s+/).filter(Boolean);
+        const tokenTypeName = typeWords.map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ') || 'Token';
+        // Extract oracle text from "with ..." clause
+        const withMatch = etbText.match(/creature token with ['\u2018\u2019""]([^'"\u2018\u2019""]+)['\u2018\u2019""]/);
+        const tokenOracle = withMatch ? withMatch[1] : '';
+        effects.push({
+          icon: '✦', text: `Create ${qty > 1 ? qty + 'x ' : ''}${tPower}/${tToughness} ${tokenTypeName} token(s)`,
+          actionType: 'create_token', tokenQty: qty, tokenPower: tPower, tokenToughness: tToughness,
+          tokenName: tokenTypeName, tokenColors: tColors, tokenOracle,
+          tokenTypeLine: `Token Creature — ${tokenTypeName}`,
+        });
+      } else {
+        effects.push({ icon: '✦', text: 'Create token(s)' });
+      }
     }
     // Search library for land (Solemn Simulacrum, Farhaven Elf, etc.)
     if (/enters.*search your library for a basic land/i.test(etbText)) {
@@ -13041,6 +13063,31 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                   color: '#e8e4dc',
                 }}>
                   <span style={{ marginRight: 6 }}>{e.icon}</span>{e.text}
+                  {e.actionType === 'create_token' && (
+                    <div style={{ display: 'flex', gap: 6, marginTop: 6, justifyContent: 'center' }}>
+                      <button className="btn btn-gold" style={{ padding: '4px 12px', fontSize: 11 }}
+                        onClick={() => {
+                          for (let ti = 0; ti < (e.tokenQty || 1); ti++) {
+                            const token = {
+                              id: uid(), name: (e.tokenName || 'Token') + ' Token', isToken: true,
+                              type_line: e.tokenTypeLine || 'Token Creature',
+                              power: e.tokenPower || '1', toughness: e.tokenToughness || '1',
+                              colors: e.tokenColors || [], oracle_text: e.tokenOracle || '', keywords: [],
+                              tapped: false, enteredThisTurn: true, counters: {},
+                            };
+                            setState(etbReminder.pIdx, prev => ({ ...prev, battlefield: [...prev.battlefield, token] }));
+                          }
+                          addGameLog(etbReminder.pIdx, '✦', `${etbReminder.card.name}: Created ${e.tokenQty > 1 ? e.tokenQty + 'x ' : ''}${e.tokenPower}/${e.tokenToughness} ${e.tokenName} token(s)`);
+                          SFX.playCreature();
+                          setEtbReminder(prev => {
+                            const remaining = prev.effects.filter((_, idx) => idx !== i);
+                            return remaining.length > 0 ? { ...prev, effects: remaining } : null;
+                          });
+                        }}>
+                        ✦ Create {e.tokenQty > 1 ? e.tokenQty + 'x ' : ''}{e.tokenName} Token{e.tokenQty > 1 ? 's' : ''}
+                      </button>
+                    </div>
+                  )}
                   {e.actionType === 'etb_damage_player_pw' && (
                     <div style={{ display: 'flex', gap: 6, marginTop: 6, justifyContent: 'center' }}>
                       <button className="btn btn-gold" style={{ padding: '4px 12px', fontSize: 11 }}
