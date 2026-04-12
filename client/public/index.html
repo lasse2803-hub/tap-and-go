@@ -5950,20 +5950,20 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
 
     }
 
-    // "At the beginning of each player’s upkeep, ~ deals X damage to that player" (Roiling Vortex, etc.)
-    // Scan ALL players’ battlefields for permanents that trigger on each player’s upkeep
+    // "At the beginning of each player's upkeep, ~ deals X damage to that player" (Roiling Vortex, etc.)
+    // Scan ALL players' battlefields for permanents that trigger on each player's upkeep
     // and apply the effect to the player whose upkeep it is (pIdx)
     [0, 1].forEach(ownerIdx => {
       const owner = getState(ownerIdx);
       for (const card of owner.battlefield) {
         const allText = getOracleText(card);
-        const eachUpkeepDmgMatch = allText.match(/at the beginning of each player[‘\u2018\u2019]?s upkeep,?\s*(?:~|[\w\s,]+)\s+deals?\s+(\d+)\s+damage to that player/i);
+        const eachUpkeepDmgMatch = allText.match(/at the beginning of each player['\u2018\u2019]?s upkeep,?\s*(?:~|[\w\s,]+)\s+deals?\s+(\d+)\s+damage to that player/i);
         if (eachUpkeepDmgMatch) {
           const dmg = parseInt(eachUpkeepDmgMatch[1]);
           setState(pIdx, prev => ({ ...prev, life: prev.life - dmg }));
           markDealtDamage(pIdx);
           SFX.lifeLoss();
-          addGameLog(pIdx, ‘🔥’, `${card.name}: upkeep — deals ${dmg} damage to ${getState(pIdx).name}`);
+          addGameLog(pIdx, '🔥', `${card.name}: upkeep — deals ${dmg} damage to ${getState(pIdx).name}`);
         }
       }
     });
@@ -5973,19 +5973,19 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     const pState = getState(pIdx);
     for (const card of pState.battlefield) {
       if (isSaga(card)) {
-        const currentLore = (card.counters && card.counters[‘lore’]) || 0;
-        addCounter(pIdx, card.id, ‘lore’);
+        const currentLore = (card.counters && card.counters['lore']) || 0;
+        addCounter(pIdx, card.id, 'lore');
         const newLore = currentLore + 1;
-        const romanNumerals = [‘’, ‘I’, ‘II’, ‘III’, ‘IV’, ‘V’];
+        const romanNumerals = ['', 'I', 'II', 'III', 'IV', 'V'];
         const chapters = parseSagaChapters(card);
         const activeChapter = chapters.find(ch => ch.nums.includes(newLore));
-        const chapterText = activeChapter ? activeChapter.text : ‘’;
-        addGameLog(pIdx, ‘📖’, `${card.name}: Chapter ${romanNumerals[newLore] || newLore}${chapterText ? ‘ — ‘ + chapterText : ‘’}`);
+        const chapterText = activeChapter ? activeChapter.text : '';
+        addGameLog(pIdx, '\u{1f4d6}', `${card.name}: Chapter ${romanNumerals[newLore] || newLore}${chapterText ? ' \u2014 ' + chapterText : ''}`);
         SFX.playSpell && SFX.playSpell();
         // Show reminder for the active chapter effect
         if (chapterText) {
           setTimeout(() => {
-            setEtbReminder({ pIdx, card, effects: [{ icon: ‘📖’, text: `Chapter ${romanNumerals[newLore] || newLore}: ${chapterText}` }] });
+            setEtbReminder({ pIdx, card, effects: [{ icon: '\u{1f4d6}', text: `Chapter ${romanNumerals[newLore] || newLore}: ${chapterText}` }] });
           }, 400);
         }
         // Auto-create tokens from saga chapters (e.g. Fable of the Mirror-Breaker Chapter I)
@@ -5995,27 +5995,27 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
           const tToughness = tokenMatch[2];
           const tDesc = tokenMatch[3].trim();
           // Extract color from description
-          const colorMap = { ‘white’: ‘W’, ‘blue’: ‘U’, ‘black’: ‘B’, ‘red’: ‘R’, ‘green’: ‘G’ };
+          const colorMap = { 'white': 'W', 'blue': 'U', 'black': 'B', 'red': 'R', 'green': 'G' };
           const tColors = [];
           for (const [cName, cCode] of Object.entries(colorMap)) {
             if (tDesc.includes(cName)) tColors.push(cCode);
           }
           // Extract creature type (last word before "creature token")
-          const typeWords = tDesc.replace(/white|blue|black|red|green|and/gi, ‘’).trim().split(/\s+/).filter(Boolean);
-          const tokenTypeName = typeWords.map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(‘ ‘) || ‘Token’;
+          const typeWords = tDesc.replace(/white|blue|black|red|green|and/gi, '').trim().split(/\s+/).filter(Boolean);
+          const tokenTypeName = typeWords.map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ') || 'Token';
           // Extract oracle text from "with ..." clause
-          const withMatch = chapterText.toLowerCase().match(/creature token with [‘’"]([^’’"]+)[‘"’’]/);
-          const tokenOracle = withMatch ? withMatch[1] : ‘’;
+          const withMatch = chapterText.toLowerCase().match(/creature token with [\u2018\u2019"']([^\u2018\u2019"']+)[\u2018\u2019"']/);
+          const tokenOracle = withMatch ? withMatch[1] : '';
           setTimeout(() => {
             const token = {
-              id: uid(), name: tokenTypeName + ‘ Token’, isToken: true,
-              type_line: `Token Creature — ${tokenTypeName}`,
+              id: uid(), name: tokenTypeName + ' Token', isToken: true,
+              type_line: `Token Creature \u2014 ${tokenTypeName}`,
               power: tPower, toughness: tToughness,
               colors: tColors, oracle_text: tokenOracle, keywords: [],
               tapped: false, enteredThisTurn: true, counters: {},
             };
             setState(pIdx, prev => ({ ...prev, battlefield: [...prev.battlefield, token] }));
-            addGameLog(pIdx, ‘📖’, `${card.name}: Created ${tPower}/${tToughness} ${tokenTypeName} token`);
+            addGameLog(pIdx, '\u{1f4d6}', `${card.name}: Created ${tPower}/${tToughness} ${tokenTypeName} token`);
             SFX.playCreature();
           }, 700);
         }
