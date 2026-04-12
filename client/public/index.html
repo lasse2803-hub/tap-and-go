@@ -4371,6 +4371,19 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     onStateChange(payload);
   }); // run on every render when sync is needed
 
+  // Periodic heartbeat: force a full resync every 5 seconds to catch missed socket events.
+  // This prevents games from getting "stuck" due to a dropped packet or timing issue.
+  useEffect(() => {
+    if (!onlineMode || !onStateChange) return;
+    const interval = setInterval(() => {
+      // Mark both players as dirty and trigger a sync
+      dirtyPlayersRef.current.add(0);
+      dirtyPlayersRef.current.add(1);
+      onlineSyncNeededRef.current = true;
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [onlineMode, onStateChange]);
+
   // Online mode: receive state updates from server (opponent's actions)
   // IMPORTANT: Use raw _set* functions here to avoid triggering a broadcast loop!
   const onlineStateTimestampRef = useRef(0);
@@ -4448,7 +4461,9 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
           manaPool: serverOpp.manaPool || prev.manaPool,
           emblems: serverOpp.emblems || prev.emblems,
           commandZone: serverOpp.commandZone || prev.commandZone,
-          hand: serverOpp.hand || prev.hand,
+          // Don't overwrite opponent's hand while peeking (Thoughtseize, Duress) —
+          // the real hand was injected via peekHand and sync would replace it with hidden cards
+          hand: (prev._peekedHand ? prev.hand : (serverOpp.hand || prev.hand)),
           handCount: serverOpp.handCount ?? (serverOpp.hand || prev.hand).length,
           libraryCount: serverOpp.libraryCount ?? prev.libraryCount,
           landPlayedThisTurn: serverOpp.landPlayedThisTurn ?? prev.landPlayedThisTurn,
@@ -5935,23 +5950,77 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
 
     }
 
-    // "At the beginning of each player's upkeep, ~ deals X damage to that player" (Roiling Vortex, etc.)
-    // Scan ALL players' battlefields for permanents that trigger on each player's upkeep
+    // "At the beginning of each player’s upkeep, ~ deals X damage to that player" (Roiling Vortex, etc.)
+    // Scan ALL players’ battlefields for permanents that trigger on each player’s upkeep
     // and apply the effect to the player whose upkeep it is (pIdx)
     [0, 1].forEach(ownerIdx => {
       const owner = getState(ownerIdx);
       for (const card of owner.battlefield) {
         const allText = getOracleText(card);
-        const eachUpkeepDmgMatch = allText.match(/at the beginning of each player['‘’]?s upkeep,?\s*(?:~|[\w\s,]+)\s+deals?\s+(\d+)\s+damage to that player/i);
+        const eachUpkeepDmgMatch = allText.match(/at the beginning of each player[‘\u2018\u2019]?s upkeep,?\s*(?:~|[\w\s,]+)\s+deals?\s+(\d+)\s+damage to that player/i);
         if (eachUpkeepDmgMatch) {
           const dmg = parseInt(eachUpkeepDmgMatch[1]);
           setState(pIdx, prev => ({ ...prev, life: prev.life - dmg }));
           markDealtDamage(pIdx);
           SFX.lifeLoss();
-          addGameLog(pIdx, '🔥', `${card.name}: upkeep — deals ${dmg} damage to ${getState(pIdx).name}`);
+          addGameLog(pIdx, ‘🔥’, `${card.name}: upkeep — deals ${dmg} damage to ${getState(pIdx).name}`);
         }
       }
     });
+
+    // Saga auto-increment: add a lore counter to each saga at the start of your turn
+    // (In MTG rules, sagas get a lore counter "after your draw step" = start of pre-combat main phase)
+    const pState = getState(pIdx);
+    for (const card of pState.battlefield) {
+      if (isSaga(card)) {
+        const currentLore = (card.counters && card.counters[‘lore’]) || 0;
+        addCounter(pIdx, card.id, ‘lore’);
+        const newLore = currentLore + 1;
+        const romanNumerals = [‘’, ‘I’, ‘II’, ‘III’, ‘IV’, ‘V’];
+        const chapters = parseSagaChapters(card);
+        const activeChapter = chapters.find(ch => ch.nums.includes(newLore));
+        const chapterText = activeChapter ? activeChapter.text : ‘’;
+        addGameLog(pIdx, ‘📖’, `${card.name}: Chapter ${romanNumerals[newLore] || newLore}${chapterText ? ‘ — ‘ + chapterText : ‘’}`);
+        SFX.playSpell && SFX.playSpell();
+        // Show reminder for the active chapter effect
+        if (chapterText) {
+          setTimeout(() => {
+            setEtbReminder({ pIdx, card, effects: [{ icon: ‘📖’, text: `Chapter ${romanNumerals[newLore] || newLore}: ${chapterText}` }] });
+          }, 400);
+        }
+        // Auto-create tokens from saga chapters (e.g. Fable of the Mirror-Breaker Chapter I)
+        const tokenMatch = chapterText.toLowerCase().match(/create a (\d+)\/(\d+) (\w[\w\s]*?) creature token/);
+        if (tokenMatch) {
+          const tPower = tokenMatch[1];
+          const tToughness = tokenMatch[2];
+          const tDesc = tokenMatch[3].trim();
+          // Extract color from description
+          const colorMap = { ‘white’: ‘W’, ‘blue’: ‘U’, ‘black’: ‘B’, ‘red’: ‘R’, ‘green’: ‘G’ };
+          const tColors = [];
+          for (const [cName, cCode] of Object.entries(colorMap)) {
+            if (tDesc.includes(cName)) tColors.push(cCode);
+          }
+          // Extract creature type (last word before "creature token")
+          const typeWords = tDesc.replace(/white|blue|black|red|green|and/gi, ‘’).trim().split(/\s+/).filter(Boolean);
+          const tokenTypeName = typeWords.map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(‘ ‘) || ‘Token’;
+          // Extract oracle text from "with ..." clause
+          const withMatch = chapterText.toLowerCase().match(/creature token with [‘’"]([^’’"]+)[‘"’’]/);
+          const tokenOracle = withMatch ? withMatch[1] : ‘’;
+          setTimeout(() => {
+            const token = {
+              id: uid(), name: tokenTypeName + ‘ Token’, isToken: true,
+              type_line: `Token Creature — ${tokenTypeName}`,
+              power: tPower, toughness: tToughness,
+              colors: tColors, oracle_text: tokenOracle, keywords: [],
+              tapped: false, enteredThisTurn: true, counters: {},
+            };
+            setState(pIdx, prev => ({ ...prev, battlefield: [...prev.battlefield, token] }));
+            addGameLog(pIdx, ‘📖’, `${card.name}: Created ${tPower}/${tToughness} ${tokenTypeName} token`);
+            SFX.playCreature();
+          }, 700);
+        }
+      }
+    }
   };
 
   const untapAll = (pIdx) => {
@@ -6588,6 +6657,12 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
             SFX.playSpell && SFX.playSpell();
           }});
           actions.push({ label: '📖 Remove Lore Counter', fn: () => removeCounter(pIdx, card.id, 'lore') });
+          actions.push({ sep: true });
+          actions.push({ label: '🚫 Sacrifice Saga (to Exile)', fn: () => {
+            moveCard(pIdx, card, 'battlefield', 'exile');
+            addGameLog(pIdx, '📖', `${card.name}: Saga sacrificed (final chapter)`);
+            SFX.toExile && SFX.toExile();
+          }});
         }
         actions.push({ sep: true });
         if (!isPlaneswalker(card)) {
@@ -7191,6 +7266,65 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         text: `${t.permanent.name}: ${t.text}${t.castCmc !== undefined ? ` (cast spell MV=${t.castCmc})` : ''}`
       }));
       setTimeout(() => setEtbReminder({ pIdx, card: triggers[0].permanent, effects }), 400);
+
+      // Auto-create tokens for well-known cast triggers
+      for (const t of triggers) {
+        const permText = getOracleText(t.permanent);
+        const permName = (t.permanent.name || '').toLowerCase();
+
+        // Young Pyromancer: "create a 1/1 red Elemental creature token"
+        if (permName.includes('young pyromancer') || /create a 1\/1 red elemental creature token/.test(permText)) {
+          setTimeout(() => {
+            const token = {
+              id: uid(), name: 'Elemental Token', isToken: true,
+              type_line: 'Token Creature — Elemental', power: '1', toughness: '1',
+              colors: ['R'], oracle_text: '', keywords: [],
+              tapped: false, enteredThisTurn: true, counters: {},
+            };
+            setState(pIdx, prev => ({ ...prev, battlefield: [...prev.battlefield, token] }));
+            addGameLog(pIdx, '🔥', `${t.permanent.name}: Created 1/1 red Elemental token`);
+            SFX.playCreature();
+          }, 600);
+        }
+        // Monastery Mentor: "create a 1/1 white Monk creature token with prowess"
+        else if (permName.includes('monastery mentor') || /create a 1\/1 white monk creature token/.test(permText)) {
+          setTimeout(() => {
+            const token = {
+              id: uid(), name: 'Monk Token', isToken: true,
+              type_line: 'Token Creature — Monk', power: '1', toughness: '1',
+              colors: ['W'], oracle_text: 'Prowess', keywords: ['prowess'],
+              tapped: false, enteredThisTurn: true, counters: {},
+            };
+            setState(pIdx, prev => ({ ...prev, battlefield: [...prev.battlefield, token] }));
+            addGameLog(pIdx, '🙏', `${t.permanent.name}: Created 1/1 white Monk token with prowess`);
+            SFX.playCreature();
+          }, 600);
+        }
+        // Sedgemoor Witch: "create a 1/1 black and green Pest creature token with 'When this creature dies, you gain 1 life.'"
+        else if (permName.includes('sedgemoor witch') || /create a 1\/1 black and green pest creature token/.test(permText)) {
+          setTimeout(() => {
+            const token = {
+              id: uid(), name: 'Pest Token', isToken: true,
+              type_line: 'Token Creature — Pest', power: '1', toughness: '1',
+              colors: ['B', 'G'], oracle_text: 'When this creature dies, you gain 1 life.', keywords: [],
+              tapped: false, enteredThisTurn: true, counters: {},
+            };
+            setState(pIdx, prev => ({ ...prev, battlefield: [...prev.battlefield, token] }));
+            addGameLog(pIdx, '🪲', `${t.permanent.name}: Created 1/1 Pest token`);
+            SFX.playCreature();
+          }, 600);
+        }
+        // Guttersnipe: "deals 2 damage to each opponent" — auto-apply damage
+        else if (permName.includes('guttersnipe') || /whenever you cast an instant or sorcery.*deals? 2 damage to each opponent/.test(permText)) {
+          setTimeout(() => {
+            const oppIdx2 = pIdx === 0 ? 1 : 0;
+            setState(oppIdx2, prev => ({ ...prev, life: prev.life - 2 }));
+            markDealtDamage(oppIdx2);
+            SFX.playerDamage();
+            addGameLog(pIdx, '🔥', `${t.permanent.name}: Deals 2 damage to opponent`);
+          }, 600);
+        }
+      }
     }
   };
 
@@ -12082,7 +12216,15 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
             {instantCasting.returnToEndStep ? (
               <div style={{ display: 'flex', gap: 8 }}>
                 <button className="btn btn-gold" style={{ padding: '6px 20px', fontSize: 12 }}
-                  onClick={() => { setInstantCasting(null); executePassTurn(); }}>
+                  onClick={() => {
+                    // Block turn pass if scry/surveil overlay is still active — must complete first
+                    if (scryView) {
+                      setCastError({ pIdx: instantCasting.pIdx, message: '⚠️ Complete the scry/surveil first!' });
+                      setTimeout(() => setCastError(null), 2000);
+                      return;
+                    }
+                    setInstantCasting(null); executePassTurn();
+                  }}>
                   ✓ Done — Pass Turn
                 </button>
                 <button className="btn" style={{ padding: '6px 16px', fontSize: 11, borderColor: 'rgba(60,180,220,0.3)', color: '#60c8e8' }}
