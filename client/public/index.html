@@ -1344,10 +1344,10 @@ const PRESET_DECKS = [
 3 Kroxa, Titan of Death's Hunger (THB) >> Charizard|||/cards/Pokemon/Cards/Charizard Card.jpg|/cards/Pokemon/Cards/Charizard Card.jpg
 4 Fable of the Mirror-Breaker (NEO) >> Ninetales|||/cards/Pokemon/Cards/Ninetales Card.jpg|/cards/Pokemon/Cards/Ninetales Card.jpg
 4 Thoughtseize (THS) >> Gastly|||/cards/Pokemon/Cards/Gastly Card.jpg|/cards/Pokemon/Cards/Gastly Card.jpg
-4 Fatal Push (KLR) >> Weezing's Toxic|||/cards/Pokemon/Cards/Weezing's toxic Card.jpg|/cards/Pokemon/Cards/Weezing's toxic Card.jpg
+4 Fatal Push (KLR) >> Weezings Toxic|||/cards/Pokemon/Cards/Weezings Toxic Card.jpg|/cards/Pokemon/Cards/Weezings Toxic Card.jpg
 4 Unholy Heat (MH2) >> Charmander|||/cards/Pokemon/Cards/Charmander Card.jpg|/cards/Pokemon/Cards/Charmander Card.jpg
-2 Kolaghan's Command (DTK) >> Primeape's Rage|||/cards/Pokemon/Cards/Primeape's Rage Card.jpg|/cards/Pokemon/Cards/Primeape's Rage Card.jpg
-1 The Meathook Massacre (MID) >> Gengar's Nightshade|||/cards/Pokemon/Cards/Gengar's Nightshade Card.jpg|/cards/Pokemon/Cards/Gengar's Nightshade Card.jpg
+2 Kolaghan's Command (DTK) >> Primeapes Rage|||/cards/Pokemon/Cards/Primeapes Rage Card.jpg|/cards/Pokemon/Cards/Primeapes Rage Card.jpg
+1 The Meathook Massacre (MID) >> Gengars Nightshade|||/cards/Pokemon/Cards/Gengars Nightshade Card.jpg|/cards/Pokemon/Cards/Gengars Nightshade Card.jpg
 4 Blood Crypt (RNA)
 4 Blightstep Pathway (KHM)
 4 Haunted Ridge (MID)
@@ -4371,18 +4371,18 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     onStateChange(payload);
   }); // run on every render when sync is needed
 
-  // Periodic heartbeat: force a full resync every 5 seconds to catch missed socket events.
+  // Periodic heartbeat: force a resync of OWN player state every 8 seconds to catch missed socket events.
   // This prevents games from getting "stuck" due to a dropped packet or timing issue.
+  // IMPORTANT: Only mark OWN player as dirty — sending the opponent's state would overwrite
+  // their real data with our stale view (we don't have their real hand/library).
   useEffect(() => {
     if (!onlineMode || !onStateChange) return;
     const interval = setInterval(() => {
-      // Mark both players as dirty and trigger a sync
-      dirtyPlayersRef.current.add(0);
-      dirtyPlayersRef.current.add(1);
+      dirtyPlayersRef.current.add(onlinePlayerIndex);
       onlineSyncNeededRef.current = true;
-    }, 5000);
+    }, 8000);
     return () => clearInterval(interval);
-  }, [onlineMode, onStateChange]);
+  }, [onlineMode, onStateChange, onlinePlayerIndex]);
 
   // Online mode: receive state updates from server (opponent's actions)
   // IMPORTANT: Use raw _set* functions here to avoid triggering a broadcast loop!
