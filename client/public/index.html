@@ -2539,7 +2539,7 @@ const parseSagaChapters = (card) => {
       return map[r] || 0;
     };
     const nums = romanNums.map(romanToNum).filter(n => n > 0);
-    chapters.push({ nums, text: text.length > 60 ? text.slice(0, 57) + '...' : text });
+    chapters.push({ nums, text: text.length > 60 ? text.slice(0, 57) + '...' : text, fullText: text });
   }
   return chapters;
 };
@@ -3045,9 +3045,16 @@ function TokenCreator({ onClose, onCreate }) {
     }, 400);
   }, []);
 
+  // Auto-detect artifact token types by name
+  const ARTIFACT_TOKEN_NAMES = ['treasure', 'blood', 'food', 'clue', 'gold', 'map', 'powerstone', 'incubator', 'junk'];
   const handleNameChange = (val) => {
     setName(val);
     searchTokenImages(val);
+    // Auto-switch type to Artifact for known artifact tokens
+    if (ARTIFACT_TOKEN_NAMES.includes(val.toLowerCase().trim())) {
+      setTypes('Artifact');
+      setSubtypes(val.trim());
+    }
   };
 
   const handleSubtypeChange = (val) => {
@@ -3148,6 +3155,29 @@ function TokenCreator({ onClose, onCreate }) {
                 <button className="btn" style={{ width: 32, padding: '4px 0' }} onClick={() => setQuantity(quantity + 1)}>+</button>
                 <button className="btn text-xs" onClick={() => setQuantity(5)} style={{ opacity: quantity === 5 ? 1 : 0.5 }}>5x</button>
                 <button className="btn text-xs" onClick={() => setQuantity(10)} style={{ opacity: quantity === 10 ? 1 : 0.5 }}>10x</button>
+              </div>
+            </div>
+            <div style={{ marginTop: 4 }}>
+              <label className="text-xs opacity-50">Quick Presets</label>
+              <div className="flex gap-1" style={{ flexWrap: 'wrap', marginTop: 4 }}>
+                {[
+                  { label: 'Treasure', n: 'Treasure', t: 'Artifact', st: 'Treasure', p: '', to: '', c: [], kw: '' },
+                  { label: 'Blood', n: 'Blood', t: 'Artifact', st: 'Blood', p: '', to: '', c: [], kw: '' },
+                  { label: 'Food', n: 'Food', t: 'Artifact', st: 'Food', p: '', to: '', c: [], kw: '' },
+                  { label: 'Clue', n: 'Clue', t: 'Artifact', st: 'Clue', p: '', to: '', c: [], kw: '' },
+                  { label: '1/1 Goblin', n: 'Goblin', t: 'Creature', st: 'Goblin', p: '1', to: '1', c: ['R'], kw: '' },
+                  { label: '1/1 Elemental', n: 'Elemental', t: 'Creature', st: 'Elemental', p: '1', to: '1', c: ['R'], kw: '' },
+                  { label: '2/2 Zombie', n: 'Zombie', t: 'Creature', st: 'Zombie', p: '2', to: '2', c: ['B'], kw: '' },
+                  { label: 'Kiki-Jiki', n: 'Reflection of Kiki-Jiki', t: 'Creature', st: 'Goblin Shaman', p: '2', to: '2', c: ['R'], kw: 'Haste' },
+                ].map(preset => (
+                  <button key={preset.label} className="btn text-xs" style={{ padding: '2px 6px', fontSize: 10 }}
+                    onClick={() => {
+                      setName(preset.n); setTypes(preset.t); setSubtypes(preset.st);
+                      setPower(preset.p || '1'); setToughness(preset.to || '1');
+                      setColors(preset.c); setKeywords(preset.kw);
+                      searchTokenImages(preset.n);
+                    }}>{preset.label}</button>
+                ))}
               </div>
             </div>
             <div className="flex gap-2" style={{ marginTop: 4 }}>
@@ -5921,8 +5951,11 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
   };
 
   // ===== UPKEEP TRIGGERS (Midnight Clock, etc.) =====
+  // IMPORTANT: Uses getStateRef (ref-based) instead of getState to avoid stale closures
+  // when called from setTimeout in onlineTurnDrawEffect or executePassTurn.
   const processUpkeepTriggers = (pIdx) => {
-    const p = getState(pIdx);
+    const p = getStateRef(pIdx);
+    console.log('[Upkeep] Processing triggers for player', pIdx, '- battlefield:', p.battlefield.length, 'cards');
     for (const card of p.battlefield) {
       const allText = getOracleText(card);
       // "At the beginning of each upkeep, put a [type] counter on ~"
@@ -5945,7 +5978,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         setState(pIdx, prev => ({ ...prev, life: prev.life - dmg }));
         markDealtDamage(pIdx);
         SFX.lifeLoss();
-        addGameLog(pIdx, '🔥', `${card.name}: upkeep — deals ${dmg} damage to ${getState(pIdx).name}`);
+        addGameLog(pIdx, '🔥', `${card.name}: upkeep — deals ${dmg} damage to ${getStateRef(pIdx).name}`);
       }
 
     }
@@ -5954,23 +5987,36 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     // Scan ALL players' battlefields for permanents that trigger on each player's upkeep
     // and apply the effect to the player whose upkeep it is (pIdx)
     [0, 1].forEach(ownerIdx => {
-      const owner = getState(ownerIdx);
+      const owner = getStateRef(ownerIdx);
       for (const card of owner.battlefield) {
         const allText = getOracleText(card);
-        const eachUpkeepDmgMatch = allText.match(/at the beginning of each player['\u2018\u2019]?s upkeep,?\s*(?:~|[\w\s,]+)\s+deals?\s+(\d+)\s+damage to that player/i);
-        if (eachUpkeepDmgMatch) {
-          const dmg = parseInt(eachUpkeepDmgMatch[1]);
+        const cardName = (card.name || '').toLowerCase();
+        // Fallback: known cards by name (most reliable — oracle_text may not sync in online mode)
+        const knownUpkeepDmg = cardName === 'roiling vortex' ? 1 : cardName === 'sulfuric vortex' ? 2 : null;
+        // Also try regex match for generic "each player's upkeep, deals X damage"
+        const eachUpkeepDmgMatch = allText.match(/at the beginning of each player.?s upkeep,?\s*(?:~|[\w\s,]+)\s+deals?\s+(\d+)\s+damage to that player/i);
+        const dmg = knownUpkeepDmg || (eachUpkeepDmgMatch ? parseInt(eachUpkeepDmgMatch[1]) : null);
+        if (dmg) {
+          console.log('[Upkeep] Roiling Vortex / each-player upkeep trigger:', card.name, 'deals', dmg, 'to player', pIdx);
           setState(pIdx, prev => ({ ...prev, life: prev.life - dmg }));
           markDealtDamage(pIdx);
           SFX.lifeLoss();
-          addGameLog(pIdx, '🔥', `${card.name}: upkeep — deals ${dmg} damage to ${getState(pIdx).name}`);
+          addGameLog(pIdx, '\uD83D\uDD25', `${card.name}: upkeep \u2014 deals ${dmg} damage to ${getStateRef(pIdx).name}`);
+          // Mark dirty so the life change syncs to server immediately
+          if (typeof dirtyPlayersRef !== 'undefined' && dirtyPlayersRef.current) {
+            dirtyPlayersRef.current.add(pIdx);
+            if (typeof onlineSyncNeededRef !== 'undefined' && onlineSyncNeededRef.current !== undefined) {
+              onlineSyncNeededRef.current = true;
+            }
+          }
         }
       }
     });
 
     // Saga auto-increment: add a lore counter to each saga at the start of your turn
     // (In MTG rules, sagas get a lore counter "after your draw step" = start of pre-combat main phase)
-    const pState = getState(pIdx);
+    const pState = getStateRef(pIdx);
+    console.log('[Upkeep] Scanning sagas for player', pIdx, '- battlefield:', pState.battlefield.length, 'cards');
     for (const card of pState.battlefield) {
       if (isSaga(card)) {
         const currentLore = (card.counters && card.counters['lore']) || 0;
@@ -5980,6 +6026,8 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         const chapters = parseSagaChapters(card);
         const activeChapter = chapters.find(ch => ch.nums.includes(newLore));
         const chapterText = activeChapter ? activeChapter.text : '';
+        const sagaName = (card.name || '').toLowerCase();
+        console.log('[Upkeep] Saga:', card.name, 'Chapter', newLore, 'text:', chapterText, 'chapters found:', chapters.length);
         addGameLog(pIdx, '\u{1f4d6}', `${card.name}: Chapter ${romanNumerals[newLore] || newLore}${chapterText ? ' \u2014 ' + chapterText : ''}`);
         SFX.playSpell && SFX.playSpell();
         // Show reminder for the active chapter effect
@@ -5988,24 +6036,36 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
             setEtbReminder({ pIdx, card, effects: [{ icon: '\u{1f4d6}', text: `Chapter ${romanNumerals[newLore] || newLore}: ${chapterText}` }] });
           }, 400);
         }
-        // Auto-create tokens from saga chapters (e.g. Fable of the Mirror-Breaker Chapter I)
-        const tokenMatch = chapterText.toLowerCase().match(/create a (\d+)\/(\d+) (\w[\w\s]*?) creature token/);
-        if (tokenMatch) {
-          const tPower = tokenMatch[1];
-          const tToughness = tokenMatch[2];
-          const tDesc = tokenMatch[3].trim();
-          // Extract color from description
+        // Auto-create tokens from saga chapters
+        // First try: regex match for generic "create a X/Y [desc] creature token"
+        const fullChapterText = activeChapter ? activeChapter.fullText || activeChapter.text : '';
+        const tokenMatchText = (fullChapterText || chapterText).toLowerCase();
+        const tokenMatch = tokenMatchText.match(/create a (\d+)\/(\d+) (\w[\w\s]*?) creature token/);
+        // Name-based fallback for known sagas (in case regex/truncation fails)
+        const knownSagaToken = !tokenMatch && sagaName.includes('fable of the mirror-breaker') && newLore === 1
+          ? { power: '2', toughness: '2', name: 'Goblin Shaman', colors: ['R'], oracle: 'Whenever this creature attacks, create a Treasure token.' }
+          : !tokenMatch && sagaName.includes('the eldest reborn') && newLore === 3
+          ? null // Chapter III doesn't create a token
+          : null;
+        if (tokenMatch || knownSagaToken) {
+          const tPower = tokenMatch ? tokenMatch[1] : knownSagaToken.power;
+          const tToughness = tokenMatch ? tokenMatch[2] : knownSagaToken.toughness;
+          const tDesc = tokenMatch ? tokenMatch[3].trim() : '';
+          const tokenTypeName = knownSagaToken ? knownSagaToken.name : (() => {
+            const typeWords = tDesc.replace(/white|blue|black|red|green|and/gi, '').trim().split(/\s+/).filter(Boolean);
+            return typeWords.map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ') || 'Token';
+          })();
           const colorMap = { 'white': 'W', 'blue': 'U', 'black': 'B', 'red': 'R', 'green': 'G' };
-          const tColors = [];
-          for (const [cName, cCode] of Object.entries(colorMap)) {
-            if (tDesc.includes(cName)) tColors.push(cCode);
-          }
-          // Extract creature type (last word before "creature token")
-          const typeWords = tDesc.replace(/white|blue|black|red|green|and/gi, '').trim().split(/\s+/).filter(Boolean);
-          const tokenTypeName = typeWords.map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ') || 'Token';
+          const tColors = knownSagaToken ? knownSagaToken.colors : (() => {
+            const c = [];
+            for (const [cName, cCode] of Object.entries(colorMap)) {
+              if (tDesc.includes(cName)) c.push(cCode);
+            }
+            return c;
+          })();
           // Extract oracle text from "with ..." clause
-          const withMatch = chapterText.toLowerCase().match(/creature token with [\u2018\u2019"']([^\u2018\u2019"']+)[\u2018\u2019"']/);
-          const tokenOracle = withMatch ? withMatch[1] : '';
+          const withMatch = tokenMatchText.match(/creature token with ['\u2018\u2019""]([^'"\u2018\u2019""]+)['\u2018\u2019""]/);
+          const tokenOracle = knownSagaToken ? (knownSagaToken.oracle || '') : (withMatch ? withMatch[1] : '');
           setTimeout(() => {
             const token = {
               id: uid(), name: tokenTypeName + ' Token', isToken: true,
@@ -6784,13 +6844,13 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
           actions.push({ label: `🔀 Give to ${getState(opponentIdx).name}`, fn: () => gainControl(pIdx, opponentIdx, card, false) });
         }
         if (card.isToken) {
-          actions.push({ label: '📋 Clone Token', fn: () => cloneToken(pIdx, card) });
-          actions.push({ label: '🗑️ Destroy Token (dies)', fn: () => moveCard(pIdx, card, 'battlefield', 'graveyard') });
-          actions.push({ label: '🚫 Exile Token', fn: () => moveCard(pIdx, card, 'battlefield', 'exile') });
+          actions.push({ label: '\u{1f4cb} Clone Token', fn: () => cloneToken(pIdx, card) });
+          actions.push({ label: '\u{1f480} To Graveyard', fn: () => moveCard(pIdx, card, 'battlefield', 'graveyard') });
+          actions.push({ label: '\u{1f6ab} To Exile', fn: () => moveCard(pIdx, card, 'battlefield', 'exile') });
         } else {
           addZoneTransferActions(actions, pIdx, card, 'battlefield');
-          actions.push({ label: '📎 Exile (linked to...)', fn: () => setExileLinkChoice({ targetPIdx: pIdx, card, sourcePIdx: pIdx }) });
-          actions.push({ label: '📚 To Top of Library', fn: () => returnToLibrary(pIdx, card, 'battlefield', 'top') });
+          actions.push({ label: '\u{1f4ce} Exile (linked to...)', fn: () => setExileLinkChoice({ targetPIdx: pIdx, card, sourcePIdx: pIdx }) });
+          actions.push({ label: '\u{1f4da} To Top of Library', fn: () => returnToLibrary(pIdx, card, 'battlefield', 'top') });
         }
       } else {
         // Opponent's cards: destructive actions + gain control (spell effects)
@@ -7080,14 +7140,23 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
   const parseETBEffects = (card) => {
     const allText = getOracleText(card);
     if (!allText.includes('enters the battlefield') && !allText.includes('enters, ')) return [];
-    // Extract ONLY the ETB sentence(s) — stop at the first period or newline after "enters".
-    // This prevents false matches from activated abilities, reminder text, and token rules text.
-    // e.g. Bloodtithe Harvester: "When ~ enters the battlefield, create a Blood token."
-    //   — the Blood token's reminder text contains "draw" and "discard" which must NOT be matched.
+    // Extract the ETB sentence(s) AND their immediate continuation sentences.
+    // Some cards split ETB effects across multiple sentences:
+    //   e.g. Seasoned Pyromancer: "When ~ enters the battlefield, discard two cards, then draw two cards.
+    //         For each nonland card discarded this way, create a 1/1 red Elemental creature token."
+    // The second sentence is a continuation of the ETB effect but doesn't contain "enters".
+    // Strategy: include ETB sentences + the sentence immediately following each ETB sentence.
     const sentences = allText.split(/(?<=\.)\s+|\n/);
-    const etbSentences = sentences.filter(s => /enters the battlefield|enters,/.test(s));
-    if (etbSentences.length === 0) return [];
-    const etbText = etbSentences.join(' ');
+    const etbIndices = new Set();
+    sentences.forEach((s, i) => {
+      if (/enters the battlefield|enters,/.test(s)) {
+        etbIndices.add(i);
+        // Include the next sentence as a continuation (for multi-sentence ETB effects)
+        if (i + 1 < sentences.length) etbIndices.add(i + 1);
+      }
+    });
+    if (etbIndices.size === 0) return [];
+    const etbText = [...etbIndices].sort((a, b) => a - b).map(i => sentences[i]).join(' ');
     const effects = [];
     // Damage to target player or planeswalker (Viashino Pyromancer)
     const dmgPlayerPWMatch = etbText.match(/enters.*(?:deals?|it deals) (\d+) damage to target (player or planeswalker|opponent or planeswalker)/);
@@ -7117,9 +7186,9 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     if (/enters.*return up to \w+ target.*to.*hand/.test(etbText)) effects.push({ icon: '🤚', text: 'Return target(s) to hand' });
     // +1/+1 counters
     if (/enters.*\+1\/\+1 counter/.test(etbText)) effects.push({ icon: '⬆', text: 'Put +1/+1 counter(s)' });
-    // Create token
-    if (/enters.*create/.test(etbText)) {
-      const tokenMatch = etbText.match(/enters.*create (\w+) (\d+)\/(\d+) (\w[\w ]*?) creature token/);
+    // Create token — match both "enters...create" and continuation sentences like "create a X/Y ... creature token"
+    if (/create/.test(etbText)) {
+      const tokenMatch = etbText.match(/create (\w+) (\d+)\/(\d+) (\w[\w ]*?) creature token/);
       if (tokenMatch) {
         const qty = tokenMatch[1] === 'a' ? 1 : tokenMatch[1] === 'two' ? 2 : tokenMatch[1] === 'three' ? 3 : parseInt(tokenMatch[1]) || 1;
         const tPower = tokenMatch[2];
@@ -7157,11 +7226,24 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     if (/enters.*discard/.test(etbText)) effects.push({ icon: '🗑', text: 'Target discards' });
     // Scry/surveil
     if (/enters.*scry (\d+)/.test(etbText)) effects.push({ icon: '🔮', text: 'Scry' });
+    // Name-based fallback for known ETB token creators (in case regex doesn't capture them)
+    const cardName = (card.name || '').toLowerCase();
+    const hasTokenEffect = effects.some(e => e.actionType === 'create_token');
+    if (!hasTokenEffect) {
+      if (cardName === 'seasoned pyromancer') {
+        effects.push({
+          icon: '\u2726', text: 'Discard 2, draw 2. Create 1/1 Elemental for each nonland discarded',
+          actionType: 'create_token', tokenQty: 2, tokenPower: '1', tokenToughness: '1',
+          tokenName: 'Elemental', tokenColors: ['R'], tokenOracle: '',
+          tokenTypeLine: 'Token Creature \u2014 Elemental',
+        });
+      }
+    }
     // Generic ETB — if none matched but it mentions "enters the battlefield"
     if (effects.length === 0 && (etbText.includes('enters the battlefield') || etbText.includes('enters, '))) {
       // Extract a short snippet of the ETB ability
       const etbMatch = etbText.match(/(when.*?enters.*?(?:\.|$))/);
-      if (etbMatch) effects.push({ icon: '⚡', text: etbMatch[1].slice(0, 80) });
+      if (etbMatch) effects.push({ icon: '\u26a1', text: etbMatch[1].slice(0, 80) });
     }
     return effects;
   };
