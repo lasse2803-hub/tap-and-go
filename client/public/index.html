@@ -1998,6 +1998,30 @@ const getSpellTargetMode = (effects) => {
   return 'none'; // self-effect, no target needed
 };
 
+// Return which permanent types are legal targets for the given spell effects.
+// Combines effect-type defaults (boost/counter_add/fight always target creatures)
+// with explicit targetDesc/targetType extracted from oracle text.
+const getLegalTargetTypes = (effects) => {
+  let creature = false, planeswalker = false, artifact = false, enchantment = false;
+  for (const e of effects) {
+    // Effects that implicitly target creatures (no targetDesc/targetType needed)
+    if (['boost', 'fight'].includes(e.type)) creature = true;
+    if (e.type === 'counter_add') creature = true;
+    // Explicit target descriptions from oracle text
+    const desc = ((e.targetDesc || '') + ' ' + (e.targetType || '')).toLowerCase();
+    if (desc.includes('any target') || desc.includes('permanent')) {
+      creature = true; planeswalker = true; artifact = true; enchantment = true;
+    }
+    if (desc.includes('creature')) creature = true;
+    if (desc.includes('planeswalker')) planeswalker = true;
+    if (desc.includes('artifact')) artifact = true;
+    if (desc.includes('enchantment')) enchantment = true;
+    // Damage to "target creature or player" — also allows creatures
+    if (e.type === 'damage' && desc.includes('creature or player')) creature = true;
+  }
+  return { creature, planeswalker, artifact, enchantment };
+};
+
 // ============ CARD INFO & HANDLING GUIDE ============
 // Analyzes a card and reports what the game auto-handles vs what requires manual action
 const getCardHandlingInfo = (card) => {
@@ -3332,15 +3356,27 @@ function CardDisplay({ card, size = 60, onClick, onContext, showPreview, extraCl
   const counterEntries = card.counters ? Object.entries(card.counters).filter(([,v]) => v > 0) : [];
 
   // Purple glow for protection keywords (hexproof, indestructible, shroud, ward, protection from)
+  // Only applies to permanents (creatures, enchantments, artifacts, planeswalkers) that actually HAVE
+  // these keywords — NOT to instants/sorceries that merely GRANT them to other creatures
+  // (e.g. Boros Charm says "target creature gains indestructible" — the instant itself is NOT indestructible)
   const protectionGlow = (() => {
+    const typeLine = (card.type_line || '').toLowerCase();
+    // Never show protection glow on instants, sorceries, or lands
+    if (typeLine.includes('instant') || typeLine.includes('sorcery')) return false;
     const kws = (card.keywords || []).map(k => k.toLowerCase());
     const oracle = ((card.oracle_text || '') + ' ' + ((card.card_faces || []).map(f => f.oracle_text || '').join(' '))).toLowerCase();
     const protectionKeywords = ['hexproof', 'indestructible', 'shroud', 'ward'];
-    const hasProtectionFrom = /protection from/.test(oracle) && !/protection from.*you don't control/.test(oracle);
+    // Only detect "protection from X" on cards that actually HAVE the ability (keyword or as static text about THIS card).
+    // Instants granting protection to others are already excluded above.
+    const hasProtectionFrom = kws.some(k => k.startsWith('protection')) ||
+      (/(?:^|\s)this (?:creature|permanent) has protection from/i.test(oracle)) ||
+      (/(?:^|\W)~ has protection from/i.test(oracle));
     let hasActiveProtection = hasProtectionFrom;
     if (!hasActiveProtection) {
       for (const kw of protectionKeywords) {
-        if (!kws.includes(kw) && !oracle.includes(kw)) continue;
+        // ONLY check the card's own keywords array — not oracle text, which often references
+        // granting these keywords to OTHER creatures (e.g. Boros Charm, Heroic Intervention).
+        if (!kws.includes(kw)) continue;
         // Check if conditional (Fleecemane Lion etc.)
         if (new RegExp('if .* is monstrous.*' + kw, 'i').test(oracle)) {
           if (card.monstrous) { hasActiveProtection = true; break; }
@@ -3350,7 +3386,7 @@ function CardDisplay({ card, size = 60, onClick, onContext, showPreview, extraCl
         hasActiveProtection = true; break;
       }
     }
-    // Also check tempBuffs for granted keywords
+    // Also check tempBuffs for granted keywords (e.g. Heroic Intervention giving indestructible until end of turn)
     if (!hasActiveProtection && card.tempBuffs?.keywords) {
       const buffed = card.tempBuffs.keywords.map(k => k.toLowerCase());
       if (protectionKeywords.some(kw => buffed.includes(kw))) hasActiveProtection = true;
@@ -9113,6 +9149,26 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         const casterIdx = spellTargeting.pIdx;
         const isTargetingOpponent = pIdx !== casterIdx;
 
+        // Validate that this card type is a legal target for the spell
+        // e.g. Boros Charm targets "player or planeswalker" — Llanowar Elves (creature) is NOT a legal target
+        const targets = getLegalTargetTypes(spellTargeting.effects);
+        let legalType = false;
+        if (isPlaneswalker(card) && targets.planeswalker) legalType = true;
+        else if (isCreature(card) && targets.creature) legalType = true;
+        else if (isArtifact(card) && targets.artifact && !isCreature(card)) legalType = true;
+        else if (isEnchantment(card) && targets.enchantment && !isCreature(card)) legalType = true;
+        if (!legalType) {
+          const allowed = [
+            targets.creature && 'creatures',
+            targets.planeswalker && 'planeswalkers',
+            targets.artifact && 'artifacts',
+            targets.enchantment && 'enchantments',
+          ].filter(Boolean).join(', ') || 'the spell\'s target type';
+          setCastError({ pIdx: casterIdx, message: `\u274c ${card.name} is not a legal target (spell targets ${allowed})`, background: '#4a1a1a' });
+          setTimeout(() => setCastError(null), 2500);
+          return;
+        }
+
         // Hexproof: opponent's creatures can't be targeted
         if (isTargetingOpponent && hasHexproof(card)) {
           setCastError({ pIdx: casterIdx, message: `❌ ${card.name} has hexproof — can't be targeted!`, background: '#4a1a1a' });
@@ -10933,11 +10989,13 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     const getCombatClass = (card) => {
       // Action log highlight glow
       const glowClass = highlightCards.includes(card.id) ? ' card-highlight-glow' : '';
-      // Spell targeting mode: highlight valid targets
+      // Spell targeting mode: highlight valid targets based on spell's targetDesc
       if (spellTargeting) {
-        if (isCreature(card)) return 'spell-target' + glowClass;
-        const targetTypes = spellTargeting.effects.map(e => e.targetType || '').join(' ');
-        if (targetTypes.includes('permanent') || targetTypes.includes('artifact') || targetTypes.includes('enchantment')) return 'spell-target' + glowClass;
+        const targets = getLegalTargetTypes(spellTargeting.effects);
+        if (isPlaneswalker(card) && targets.planeswalker) return 'spell-target' + glowClass;
+        if (isCreature(card) && targets.creature) return 'spell-target' + glowClass;
+        if (isArtifact(card) && targets.artifact && !isCreature(card)) return 'spell-target' + glowClass;
+        if (isEnchantment(card) && targets.enchantment && !isCreature(card)) return 'spell-target' + glowClass;
         return glowClass;
       }
       if (!combatState) return glowClass;
@@ -13853,8 +13911,11 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
               const hasDrawCard = /draw a card/i.test(abilityText);
               // "You may play an additional land this turn" / "put a land from your hand onto the battlefield" (Kiora -1)
               const hasExtraLand = /(?:play an additional land|put a land.*onto the battlefield)/i.test(abilityText);
-              // "Add {mana}" detection (Chandra +1: "Add {R}{R}")
-              const addManaMatch = abilityText.match(/add\s+(\{[wubrgc]\}(?:\{[wubrgc]\})*)/i);
+              // "Add {X} or {Y}" choice detection (Domri +1: "Add {R} or {G}.")
+              // Matches two-way mana choice — must check BEFORE addManaMatch which would only capture first symbol
+              const addManaOrMatch = abilityText.match(/add\s+\{([wubrgc])\}\s+or\s+\{([wubrgc])\}/i);
+              // "Add {mana}" detection (Chandra +1: "Add {R}{R}") — only if no "or" choice
+              const addManaMatch = !addManaOrMatch && abilityText.match(/add\s+(\{[wubrgc]\}(?:\{[wubrgc]\})*)/i);
               // "Target player loses N life" / "each opponent loses N life" (Liliana +1)
               const loseLifeMatch = abilityText.match(/(?:target player|each opponent) loses? (\d+) life/i);
               // "Target creature gets +X/+X" (Garruk +1) — auto-buff with targeting
@@ -13873,7 +13934,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
               // "For each player, search that player's library for a nonland card and exile it" (Jace -8 ultimate)
               const isLibraryExileUltimate = /search.*library.*nonland card.*exile/i.test(abilityText) && /cast.*without paying/i.test(abilityText);
 
-              const hasNewPatterns = hasDrawCard || hasExtraLand || addManaMatch || loseLifeMatch || pwBuffMatch || isTuckToLibrary || isFactOrFiction || isGraveyardReturn || isExileTapped || isLibraryExileUltimate;
+              const hasNewPatterns = hasDrawCard || hasExtraLand || addManaMatch || addManaOrMatch || loseLifeMatch || pwBuffMatch || isTuckToLibrary || isFactOrFiction || isGraveyardReturn || isExileTapped || isLibraryExileUltimate;
 
               if (pwEffects.length > 0 || isEmblem || isUntilNextTurn || pwTokenData || isExileCastOrDamage || isPreventDamage || isSorceryFlash || hasNewPatterns) {
                 return (
@@ -14083,6 +14144,27 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                         📖 Draw a Card{hasExtraLand ? ' + Put Land' : ''}
                       </button>
                     )}
+                    {/* Add mana CHOICE (Domri +1: "Add {R} or {G}") — two buttons */}
+                    {addManaOrMatch && [addManaOrMatch[1], addManaOrMatch[2]].map((colorLower, idx) => {
+                      const color = colorLower.toUpperCase();
+                      const manaIcons = { W: '\u2600', U: '\u{1f4a7}', B: '\u{1f480}', R: '\u{1f525}', G: '\u{1f333}', C: '\u26aa' };
+                      return (
+                        <button key={color + idx} className="btn btn-gold" style={{ padding: '6px 16px', fontSize: 12 }}
+                          onClick={() => {
+                            setState(pwReminder.pIdx, prev => {
+                              const newPool = { ...prev.manaPool };
+                              newPool[color] = (newPool[color] || 0) + 1;
+                              return { ...prev, manaPool: newPool };
+                            });
+                            addGameLog(pwReminder.pIdx, '\u{1f525}', `${pwReminder.card.name}: Added {${color}}`);
+                            setCastError({ pIdx: pwReminder.pIdx, message: `${manaIcons[color] || '\u{1f525}'} Added {${color}} to mana pool` });
+                            setTimeout(() => setCastError(null), 2000);
+                            setPwReminder(null);
+                          }}>
+                          {manaIcons[color] || '\u{1f525}'} Add {`{${color}}`}
+                        </button>
+                      );
+                    })}
                     {/* Add mana (Chandra +1: "Add {R}{R}") */}
                     {addManaMatch && (
                       <button className="btn btn-gold" style={{ padding: '6px 16px', fontSize: 12 }}
