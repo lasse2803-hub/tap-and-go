@@ -347,6 +347,9 @@ class GameRoom {
           if (u.commandZone) s.commandZone = u.commandZone;
           if (u.commanderDamageReceived) s.commanderDamageReceived = u.commanderDamageReceived;
           if (u.untilNextTurnEffects) s.untilNextTurnEffects = u.untilNextTurnEffects;
+          // dealtDamageThisTurn: public — either player can set this (e.g. when
+          // you deal damage to the opponent, YOUR client marks THEIR flag).
+          if (u.dealtDamageThisTurn !== undefined) s.dealtDamageThisTurn = u.dealtDamageThisTurn;
           // Library & hand: only the owning player can update these.
           // The opponent's client receives library as [] (filtered/hidden),
           // so accepting their sync would wipe the real library data.
@@ -354,7 +357,6 @@ class GameRoom {
             if (u.library) s.library = u.library;
             if (u.hand) s.hand = u.hand;
             if (u.landPlayedThisTurn !== undefined) s.landPlayedThisTurn = u.landPlayedThisTurn;
-            if (u.dealtDamageThisTurn !== undefined) s.dealtDamageThisTurn = u.dealtDamageThisTurn;
             if (u.commanderCastCount !== undefined) s.commanderCastCount = u.commanderCastCount;
           }
         }

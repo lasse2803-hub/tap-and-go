@@ -12066,7 +12066,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
 
       {/* End of Turn — opponent can respond before turn passes */}
       {/* IMPORTANT: Hide when spellStack/targeting/modals are active — those overlays must take priority */}
-      {endOfTurnRespond && !instantCasting && spellStack.length === 0 && !spellTargeting && !abilityTargeting && !modalChoice && !gameOver && (() => {
+      {endOfTurnRespond && !instantCasting && spellStack.length === 0 && !spellTargeting && !abilityTargeting && !modalChoice && !scryView && !lookTopView && !gameOver && (() => {
         const opponentIdx = activePlayer === 0 ? 1 : 0;
         const opponentName = getState(opponentIdx).name;
         const activeName = getState(activePlayer).name;
@@ -12379,8 +12379,8 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
               <div style={{ display: 'flex', gap: 8 }}>
                 <button className="btn btn-gold" style={{ padding: '6px 20px', fontSize: 12 }}
                   onClick={() => {
-                    // Block turn pass if scry/surveil overlay is still active — must complete first
-                    if (scryView) {
+                    // Block turn pass if scry/surveil/look overlay is still active — must complete first
+                    if (scryView || lookTopView) {
                       setCastError({ pIdx: instantCasting.pIdx, message: '⚠️ Complete the scry/surveil first!' });
                       setTimeout(() => setCastError(null), 2000);
                       return;
