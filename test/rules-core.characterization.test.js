@@ -1,0 +1,176 @@
+'use strict';
+/*
+ * Characterization tests for the PURE client-side rules helpers.
+ *
+ * These functions currently live inside client/public/index.html. They are
+ * loaded here via the vm-sandbox seam (see helpers/extract-fn.js) so we test the
+ * REAL source, not a copy. The goal is to PIN current behavior — including known
+ * quirks — so that Etape 1 (extracting these into a real module) and Etape 2
+ * (replacing regex parsing with card data) cannot change behavior silently.
+ *
+ * If a refactor intentionally changes one of these behaviors, update the
+ * assertion in the same commit and note why. A surprise failure means the
+ * refactor changed something it should not have.
+ */
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+const { loadFns } = require('./helpers/extract-fn.js');
+
+const R = loadFns([
+  'parseManaCost',
+  'canPayManaCost',
+  'deductManaCost',
+  'parseSpellEffects',
+  'parseArenaDecklist',
+  'isCreature',
+  'isLand',
+  'isInstant',
+  'isArtifact',
+  'isEnchantment',
+  'isPlaneswalker',
+]);
+
+const emptyPool = () => ({ W: 0, U: 0, B: 0, R: 0, G: 0, C: 0 });
+
+// ─────────────────────────────────────────────────────────────
+// Mana cost parsing
+// ─────────────────────────────────────────────────────────────
+test('parseManaCost: generic + colored', () => {
+  assert.deepEqual(R.parseManaCost('{2}{R}{R}'), { generic: 2, R: 2 });
+  assert.deepEqual(R.parseManaCost('{W}{U}{B}{R}{G}'), { generic: 0, W: 1, U: 1, B: 1, R: 1, G: 1 });
+  assert.deepEqual(R.parseManaCost('{0}'), { generic: 0 });
+});
+
+test('parseManaCost: empty / missing cost is generic 0', () => {
+  assert.deepEqual(R.parseManaCost(''), { generic: 0 });
+  assert.deepEqual(R.parseManaCost(null), { generic: 0 });
+  assert.deepEqual(R.parseManaCost(undefined), { generic: 0 });
+});
+
+test('parseManaCost: X is ignored for validation (player chooses)', () => {
+  // {X}{R} -> X contributes nothing, only the R is recorded.
+  assert.deepEqual(R.parseManaCost('{X}{R}'), { generic: 0, R: 1 });
+});
+
+test('parseManaCost: hybrid mana captured under _hybrid', () => {
+  const cost = R.parseManaCost('{W/U}{W/U}');
+  assert.deepEqual(cost._hybrid, [['W', 'U'], ['W', 'U']]);
+});
+
+// ─────────────────────────────────────────────────────────────
+// Paying / deducting mana
+// ─────────────────────────────────────────────────────────────
+test('canPayManaCost: colored requirement enforced', () => {
+  const cost = R.parseManaCost('{2}{R}{R}'); // {generic:2, R:2}
+  assert.equal(R.canPayManaCost({ ...emptyPool(), R: 2, C: 2 }, cost), true);
+  assert.equal(R.canPayManaCost({ ...emptyPool(), R: 1, C: 3 }, cost), false, 'not enough R');
+  assert.equal(R.canPayManaCost({ ...emptyPool(), R: 2, C: 1 }, cost), false, 'not enough total for generic');
+});
+
+test('canPayManaCost: generic can be paid by any color', () => {
+  const cost = R.parseManaCost('{3}'); // generic 3
+  assert.equal(R.canPayManaCost({ ...emptyPool(), W: 1, U: 1, G: 1 }, cost), true);
+  assert.equal(R.canPayManaCost({ ...emptyPool(), W: 1, U: 1 }, cost), false);
+});
+
+test('deductManaCost: removes colored then generic from largest pool first', () => {
+  const cost = R.parseManaCost('{1}{R}'); // {generic:1, R:1}
+  const after = R.deductManaCost({ ...emptyPool(), R: 2, G: 1 }, cost);
+  // One R spent on the colored pip; the generic 1 comes from the largest
+  // remaining pool (R has 1 left, G has 1 -> ties resolve to R's position).
+  assert.equal(after.R + after.G, 1, 'exactly one mana left after paying {1}{R} from RRG');
+});
+
+// ─────────────────────────────────────────────────────────────
+// Spell effect parsing from oracle text  (the fragile regex engine)
+// These lock CURRENT behavior. Quirks are noted, not "fixed" here.
+// ─────────────────────────────────────────────────────────────
+test('parseSpellEffects: direct damage to any target', () => {
+  const bolt = { name: 'Lightning Bolt', type_line: 'Instant', oracle_text: 'Lightning Bolt deals 3 damage to any target.' };
+  assert.deepEqual(R.parseSpellEffects(bolt), [
+    { type: 'damage', amount: 3, targetDesc: 'any target', description: 'Deal 3 damage to any target' },
+  ]);
+});
+
+test('parseSpellEffects: destroy target creature', () => {
+  const murder = { name: 'Murder', type_line: 'Instant', oracle_text: 'Destroy target creature.' };
+  const fx = R.parseSpellEffects(murder);
+  assert.ok(fx.some(e => e.type === 'destroy' && e.targetType === 'creature'), JSON.stringify(fx));
+});
+
+test('parseSpellEffects: exile target creature', () => {
+  const path = { name: 'Path to Exile', type_line: 'Instant', oracle_text: 'Exile target creature.' };
+  const fx = R.parseSpellEffects(path);
+  assert.ok(fx.some(e => e.type === 'exile'), JSON.stringify(fx));
+});
+
+test('parseSpellEffects: draw cards', () => {
+  const div = { name: 'Divination', type_line: 'Sorcery', oracle_text: 'Draw two cards.' };
+  const fx = R.parseSpellEffects(div);
+  assert.ok(fx.some(e => e.type === 'draw'), JSON.stringify(fx));
+});
+
+test('parseSpellEffects: no-effect / vanilla card yields no parsed effects', () => {
+  const bear = { name: 'Grizzly Bears', type_line: 'Creature — Bear', oracle_text: '' };
+  assert.deepEqual(R.parseSpellEffects(bear), []);
+});
+
+// ─────────────────────────────────────────────────────────────
+// Card type predicates
+// ─────────────────────────────────────────────────────────────
+test('type predicates classify by type_line substring', () => {
+  const creature = { type_line: 'Creature — Goblin' };
+  const land = { type_line: 'Basic Land — Mountain' };
+  const instant = { type_line: 'Instant' };
+  const artifact = { type_line: 'Artifact' };
+  const ench = { type_line: 'Enchantment — Aura' };
+  const pw = { type_line: 'Legendary Planeswalker — Jace' };
+
+  assert.equal(R.isCreature(creature), true);
+  assert.equal(R.isLand(land), true);
+  assert.equal(R.isInstant(instant), true);
+  assert.equal(R.isArtifact(artifact), true);
+  assert.equal(R.isEnchantment(ench), true);
+  assert.equal(R.isPlaneswalker(pw), true);
+
+  // Cross-checks: a creature is not a land/instant
+  assert.equal(R.isLand(creature), false);
+  assert.equal(R.isInstant(creature), false);
+});
+
+test('type predicates: artifact creature is BOTH artifact and creature', () => {
+  const ac = { type_line: 'Artifact Creature — Golem' };
+  assert.equal(R.isArtifact(ac), true);
+  assert.equal(R.isCreature(ac), true);
+});
+
+// ─────────────────────────────────────────────────────────────
+// Arena decklist parsing
+// ─────────────────────────────────────────────────────────────
+test('parseArenaDecklist: qty + name, set, collector number', () => {
+  const list = [
+    '4 Lightning Bolt',
+    '4 Island (ZNR) 271',
+    '2 Mountain (ZNR)',
+  ].join('\n');
+  const entries = R.parseArenaDecklist(list);
+  assert.equal(entries.length, 3);
+  assert.deepEqual(entries[0], { qty: 4, name: 'Lightning Bolt', set: null, collectorNumber: null, reskin: null, inSideboard: false });
+  assert.deepEqual(entries[1], { qty: 4, name: 'Island', set: 'znr', collectorNumber: '271', reskin: null, inSideboard: false });
+  assert.deepEqual(entries[2], { qty: 2, name: 'Mountain', set: 'znr', collectorNumber: null, reskin: null, inSideboard: false });
+});
+
+test('parseArenaDecklist: comments and blank-only lines are skipped', () => {
+  const list = ['// my deck', '#notes', '3 Llanowar Elves'].join('\n');
+  const entries = R.parseArenaDecklist(list);
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0].name, 'Llanowar Elves');
+});
+
+test('parseArenaDecklist: reskin via ">>" splits name and custom fields', () => {
+  const entries = R.parseArenaDecklist('1 Goblin Token >> Pikachu|http://img/pika.png');
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0].name, 'Goblin Token');
+  assert.equal(entries[0].reskin.customName, 'Pikachu');
+  assert.equal(entries[0].reskin.customImage, 'http://img/pika.png');
+});
