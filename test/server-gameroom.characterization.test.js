@@ -261,6 +261,55 @@ test('gameWon: single match finishes immediately', () => {
   assert.equal(room.status, 'finished');
 });
 
+// ── Etape 3.1: server-authoritative state-based game-over ─────
+test('checkStateBasedGameOver: detects life <= 0, poison, commander damage', () => {
+  const room = startedRoom();
+  assert.equal(room.checkStateBasedGameOver(), null, 'healthy start: nobody has lost');
+
+  room.gameState.players[0].life = 0;
+  assert.deepEqual(room.checkStateBasedGameOver(), { loserIndex: 0, winnerIndex: 1, reason: 'reached 0 life' });
+
+  room.gameState.players[0].life = 20;
+  room.gameState.players[1].poison = 10;
+  assert.deepEqual(room.checkStateBasedGameOver(), { loserIndex: 1, winnerIndex: 0, reason: 'reached 10 poison counters' });
+
+  room.gameState.players[1].poison = 0;
+  room.gameState.players[0].commanderDamageReceived = { 1: 21 };
+  assert.deepEqual(room.checkStateBasedGameOver(), { loserIndex: 0, winnerIndex: 1, reason: 'took 21 commander damage' });
+});
+
+test('checkStateBasedGameOver: only while playing', () => {
+  const room = startedRoom();
+  room.gameState.players[0].life = 0;
+  room.status = 'finished';
+  assert.equal(room.checkStateBasedGameOver(), null);
+});
+
+test('processAction records stateBasedLoss after a lethal stateSync', () => {
+  const room = startedRoom();
+  // Either player may report public life (e.g. the attacker reports the defender's life).
+  room.processAction(1, { type: 'stateSync', state: { players: [{ life: 0 }, {}] } });
+  assert.deepEqual(room.gameState.stateBasedLoss, { loserIndex: 0, winnerIndex: 1, reason: 'reached 0 life' });
+  // And it is included in the broadcast state.
+  assert.deepEqual(room.getVisibleState(1).stateBasedLoss, { loserIndex: 0, winnerIndex: 1, reason: 'reached 0 life' });
+});
+
+test('gameWon: rejects a win claim that contradicts the server state', () => {
+  const room = startedRoom();
+  room.processAction(0, { type: 'stateSync', state: { players: [{ life: 0 }, {}] } }); // P0 is dead -> P1 wins
+  const bad = room.gameWon(0); // P0 falsely claims the win
+  assert.equal(bad.error, 'Win claim contradicts game state');
+  assert.equal(bad.authoritativeWinner, 1);
+  assert.equal(room.status, 'playing', 'rejected claim does not finish the game');
+  // The correct winner is accepted.
+  assert.deepEqual(room.gameWon(1), { matchOver: true, winner: 1 });
+});
+
+test('gameWon: still works normally when no state-based loss is recorded', () => {
+  const room = startedRoom();
+  assert.deepEqual(room.gameWon(0), { matchOver: true, winner: 0 });
+});
+
 test('gameWon: Bo3 needs two game wins', () => {
   const room = startedRoom({ matchType: 'bo3' });
   const r1 = room.gameWon(0);

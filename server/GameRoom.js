@@ -232,6 +232,13 @@ class GameRoom {
    */
   gameWon(winnerIndex) {
     if (winnerIndex < 0 || winnerIndex > 1) return { error: 'Invalid winner' };
+    // Server-authoritative guard (Etape 3.1): reject a win claim that
+    // contradicts the server's state-based truth — e.g. a client declaring it
+    // won while its OWN life is 0. Closes the "trust the client's gameWon" hole.
+    const sbl = this.gameState && this.gameState.stateBasedLoss;
+    if (sbl && sbl.winnerIndex !== winnerIndex) {
+      return { error: 'Win claim contradicts game state', authoritativeWinner: sbl.winnerIndex };
+    }
     this.lastGameWinnerIndex = winnerIndex;
     this.lastActivity = Date.now();
 
@@ -255,6 +262,36 @@ class GameRoom {
     this.status = 'between-games';
     const loserIndex = winnerIndex === 0 ? 1 : 0;
     return { matchOver: false, loser: loserIndex, nextGame: this.matchGame + 1, matchScore: [...this.matchScore] };
+  }
+
+  /**
+   * Server-authoritative state-based game-over check (Etape 3.1).
+   * Scans the authoritative (synced) life / poison / commander-damage and
+   * returns { loserIndex, winnerIndex, reason } for the first player that has
+   * lost, or null if nobody has. Pure read — does not mutate state.
+   */
+  checkStateBasedGameOver() {
+    if (!this.gameState || this.status !== 'playing') return null;
+    const POISON_LETHAL = 10;
+    const COMMANDER_LETHAL = 21;
+    for (let i = 0; i < 2; i++) {
+      const p = this.gameState.players[i];
+      if (!p) continue;
+      const winnerIndex = i === 0 ? 1 : 0;
+      if (typeof p.life === 'number' && p.life <= 0) {
+        return { loserIndex: i, winnerIndex, reason: `reached ${p.life} life` };
+      }
+      if (typeof p.poison === 'number' && p.poison >= POISON_LETHAL) {
+        return { loserIndex: i, winnerIndex, reason: `reached ${p.poison} poison counters` };
+      }
+      const cmd = p.commanderDamageReceived || {};
+      for (const dmg of Object.values(cmd)) {
+        if (typeof dmg === 'number' && dmg >= COMMANDER_LETHAL) {
+          return { loserIndex: i, winnerIndex, reason: `took ${dmg} commander damage` };
+        }
+      }
+    }
+    return null;
   }
 
   /**
@@ -591,6 +628,14 @@ class GameRoom {
       if (!owner[zone]) return { error: 'Invalid zone' };
       owner[zone].push(card);
       this.gameState.timestamp = Date.now();
+    }
+
+    // Server-authoritative state-based game-over (Etape 3.1): recompute after
+    // any action that may have changed life/poison and record it on gameState
+    // so it is broadcast to both clients (via getVisibleState's deep clone) and
+    // used to validate gameWon() claims.
+    if (this.gameState) {
+      this.gameState.stateBasedLoss = this.checkStateBasedGameOver();
     }
 
     // Log the action
