@@ -734,6 +734,50 @@ async function testMultipleRooms() {
 // MAIN
 // ═══════════════════════════════════════════════════
 
+async function testStateBasedGameOver() {
+  section('State-Based Game-Over (Etape 3.1)');
+
+  const roomData = await createRoom('Alice');
+  const s1 = createSocket();
+  const s2 = createSocket();
+  await Promise.all([
+    new Promise(r => s1.on('connect', r)),
+    new Promise(r => s2.on('connect', r)),
+  ]);
+  await emitCb(s1, 'joinGame', { roomId: roomData.roomId, nickname: 'Alice' });
+  await emitCb(s2, 'joinGame', { roomId: roomData.roomId, nickname: 'Bob' });
+
+  const p1Start = waitForEvent(s1, 'gameStart');
+  const p2Start = waitForEvent(s2, 'gameStart');
+  await emitCb(s1, 'submitDeck', { deck: createTestDeck() });
+  await emitCb(s2, 'submitDeck', { deck: createTestDeck() });
+  const gs1 = await p1Start;
+  await p2Start;
+
+  // Player 0 takes lethal damage (reports own life = 0; life is public state).
+  const p2SeesUpdate = waitForEvent(s2, 'stateUpdate');
+  await emitCb(s1, 'gameAction', {
+    action: { type: 'stateSync', state: { players: [{ life: 0 }, {}], activePlayer: gs1.state.activePlayer, currentPhase: 'main1', turnNumber: 1 } },
+  });
+  const update = await p2SeesUpdate;
+  assert(update.state.stateBasedLoss && update.state.stateBasedLoss.loserIndex === 0 && update.state.stateBasedLoss.winnerIndex === 1,
+    'broadcast carries authoritative stateBasedLoss (P0 lost, P1 wins)');
+  console.log('  ✓ Server broadcast carries stateBasedLoss: P0 lost → P1 wins');
+
+  // The losing player falsely claims the win → server rejects it.
+  const badClaim = await emitCb(s1, 'gameWon', { winnerIndex: 0 });
+  assert(badClaim && badClaim.error, 'false win claim by the dead player must be rejected');
+  console.log(`  ✓ False win claim rejected: ${badClaim.error}`);
+
+  // The correct winner is accepted.
+  const goodClaim = await emitCb(s2, 'gameWon', { winnerIndex: 1 });
+  assert(goodClaim && goodClaim.ok && goodClaim.winner === 1, 'correct winner (P1) must be accepted');
+  console.log('  ✓ Correct winner (P1) accepted');
+
+  s1.disconnect();
+  s2.disconnect();
+}
+
 async function main() {
   console.log('═══════════════════════════════════════');
   console.log('  Tap & Go — Integration Test Suite');
@@ -754,6 +798,7 @@ async function main() {
     await testReconnection();
     await testCombatDamageSync();
     await testMultipleRooms();
+    await testStateBasedGameOver();
   } catch (err) {
     console.error(`\n✗ FATAL ERROR: ${err.message}`);
     console.error(err.stack);
