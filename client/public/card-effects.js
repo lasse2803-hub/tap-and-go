@@ -30,10 +30,10 @@
 (function (root) {
   'use strict';
 
-  const parseSpellEffects =
-    (typeof module !== 'undefined' && module.exports)
-      ? require('./rules-core.js').parseSpellEffects
-      : root.parseSpellEffects;
+  const _rc = (typeof module !== 'undefined' && module.exports) ? require('./rules-core.js') : root;
+  const parseSpellEffects = _rc.parseSpellEffects;
+  const parseETBEffects = _rc.parseETBEffects;
+  const parsePlaneswalkerAbilities = _rc.parsePlaneswalkerAbilities;
 
   // Real Scryfall card name -> effect-object array (resolver schema).
   const CARD_EFFECTS = {
@@ -94,12 +94,54 @@
     return parseSpellEffects(card);
   }
 
-  const api = { getCardEffects, CARD_EFFECTS };
+  // ── Creature/permanent ETB triggers (reminder schema: {icon,text,actionType?}) ──
+  // Seeded verbatim from parseETBEffects for preset permanents (zero behavior change).
+  const ETB_EFFECTS = {
+    "Skyclave Apparition": [{"icon":"✦","text":"Create token(s)"}],
+    "Extraction Specialist": [{"icon":"⚡","text":"when this creature enters, return target creature card with mana value 2 or less"}],
+    "Portable Hole": [{"icon":"🚫","text":"Exile target permanent"}],
+    "Geralf's Messenger": [{"icon":"💀","text":"Target opponent loses 2 life"},{"icon":"⬆","text":"Put +1/+1 counter(s)"}],
+    "Gray Merchant of Asphodel": [{"icon":"⚡","text":"when this creature enters, each opponent loses x life, where x is your devotion "}],
+    "Viashino Pyromancer": [{"icon":"🔥","text":"Deal 2 damage to target player or planeswalker","actionType":"etb_damage_player_pw","damage":2}],
+    "Omen of the Sea": [{"icon":"📘","text":"Draw a card(s)"},{"icon":"🔮","text":"Scry"}],
+  };
+  function getETBEffects(card) {
+    if (!card) return [];
+    if (card.name && Object.prototype.hasOwnProperty.call(ETB_EFFECTS, card.name)) {
+      return JSON.parse(JSON.stringify(ETB_EFFECTS[card.name]));
+    }
+    return parseETBEffects(card);
+  }
+
+  // ── Planeswalker loyalty abilities (schema: [{cost,text}]) ──
+  // Seeded verbatim from parsePlaneswalkerAbilities for preset planeswalkers.
+  const PW_ABILITIES = {
+    "The Wandering Emperor": [{"cost":"+1","text":"Put a +1/+1 counter on up to one target creature. It gains first strike until end of turn."},{"cost":"-1","text":"Create a 2/2 white Samurai creature token with vigilance."},{"cost":"-2","text":"Exile target tapped creature. You gain 2 life."}],
+    "Liliana, the Necromancer": [{"cost":"+1","text":"Target player loses 2 life."},{"cost":"-1","text":"Return target creature card from your graveyard to your hand."},{"cost":"-7","text":"Destroy up to two target creatures. Put up to two creature cards from graveyards onto the battlefield under your control."}],
+    "Garruk, Unleashed": [{"cost":"+1","text":"Up to one target creature gets +3/+3 and gains trample until end of turn."},{"cost":"-2","text":"Create a 3/3 green Beast creature token. Then if an opponent controls more creatures than you, put a loyalty counter on Garruk."},{"cost":"-7","text":"You get an emblem with \"At the beginning of your end step, you may search your library for a creature card, put it onto the battlefield, then shuffle.\""}],
+    "Jace, Architect of Thought": [{"cost":"+1","text":"Until your next turn, whenever a creature an opponent controls attacks, it gets -1/-0 until end of turn."},{"cost":"-2","text":"Reveal the top three cards of your library. An opponent separates those cards into two piles. Put one pile into your hand and the other on the bottom of your library in any order."},{"cost":"-8","text":"For each player, search that player's library for a nonland card and exile it, then that player shuffles. You may cast those cards without paying their mana costs."}],
+    "Teferi, Hero of Dominaria": [{"cost":"+1","text":"Draw a card. At the beginning of the next end step, untap up to two lands."},{"cost":"-3","text":"Put target nonland permanent into its owner's library third from the top."},{"cost":"-8","text":"You get an emblem with \"Whenever you draw a card, exile target permanent an opponent controls.\""}],
+    "Teferi, Time Raveler": [{"cost":"+1","text":"Until your next turn, you may cast sorcery spells as though they had flash."},{"cost":"-3","text":"Return up to one target artifact, creature, or enchantment to its owner's hand. Draw a card."}],
+    "Elspeth, Sun's Champion": [{"cost":"+1","text":"Create three 1/1 white Soldier creature tokens."},{"cost":"-3","text":"Destroy all creatures with power 4 or greater."},{"cost":"-7","text":"You get an emblem with \"Creatures you control get +2/+2 and have flying.\""}],
+  };
+  function getPlaneswalkerAbilities(card) {
+    if (!card) return [];
+    if (card.name && Object.prototype.hasOwnProperty.call(PW_ABILITIES, card.name)) {
+      return JSON.parse(JSON.stringify(PW_ABILITIES[card.name]));
+    }
+    return parsePlaneswalkerAbilities(card);
+  }
+
+  const api = { getCardEffects, CARD_EFFECTS, getETBEffects, ETB_EFFECTS, getPlaneswalkerAbilities, PW_ABILITIES };
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = api;
   }
   if (typeof root !== 'undefined') {
     root.getCardEffects = getCardEffects;
     root.CARD_EFFECTS = CARD_EFFECTS;
+    root.getETBEffects = getETBEffects;
+    root.ETB_EFFECTS = ETB_EFFECTS;
+    root.getPlaneswalkerAbilities = getPlaneswalkerAbilities;
+    root.PW_ABILITIES = PW_ABILITIES;
   }
 })(typeof globalThis !== 'undefined' ? globalThis : this);

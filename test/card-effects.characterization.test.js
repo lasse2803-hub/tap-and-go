@@ -14,7 +14,11 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 
-const { getCardEffects, CARD_EFFECTS } = require('../client/public/card-effects.js');
+const {
+  getCardEffects, CARD_EFFECTS,
+  getETBEffects, ETB_EFFECTS,
+  getPlaneswalkerAbilities, PW_ABILITIES,
+} = require('../client/public/card-effects.js');
 
 test('registry hit: a seeded card returns its explicit effect data', () => {
   // Lightning Strike is a preset card and is seeded in the registry.
@@ -62,6 +66,35 @@ test('fix: Get Lost can target creature, enchantment, or planeswalker', () => {
 test('empty / missing input returns an empty effect list', () => {
   assert.deepEqual(getCardEffects(null), []);
   assert.deepEqual(getCardEffects({ name: 'Grizzly Bears', type_line: 'Creature — Bear', oracle_text: '' }), []);
+});
+
+// ── ETB dispatcher ────────────────────────────────────────────
+test('getETBEffects: registry hit returns seeded ETB reminder (clone)', () => {
+  assert.ok(ETB_EFFECTS['Viashino Pyromancer'], 'Viashino seeded');
+  const fx = getETBEffects({ name: 'Viashino Pyromancer' });
+  assert.deepEqual(fx, ETB_EFFECTS['Viashino Pyromancer']);
+  fx.push({ icon: 'x' });
+  assert.equal(getETBEffects({ name: 'Viashino Pyromancer' }).length, ETB_EFFECTS['Viashino Pyromancer'].length, 'clone safety');
+});
+
+test('getETBEffects: unknown card falls back to parseETBEffects', () => {
+  const fx = getETBEffects({ name: 'Nobody', oracle_text: 'When Nobody enters, gain 3 life.' });
+  assert.ok(fx.some(e => /gain 3 life/i.test(e.text)), JSON.stringify(fx));
+});
+
+// ── Planeswalker ability dispatcher ───────────────────────────
+test('getPlaneswalkerAbilities: registry hit returns seeded ability list (clone)', () => {
+  assert.ok(PW_ABILITIES["Elspeth, Sun's Champion"], 'Elspeth seeded');
+  const ab = getPlaneswalkerAbilities({ name: "Elspeth, Sun's Champion" });
+  assert.deepEqual(ab, PW_ABILITIES["Elspeth, Sun's Champion"]);
+  assert.equal(ab[0].cost, '+1');
+  ab.pop();
+  assert.equal(getPlaneswalkerAbilities({ name: "Elspeth, Sun's Champion" }).length, PW_ABILITIES["Elspeth, Sun's Champion"].length, 'clone safety');
+});
+
+test('getPlaneswalkerAbilities: unknown PW falls back to the parser', () => {
+  const ab = getPlaneswalkerAbilities({ name: 'Made Up Walker', type_line: 'Planeswalker', oracle_text: '[+2]: Draw a card.' });
+  assert.deepEqual(ab, [{ cost: '+2', text: 'Draw a card.' }]);
 });
 
 test('registry is keyed by real Scryfall name (reskins keep card.name)', () => {

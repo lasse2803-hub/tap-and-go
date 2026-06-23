@@ -6230,7 +6230,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         // Planeswalker abilities
         if (isPlaneswalker(card)) {
           actions.push({ sep: true });
-          const pwAbilities = parsePlaneswalkerAbilities(card);
+          const pwAbilities = getPlaneswalkerAbilities(card);
           const currentLoyalty = (card.counters && card.counters['loyalty']) || 0;
           actions.push({ label: `💎 Loyalty: ${currentLoyalty}`, fn: () => {} });
           if (pwAbilities.length > 0) {
@@ -7916,7 +7916,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     const resolveFromZone = fromExile ? 'exile' : 'hand';
     moveCard(pIdx, card, resolveFromZone, 'battlefield');
     // NOTE: moveCard already plays the appropriate SFX (planeswalkerEnters, playCreature, etc.)
-    const etbEffects = parseETBEffects(card);
+    const etbEffects = getETBEffects(card);
 
     // Check battlefield for "whenever another creature enters" triggers (Purphoros, Soul Warden, etc.)
     if (isCreature(card)) {
@@ -11618,7 +11618,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                       // Trigger ETB for each
                       chosenCards.forEach((c, i) => {
                         setTimeout(() => {
-                          const etbFx = parseETBEffects(c);
+                          const etbFx = getETBEffects(c);
                           if (isCreature(c)) etbFx.push(...scanOtherCreatureETBTriggers(ltPIdx, c));
                           if (etbFx.length > 0) setEtbReminder({ pIdx: ltPIdx, card: c, effects: etbFx });
                         }, 200 + i * 500);
@@ -11649,7 +11649,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                     // Trigger ETB for each card entering (including other-creature-ETB triggers)
                     chosenCards.forEach((c, i) => {
                       setTimeout(() => {
-                        const etbFx = parseETBEffects(c);
+                        const etbFx = getETBEffects(c);
                         if (isCreature(c)) etbFx.push(...scanOtherCreatureETBTriggers(ltPIdx, c));
                         if (etbFx.length > 0) setEtbReminder({ pIdx: ltPIdx, card: c, effects: etbFx });
                       }, 200 + i * 500);
