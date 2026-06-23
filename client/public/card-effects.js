@@ -16,11 +16,11 @@
  * behavior is identical to before for these cards — the win is that the effects
  * are now explicit, editable, and decoupled from the regex engine.
  *
- * KNOWN INACCURACIES to fix later as simple data edits (surfaced during seeding):
- *   - "Fateful Absence": "investigate" is approximated as draw 1 (Clue token not modeled).
- *   - "Get Lost": targetType is 'creature' only; can't target enchantment/planeswalker.
- *   - "Farewell": the 'graveyards' choice is missing from categories.
- *   - "Fading Hope": scry 1 is applied unconditionally (should require target mv <= 3).
+ * KNOWN INACCURACIES (data edits — some now FIXED here, others remain as TODO):
+ *   - "Get Lost": FIXED — targetType widened to creature/enchantment/planeswalker.
+ *   - "Farewell": FIXED — 'graveyards' category restored.
+ *   - "Fateful Absence": "investigate" is approximated as draw 1 (Clue token not modeled). TODO.
+ *   - "Fading Hope": scry 1 is applied unconditionally (should require target mv <= 3). TODO.
  *
  * Dual environment:
  *   - Browser: loaded as a classic <script> AFTER rules-core.js and BEFORE the
@@ -54,7 +54,8 @@
     // This spell can't be countered. Destroy all creatures.
     "Supreme Verdict": [{"type":"board_wipe","subtype":"destroy_all","description":"Destroy all creatures"}],
     // Choose one or more — • Exile all artifacts. • Exile all creatures. • Exile all enchantments. • Exile all graveyards.
-    "Farewell": [{"type":"farewell","categories":["artifacts","creatures","enchantments"],"description":"Choose: exile artifacts, creatures, enchantments"}],
+    // FIX (Etape 2 expand): added 'graveyards' — the regex parser dropped it; executeFarewellChoice() supports it.
+    "Farewell": [{"type":"farewell","categories":["artifacts","creatures","enchantments","graveyards"],"description":"Choose: exile artifacts, creatures, enchantments, graveyards"}],
     // Target player reveals their hand. You choose a nonland card from it. That player discards that card. You lose 2 life.
     "Thoughtseize": [{"type":"discard","description":"Target opponent discards"},{"type":"lose_life","amount":2,"description":"You lose 2 life"}],
     // Destroy target creature if it has mana value 2 or less. Revolt — Destroy that creature if it has mana value 4 or less instead if a permanent left the battlefiel
@@ -66,7 +67,8 @@
     // Destroy target creature or planeswalker. Its controller investigates. (Create a Clue token. It's an artifact with "{2}, Sacrifice this token: Draw a card.")
     "Fateful Absence": [{"type":"destroy","targetType":"creature or planeswalker","description":"Destroy target creature or planeswalker"},{"type":"draw","amount":1,"description":"Draw 1 card"}],
     // Destroy target creature, enchantment, or planeswalker. Its controller creates two Map tokens. (They're artifacts with "{1}, {T}, Sacrifice this token: Target cr
-    "Get Lost": [{"type":"destroy","targetType":"creature","description":"Destroy target creature"}],
+    // FIX (Etape 2 expand): widened targetType so the targeting UI allows enchantments/planeswalkers (parser narrowed it to 'creature').
+    "Get Lost": [{"type":"destroy","targetType":"creature, enchantment, or planeswalker","description":"Destroy target creature, enchantment, or planeswalker"}],
     // Look at the top six cards of your library. Put up to two creature cards with mana value 3 or less from among them onto the battlefield. Put the rest on the bott
     "Collected Company": [{"type":"look_top_battlefield","count":6,"toField":2,"selectFilter":{"type":"creature","maxMV":3},"description":"Look at top 6, put 2 onto battlefield"}],
     // Prevent all combat damage that would be dealt this turn. Each attacking creature doesn't untap during its controller's next untap step.

@@ -42,6 +42,23 @@ test('clone safety: mutating the returned effects does not corrupt the registry'
   assert.equal(b[0].amount, 3, 'registry value intact');
 });
 
+test('fix: Farewell includes the graveyards category', () => {
+  const fx = getCardEffects({ name: 'Farewell' });
+  const farewell = fx.find(e => e.type === 'farewell');
+  assert.ok(farewell, 'has a farewell effect');
+  assert.deepEqual(farewell.categories, ['artifacts', 'creatures', 'enchantments', 'graveyards']);
+});
+
+test('fix: Get Lost can target creature, enchantment, or planeswalker', () => {
+  const fx = getCardEffects({ name: 'Get Lost' });
+  const destroy = fx.find(e => e.type === 'destroy');
+  assert.ok(destroy, 'has a destroy effect');
+  // targetType is matched by substring in the targeting UI (getLegalTargetTypes).
+  assert.match(destroy.targetType, /creature/);
+  assert.match(destroy.targetType, /enchantment/);
+  assert.match(destroy.targetType, /planeswalker/);
+});
+
 test('empty / missing input returns an empty effect list', () => {
   assert.deepEqual(getCardEffects(null), []);
   assert.deepEqual(getCardEffects({ name: 'Grizzly Bears', type_line: 'Creature — Bear', oracle_text: '' }), []);
