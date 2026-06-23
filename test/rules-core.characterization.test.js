@@ -164,3 +164,62 @@ test('parseArenaDecklist: reskin via ">>" splits name and custom fields', () => 
   assert.equal(entries[0].reskin.customName, 'Pikachu');
   assert.equal(entries[0].reskin.customImage, 'http://img/pika.png');
 });
+
+// ─────────────────────────────────────────────────────────────
+// getOracleText — combines main + faces, lowercased
+// ─────────────────────────────────────────────────────────────
+test('getOracleText: joins main + card_faces oracle, lowercased', () => {
+  assert.equal(R.getOracleText({ oracle_text: 'Flying' }), 'flying');
+  assert.equal(
+    R.getOracleText({ oracle_text: 'CreatureA', card_faces: [{ oracle_text: 'FaceB' }, { oracle_text: 'FaceC' }] }),
+    'creaturea\nfaceb\nfacec',
+  );
+  assert.equal(R.getOracleText({}), '');
+});
+
+// ─────────────────────────────────────────────────────────────
+// parsePlaneswalkerAbilities — loyalty ability list
+// ─────────────────────────────────────────────────────────────
+test('parsePlaneswalkerAbilities: bracketed loyalty costs', () => {
+  const abilities = R.parsePlaneswalkerAbilities({
+    type_line: 'Planeswalker',
+    oracle_text: '[+1]: Draw a card.\n[-2]: Create a 3/3 Beast.\n[-7]: You win.',
+  });
+  assert.deepEqual(abilities, [
+    { cost: '+1', text: 'Draw a card.' },
+    { cost: '-2', text: 'Create a 3/3 Beast.' },
+    { cost: '-7', text: 'You win.' },
+  ]);
+});
+
+test('parsePlaneswalkerAbilities: no-bracket fallback + unicode minus normalized', () => {
+  const abilities = R.parsePlaneswalkerAbilities({
+    type_line: 'Planeswalker',
+    oracle_text: '+1: Gain 2 life.\n−2: Deal 3 damage.',
+  });
+  assert.deepEqual(abilities, [
+    { cost: '+1', text: 'Gain 2 life.' },
+    { cost: '-2', text: 'Deal 3 damage.' },
+  ]);
+});
+
+// ─────────────────────────────────────────────────────────────
+// parseETBEffects — reminder objects ({icon,text,actionType?})
+// ─────────────────────────────────────────────────────────────
+test('parseETBEffects: damage to target player or planeswalker is auto-resolvable', () => {
+  const fx = R.parseETBEffects({ name: 'Viashino Pyromancer', oracle_text: 'When this creature enters, it deals 2 damage to target player or planeswalker.' });
+  assert.deepEqual(fx, [
+    { icon: '🔥', text: 'Deal 2 damage to target player or planeswalker', actionType: 'etb_damage_player_pw', damage: 2 },
+  ]);
+});
+
+test('parseETBEffects: target opponent loses life', () => {
+  const fx = R.parseETBEffects({ name: "Geralf's Messenger", oracle_text: 'This creature enters tapped. When this creature enters, target opponent loses 2 life.' });
+  assert.ok(fx.some(e => /loses 2 life/.test(e.text)), JSON.stringify(fx));
+  // Importantly NOT parsed as a discard (the spell parser's mistake).
+  assert.ok(!fx.some(e => /discard/i.test(e.text)), JSON.stringify(fx));
+});
+
+test('parseETBEffects: returns [] for a card with no ETB trigger', () => {
+  assert.deepEqual(R.parseETBEffects({ name: 'Grizzly Bears', oracle_text: '' }), []);
+});

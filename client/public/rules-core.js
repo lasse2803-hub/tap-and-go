@@ -495,6 +495,154 @@
 
   const isPlaneswalker = (card) => card.type_line && card.type_line.toLowerCase().includes('planeswalker');
 
+
+  // ── getOracleText (moved from index.html) ──
+  const getOracleText = (card) => {
+    const main = card.oracle_text || '';
+    const faces = (card.card_faces || []).map(f => f.oracle_text || '');
+    return [main, ...faces].filter(Boolean).join('\n').toLowerCase();
+  };
+
+  // ── parsePlaneswalkerAbilities (moved from index.html) ──
+  const parsePlaneswalkerAbilities = (card) => {
+    const oracle = card.oracle_text || '';
+    const faces = card.card_faces || [];
+    const allText = [oracle, ...faces.map(f => f.oracle_text || '')].filter(Boolean).join('\n');
+    const abilities = [];
+    // Try format 1: with brackets [+1]:, [-2]:, [0]:, [−6]:
+    const bracketRegex = /\[([+\-\u2212]?\d+)\]:\s*([^\n]+(?:\n(?!\[)[^\n]*)*)/g;
+    let match;
+    while ((match = bracketRegex.exec(allText)) !== null) {
+      const cost = match[1].replace('\u2212', '-'); // normalize unicode minus
+      const text = match[2].trim();
+      abilities.push({ cost, text });
+    }
+    // Fallback format 2: without brackets — +1:, −2:, 0: (Scryfall sometimes omits brackets)
+    if (abilities.length === 0) {
+      const noBracketRegex = /(?:^|\n)([+\-\u2212]\d+|0):\s*([^\n]+(?:\n(?![+\-\u2212]\d+:|0:|\[)[^\n]*)*)/g;
+      while ((match = noBracketRegex.exec(allText)) !== null) {
+        const cost = match[1].replace('\u2212', '-');
+        const text = match[2].trim();
+        abilities.push({ cost, text });
+      }
+    }
+    if (abilities.length === 0 && isPlaneswalker(card)) {
+      console.warn('PW ability parse failed for:', card.name, 'oracle:', allText.substring(0, 200));
+    }
+    return abilities;
+  };
+
+  // ── parseETBEffects (moved from index.html) ──
+  const parseETBEffects = (card) => {
+      const allText = getOracleText(card);
+      if (!allText.includes('enters the battlefield') && !allText.includes('enters, ')) return [];
+      // Extract the ETB sentence(s) AND their immediate continuation sentences.
+      // Some cards split ETB effects across multiple sentences:
+      //   e.g. Seasoned Pyromancer: "When ~ enters the battlefield, discard two cards, then draw two cards.
+      //         For each nonland card discarded this way, create a 1/1 red Elemental creature token."
+      // The second sentence is a continuation of the ETB effect but doesn't contain "enters".
+      // Strategy: include ETB sentences + the sentence immediately following each ETB sentence.
+      const sentences = allText.split(/(?<=\.)\s+|\n/);
+      const etbIndices = new Set();
+      sentences.forEach((s, i) => {
+        if (/enters the battlefield|enters,/.test(s)) {
+          etbIndices.add(i);
+          // Include the next sentence as a continuation (for multi-sentence ETB effects)
+          if (i + 1 < sentences.length) etbIndices.add(i + 1);
+        }
+      });
+      if (etbIndices.size === 0) return [];
+      const etbText = [...etbIndices].sort((a, b) => a - b).map(i => sentences[i]).join(' ');
+      const effects = [];
+      // Damage to target player or planeswalker (Viashino Pyromancer)
+      const dmgPlayerPWMatch = etbText.match(/enters.*(?:deals?|it deals) (\d+) damage to target (player or planeswalker|opponent or planeswalker)/);
+      if (dmgPlayerPWMatch) {
+        effects.push({ icon: '🔥', text: `Deal ${dmgPlayerPWMatch[1]} damage to target ${dmgPlayerPWMatch[2]}`, actionType: 'etb_damage_player_pw', damage: parseInt(dmgPlayerPWMatch[1]) });
+      }
+      // Damage to opponent/player (generic)
+      const dmgMatch = !dmgPlayerPWMatch && etbText.match(/enters.*(?:deals?|it deals) (\d+) damage to (?:target )?(opponent|player|each opponent|any target)/);
+      if (dmgMatch) effects.push({ icon: '🔥', text: `Deal ${dmgMatch[1]} damage to ${dmgMatch[2]}` });
+      // Opponent loses life
+      const loseLifeMatch = etbText.match(/enters.*(?:target )?(?:opponent|player) loses (\d+) life/);
+      if (loseLifeMatch) effects.push({ icon: '💀', text: `Target opponent loses ${loseLifeMatch[1]} life` });
+      // Each opponent loses life (Gary-style)
+      const eachLoseMatch = etbText.match(/enters.*each opponent loses (?:life equal to|(\d+) life)/);
+      if (eachLoseMatch) effects.push({ icon: '💀', text: eachLoseMatch[1] ? `Each opponent loses ${eachLoseMatch[1]} life` : 'Each opponent loses life equal to devotion' });
+      // Gain life
+      const lifeMatch = etbText.match(/enters.*gain (\d+) life/);
+      if (lifeMatch) effects.push({ icon: '💚', text: `Gain ${lifeMatch[1]} life` });
+      // Draw cards
+      const drawMatch = etbText.match(/enters.*draw (\w+|\d+) cards?/);
+      if (drawMatch) effects.push({ icon: '📘', text: `Draw ${drawMatch[1]} card(s)` });
+      // Destroy/exile target
+      if (/enters.*destroy target/.test(etbText)) effects.push({ icon: '💀', text: 'Destroy target permanent' });
+      if (/enters.*exile target/.test(etbText)) effects.push({ icon: '🚫', text: 'Exile target permanent' });
+      // Return to hand (bounce)
+      if (/enters.*return target.*to.*hand/.test(etbText)) effects.push({ icon: '🤚', text: 'Return target to hand' });
+      if (/enters.*return up to \w+ target.*to.*hand/.test(etbText)) effects.push({ icon: '🤚', text: 'Return target(s) to hand' });
+      // +1/+1 counters
+      if (/enters.*\+1\/\+1 counter/.test(etbText)) effects.push({ icon: '⬆', text: 'Put +1/+1 counter(s)' });
+      // Create token — match both "enters...create" and continuation sentences like "create a X/Y ... creature token"
+      if (/create/.test(etbText)) {
+        const tokenMatch = etbText.match(/create (\w+) (\d+)\/(\d+) (\w[\w ]*?) creature token/);
+        if (tokenMatch) {
+          const qty = tokenMatch[1] === 'a' ? 1 : tokenMatch[1] === 'two' ? 2 : tokenMatch[1] === 'three' ? 3 : parseInt(tokenMatch[1]) || 1;
+          const tPower = tokenMatch[2];
+          const tToughness = tokenMatch[3];
+          const tDesc = tokenMatch[4].trim();
+          const colorMap = { 'white': 'W', 'blue': 'U', 'black': 'B', 'red': 'R', 'green': 'G' };
+          const tColors = [];
+          for (const [cName, cCode] of Object.entries(colorMap)) {
+            if (tDesc.toLowerCase().includes(cName)) tColors.push(cCode);
+          }
+          const typeWords = tDesc.replace(/white|blue|black|red|green|and/gi, '').trim().split(/\s+/).filter(Boolean);
+          const tokenTypeName = typeWords.map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ') || 'Token';
+          // Extract oracle text from "with ..." clause
+          const withMatch = etbText.match(/creature token with ['\u2018\u2019""]([^'"\u2018\u2019""]+)['\u2018\u2019""]/);
+          const tokenOracle = withMatch ? withMatch[1] : '';
+          effects.push({
+            icon: '✦', text: `Create ${qty > 1 ? qty + 'x ' : ''}${tPower}/${tToughness} ${tokenTypeName} token(s)`,
+            actionType: 'create_token', tokenQty: qty, tokenPower: tPower, tokenToughness: tToughness,
+            tokenName: tokenTypeName, tokenColors: tColors, tokenOracle,
+            tokenTypeLine: `Token Creature — ${tokenTypeName}`,
+          });
+        } else {
+          effects.push({ icon: '✦', text: 'Create token(s)' });
+        }
+      }
+      // Search library for land (Solemn Simulacrum, Farhaven Elf, etc.)
+      if (/enters.*search your library for a basic land/i.test(etbText)) {
+        const tapped = /tapped/.test(etbText);
+        effects.push({ icon: '🔍', text: `Search library for a basic land${tapped ? ' (tapped)' : ''}`, actionType: 'search_basic_land', tapped });
+      } else if (/enters.*search your library for a land/i.test(etbText)) {
+        const tapped = /tapped/.test(etbText);
+        effects.push({ icon: '🔍', text: `Search library for a land${tapped ? ' (tapped)' : ''}`, actionType: 'search_land', tapped });
+      }
+      // Discard
+      if (/enters.*discard/.test(etbText)) effects.push({ icon: '🗑', text: 'Target discards' });
+      // Scry/surveil
+      if (/enters.*scry (\d+)/.test(etbText)) effects.push({ icon: '🔮', text: 'Scry' });
+      // Name-based fallback for known ETB token creators (in case regex doesn't capture them)
+      const cardName = (card.name || '').toLowerCase();
+      const hasTokenEffect = effects.some(e => e.actionType === 'create_token');
+      if (!hasTokenEffect) {
+        if (cardName === 'seasoned pyromancer') {
+          effects.push({
+            icon: '\u2726', text: 'Discard 2, draw 2. Create 1/1 Elemental for each nonland discarded',
+            actionType: 'create_token', tokenQty: 2, tokenPower: '1', tokenToughness: '1',
+            tokenName: 'Elemental', tokenColors: ['R'], tokenOracle: '',
+            tokenTypeLine: 'Token Creature \u2014 Elemental',
+          });
+        }
+      }
+      // Generic ETB — if none matched but it mentions "enters the battlefield"
+      if (effects.length === 0 && (etbText.includes('enters the battlefield') || etbText.includes('enters, '))) {
+        // Extract a short snippet of the ETB ability
+        const etbMatch = etbText.match(/(when.*?enters.*?(?:\.|$))/);
+        if (etbMatch) effects.push({ icon: '\u26a1', text: etbMatch[1].slice(0, 80) });
+      }
+      return effects;
+    };
   const api = {
     parseManaCost,
     canPayManaCost,
@@ -507,6 +655,9 @@
     isArtifact,
     isEnchantment,
     isPlaneswalker,
+    getOracleText,
+    parsePlaneswalkerAbilities,
+    parseETBEffects,
   };
 
   if (typeof module !== 'undefined' && module.exports) {
