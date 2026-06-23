@@ -17,9 +17,9 @@ That runs every `*.test.js` file in `test/` via Node's built-in test runner
 
 | File | What it pins | How it reaches the code |
 |------|--------------|-------------------------|
-| `rules-core.characterization.test.js` | Pure client rules: mana parsing/payment, `parseSpellEffects` (the regex effect parser), card-type predicates, Arena decklist parsing | Extracts the **real source** of these functions out of `client/public/index.html` and runs it (see `helpers/extract-fn.js`). No copy-paste. |
+| `rules-core.characterization.test.js` | Pure rules: mana parsing/payment, `parseSpellEffects` (the regex effect parser), card-type predicates, Arena decklist parsing | `require('../client/public/rules-core.js')` directly (a real module since Etape 1). |
 | `server-gameroom.characterization.test.js` | Server state: deal/startGame, information hiding, the `stateSync` merge rules (incl. current desync guards), and the server-authoritative actions (bounce / discard / mill / mulligan / returnToOwnerZone) + Bo3 scoring | `require('../server/GameRoom.js')` directly. |
-| `helpers/extract-fn.js` | The seam: a tiny JS lexer that pulls a named `const NAME = …;` declaration out of `index.html` and evaluates it in the current realm | — |
+| `helpers/extract-fn.js` | A reusable seam: a tiny JS lexer that pulls a named `const NAME = …;` declaration out of `index.html` and evaluates it in the current realm | Not used by the active tests anymore (see below). Kept for extracting more functions in later steps. |
 
 These are **characterization tests**: they assert what the code does *today*,
 including a couple of known quirks (documented inline, e.g. mulligan's `newCount`
@@ -27,17 +27,20 @@ is the number of cards put back, not the resulting hand size). If a refactor
 changes one of these behaviors **on purpose**, update the assertion in the same
 commit and say why. A surprise failure means the refactor broke something.
 
-### The seam, and what happens in Etape 1
+### How Etape 1 used the seam (and why it's kept)
 
-The client rules engine currently lives inside the 16k-line `index.html` as
-browser-transpiled (Babel) JSX, so it can't be `require`d. `extract-fn.js` reads
-the real function source out of the HTML and runs it — that's how we test the
-*actual* logic instead of a stale copy.
+Before Etape 1 the pure rules functions lived inside the 16k-line `index.html`
+as browser-transpiled (Babel) JSX and couldn't be `require`d. `extract-fn.js`
+read their real source out of the HTML and ran it, so the tests exercised the
+*actual* logic, not a copy.
 
-When Etape 1 moves these pure functions into a real module
-(e.g. `client/public/rules-core.js`), point `loadFns` / `SOURCE_FILE` at the new
-file. The same tests must stay green — that's the proof the extraction preserved
-behavior.
+Etape 1 then moved those 11 functions verbatim into `client/public/rules-core.js`
+(a classic script that exposes them as globals for the Babel block and as
+`module.exports` for Node). The tests were re-pointed at the module and stayed
+green — that green run is the proof the extraction preserved behavior.
+
+`extract-fn.js` is retained because more (currently non-pure) logic still lives
+in `index.html`; the same seam can characterize the next batch before it moves.
 
 ## Legacy test files (in the project root)
 

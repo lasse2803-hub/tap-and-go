@@ -1,12 +1,15 @@
 'use strict';
 /*
- * Characterization tests for the PURE client-side rules helpers.
+ * Characterization tests for the PURE rules helpers (client/public/rules-core.js).
  *
- * These functions currently live inside client/public/index.html. They are
- * loaded here via the vm-sandbox seam (see helpers/extract-fn.js) so we test the
- * REAL source, not a copy. The goal is to PIN current behavior — including known
- * quirks — so that Etape 1 (extracting these into a real module) and Etape 2
- * (replacing regex parsing with card data) cannot change behavior silently.
+ * As of Etape 1 these functions live in a real module and are require()d
+ * directly. The goal is to PIN current behavior — including known quirks — so
+ * that Etape 2 (replacing regex parsing with card data) cannot change behavior
+ * silently.
+ *
+ * These same tests proved the Etape 1 extraction was faithful: they previously
+ * loaded the functions out of index.html via the vm-sandbox seam
+ * (helpers/extract-fn.js) and stayed green when re-pointed at the new module.
  *
  * If a refactor intentionally changes one of these behaviors, update the
  * assertion in the same commit and note why. A surprise failure means the
@@ -14,21 +17,8 @@
  */
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { loadFns } = require('./helpers/extract-fn.js');
 
-const R = loadFns([
-  'parseManaCost',
-  'canPayManaCost',
-  'deductManaCost',
-  'parseSpellEffects',
-  'parseArenaDecklist',
-  'isCreature',
-  'isLand',
-  'isInstant',
-  'isArtifact',
-  'isEnchantment',
-  'isPlaneswalker',
-]);
+const R = require('../client/public/rules-core.js');
 
 const emptyPool = () => ({ W: 0, U: 0, B: 0, R: 0, G: 0, C: 0 });
 
