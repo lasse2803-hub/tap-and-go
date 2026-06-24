@@ -6669,7 +6669,14 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       // "Whenever you cast a spell" (generic, e.g. Aetherflux Reservoir)
       else if (/whenever you cast a spell/.test(allText) && !/whenever you cast a (noncreature|creature|instant|sorcery|enchantment|artifact)/.test(allText)) {
         const triggerMatch = allText.match(/(whenever you cast a spell[^.]*\.)/);
-        triggers.push({ permanent: perm, text: triggerMatch ? triggerMatch[1] : 'Whenever you cast a spell — triggered!' });
+        const triggerText = triggerMatch ? triggerMatch[1] : '';
+        // Skip emblem-granting clauses (e.g. a planeswalker ultimate like
+        // Chandra's -7: "you get an emblem with 'whenever you cast a spell...'").
+        // That ability belongs to the EMBLEM and is only active once the emblem is
+        // actually obtained — handled by the emblems check below, not the card.
+        if (!/emblem/.test(triggerText)) {
+          triggers.push({ permanent: perm, text: triggerText || 'Whenever you cast a spell — triggered!' });
+        }
       }
       // "Whenever you cast an enchantment spell"
       else if (allText.includes('whenever you cast an enchantment') && castType.includes('enchantment')) {
@@ -13672,24 +13679,30 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                             <button key={perm.id} className="btn btn-gold" style={{ padding: '4px 10px', fontSize: 10, maxWidth: 180 }}
                               onClick={() => {
                                 const ownerIdx = perm.ownerIdx;
-                                // Remove from battlefield
-                                setState(ownerIdx, prev => ({
-                                  ...prev,
-                                  battlefield: prev.battlefield.filter(c => c.id !== perm.id),
-                                }));
-                                // Insert into library 3rd from top (index 2)
-                                setState(ownerIdx, prev => {
-                                  const lib = [...prev.library];
-                                  const cleanCard = { ...perm, tapped: false, counters: {}, tempBuffs: null, damagePrevented: undefined };
-                                  delete cleanCard.ownerIdx;
-                                  const insertIdx = Math.min(2, lib.length);
-                                  lib.splice(insertIdx, 0, cleanCard);
-                                  return { ...prev, library: lib };
-                                });
+                                if (onlineMode && serverGameAction) {
+                                  // The target's library may be the opponent's hidden zone, which
+                                  // this client can't modify — the server tucks it authoritatively
+                                  // and the broadcast removes it from the battlefield for both.
+                                  serverGameAction({ type: 'tuckToLibrary', targetPlayerIndex: ownerIdx, cardId: perm.id, position: 2 });
+                                } else {
+                                  // Hotseat: do it locally.
+                                  setState(ownerIdx, prev => ({
+                                    ...prev,
+                                    battlefield: prev.battlefield.filter(c => c.id !== perm.id),
+                                  }));
+                                  setState(ownerIdx, prev => {
+                                    const lib = [...prev.library];
+                                    const cleanCard = { ...perm, tapped: false, counters: {}, tempBuffs: null, damagePrevented: undefined };
+                                    delete cleanCard.ownerIdx;
+                                    const insertIdx = Math.min(2, lib.length);
+                                    lib.splice(insertIdx, 0, cleanCard);
+                                    return { ...prev, library: lib };
+                                  });
+                                  setTimeout(() => cleanupAttachments([ownerIdx]), 50);
+                                }
                                 addGameLog(pwReminder.pIdx, '📚', `${pwReminder.card.name}: Put ${perm.name} into ${getState(ownerIdx).name}'s library 3rd from top`);
                                 setCastError({ pIdx: pwReminder.pIdx, message: `📚 ${perm.name} tucked 3rd from top of library` });
                                 setTimeout(() => setCastError(null), 2500);
-                                setTimeout(() => cleanupAttachments([ownerIdx]), 50);
                                 setPwReminder(null);
                               }}>
                               📚 {perm.name} ({perm.ownerIdx === oppIdx ? 'Opp' : 'Own'})

@@ -729,6 +729,26 @@ class GameRoom {
       return { ok: true, hand: target.hand };
     }
 
+    if (action.type === 'tuckToLibrary') {
+      // Move a battlefield permanent into its owner's library Nth-from-top
+      // (Teferi Hero -3, etc.). Server-side because the target's library may be
+      // the opponent's hidden zone, which the client cannot modify.
+      const { targetPlayerIndex, cardId, position = 2 } = action;
+      const target = this.gameState.players[targetPlayerIndex];
+      if (!target) return { error: 'Invalid target player' };
+      const idx = target.battlefield.findIndex(c => c.id === cardId);
+      if (idx === -1) return { error: 'Card not on battlefield' };
+      const card = { ...target.battlefield[idx], tapped: false, counters: {} };
+      delete card.tempBuffs; delete card.damagePrevented; delete card.temporaryControl;
+      delete card.originalOwner; delete card.grantedHaste;
+      if (card.animatedCreature) { delete card.animatedCreature; delete card.power; delete card.toughness; delete card.keywords; }
+      target.battlefield.splice(idx, 1);
+      const insertIdx = Math.min(Math.max(0, position), target.library.length);
+      target.library.splice(insertIdx, 0, card);
+      this.gameState.timestamp = Date.now();
+      return { ok: true, cardName: card.name, newLibraryCount: target.library.length };
+    }
+
     if (action.type === 'mulligan') {
       // Server-side mulligan: shuffle hand+library, draw new hand
       const { targetPlayerIndex, newCount } = action;

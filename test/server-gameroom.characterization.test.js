@@ -242,6 +242,26 @@ test('mulligan: hand becomes (7 - newCount) and total cards are conserved', () =
   assert.equal(room.gameState.mulliganCounts[1], 1);
 });
 
+test('tuckToLibrary: moves a permanent into its owner library 3rd from top', () => {
+  const room = startedRoom({ firstPlayer: 0 });
+  const p1 = room.gameState.players[1];
+  p1.battlefield.push({ id: 'pw1', name: 'Chandra', type_line: 'Planeswalker', tapped: true });
+  const libBefore = p1.library.length;
+  // P0 tucks P1's permanent (opponent's hidden library — server does it).
+  const res = room.processAction(0, { type: 'tuckToLibrary', targetPlayerIndex: 1, cardId: 'pw1', position: 2 });
+  assert.equal(res.ok, true);
+  assert.equal(res.cardName, 'Chandra');
+  assert.equal(p1.battlefield.find(c => c.id === 'pw1'), undefined, 'removed from battlefield');
+  assert.equal(p1.library.length, libBefore + 1, 'added to library');
+  assert.equal(p1.library[2].id, 'pw1', 'inserted 3rd from top (index 2)');
+  assert.equal(p1.library[2].tapped, false, 'transient state cleaned');
+});
+
+test('tuckToLibrary: unknown card returns an error', () => {
+  const room = startedRoom();
+  assert.deepEqual(room.processAction(0, { type: 'tuckToLibrary', targetPlayerIndex: 1, cardId: 'nope' }), { error: 'Card not on battlefield' });
+});
+
 test('returnToOwnerZone: stolen creature returns to original owner', () => {
   const room = startedRoom();
   const p0 = room.gameState.players[0];
