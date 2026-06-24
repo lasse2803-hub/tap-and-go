@@ -9365,9 +9365,11 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     const ap = activePlayer;
     const handSize = getState(ap).hand.length;
     if (handSize > MAX_HAND_SIZE && !discardChoice) {
-      // In online mode, only the active player sees the discard overlay
+      // In online mode, only the active player sees the discard overlay.
+      // then: 'advance' — after discarding, complete the turn pass directly
+      // (this path runs on the active player's client, e.g. hotseat / Done).
       if (!onlineMode || onlinePlayerIndex === ap) {
-        setDiscardChoice({ pIdx: ap, selected: [] });
+        setDiscardChoice({ pIdx: ap, selected: [], then: 'advance' });
         return; // Don't pass turn yet — wait for discard
       }
     }
@@ -10862,6 +10864,15 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
           <button className="btn text-xs btn-gold" disabled={!!combatState || endOfTurnRespond || (onlineMode && activePlayer !== onlinePlayerIndex)} style={(combatState || endOfTurnRespond || (onlineMode && activePlayer !== onlinePlayerIndex)) ? { opacity: 0.3, cursor: 'not-allowed' } : {}} onClick={() => {
             if (combatState || endOfTurnRespond) return;
             if (onlineMode && activePlayer !== onlinePlayerIndex) return;
+            // Cleanup step: the active player must discard to hand size BEFORE
+            // handing priority to the opponent. The opponent runs executePassTurn
+            // (via "Proceed"), where the discard check can't fire for us — so it
+            // must happen here, on the active player's own client. After discard,
+            // continue to the respond window (then: 'respondWindow').
+            if (getState(activePlayer).hand.length > MAX_HAND_SIZE && !discardChoice) {
+              setDiscardChoice({ pIdx: activePlayer, selected: [], then: 'respondWindow' });
+              return;
+            }
             // Show end-of-turn priority window so opponent can respond with instants
             // Safety: clear any lingering overlay state that would block the end-of-turn overlay
             setSpellTargeting(null);
@@ -12242,9 +12253,17 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                   graveyard: [...prev.graveyard, ...discarded.map(c => ({ ...c, tapped: false }))],
                 }));
                 addGameLog(discPIdx, '🗑️', `${getState(discPIdx).name} discards ${discarded.map(c => c.name).join(', ')} to hand size`);
+                const passThen = discardChoice.then;
                 setDiscardChoice(null);
-                // Now actually pass the turn
-                executePassTurn();
+                if (passThen === 'respondWindow') {
+                  // Discard was part of Pass Turn — now open the end-of-turn respond
+                  // window; the opponent's "Proceed" then runs executePassTurn.
+                  setSpellTargeting(null); setModalChoice(null); setInstantCasting(null);
+                  setEndOfTurnRespond(true); setCurrentPhase('end');
+                } else {
+                  // Direct-advance paths (hotseat / Done / combat end).
+                  executePassTurn();
+                }
               }} style={{
                 background: canConfirm ? 'linear-gradient(180deg, #5a2a2a, #3a1a1a)' : 'rgba(255,255,255,0.05)',
                 border: canConfirm ? '1px solid rgba(220,80,60,0.5)' : '1px solid rgba(255,255,255,0.1)',
