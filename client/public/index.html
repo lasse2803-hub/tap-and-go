@@ -3667,9 +3667,15 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
   const [mulliganPhase, _setMulliganPhase] = useState(true); // SYNCED
   const [mulliganCounts, _setMulliganCounts] = useState([0, 0]); // SYNCED
   const [mulliganPlayer, _setMulliganPlayer] = useState(startingPlayer); // SYNCED
-  const setMulliganPhase = syncSetter(_setMulliganPhase);
   const setMulliganCounts = syncSetter(_setMulliganCounts);
-  const setMulliganPlayer = syncSetter(_setMulliganPlayer);
+  // mulliganPhase/mulliganPlayer are version-gated (like spellStack) so the
+  // WAITING player's client can't clobber the deciding player's "keep" with a
+  // stale value — which previously forced 4-5 clicks before it stuck.
+  const mulliganVersionRef = useRef(0);
+  const _setMulliganPhaseSync = syncSetter(_setMulliganPhase);
+  const _setMulliganPlayerSync = syncSetter(_setMulliganPlayer);
+  const setMulliganPhase = (v) => { mulliganVersionRef.current++; _setMulliganPhaseSync(v); };
+  const setMulliganPlayer = (v) => { mulliganVersionRef.current++; _setMulliganPlayerSync(v); };
 
   // ═══════════════════════════════════════════════════════════════
   // §3. MULLIGAN SYSTEM
@@ -3763,6 +3769,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       combatState: combatState,
       mulliganPhase,
       mulliganPlayer,
+      mulliganVersion: mulliganVersionRef.current,
       mulliganCounts,
       sacCounterChoice,
       librarySearch,
@@ -4006,8 +4013,16 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     }
 
     // Sync mulligan state (RAW setters — no broadcast trigger)
-    if (onlineState.mulliganPhase !== undefined) _setMulliganPhase(onlineState.mulliganPhase);
-    if (onlineState.mulliganPlayer !== undefined) _setMulliganPlayer(onlineState.mulliganPlayer);
+    // Version-gated so a stale sync from the waiting player can't revert the
+    // deciding player's keep/advance (caused the multi-click "Keep Hand" bug).
+    {
+      const mVer = onlineState.mulliganVersion || 0;
+      if (mVer >= mulliganVersionRef.current) {
+        mulliganVersionRef.current = mVer;
+        if (onlineState.mulliganPhase !== undefined) _setMulliganPhase(onlineState.mulliganPhase);
+        if (onlineState.mulliganPlayer !== undefined) _setMulliganPlayer(onlineState.mulliganPlayer);
+      }
+    }
     if (onlineState.mulliganCounts) _setMulliganCounts(onlineState.mulliganCounts);
 
     // Sync sacrifice counter choice (Cursecatcher etc.)

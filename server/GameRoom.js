@@ -557,9 +557,21 @@ class GameRoom {
       if (update.combatState !== undefined) this.gameState.combatState = update.combatState;
       if (update.priorityPlayer !== undefined) this.gameState.priorityPlayer = update.priorityPlayer;
 
-      // Mulligan state
-      if (update.mulliganPhase !== undefined) this.gameState.mulliganPhase = update.mulliganPhase;
-      if (update.mulliganPlayer !== undefined) this.gameState.mulliganPlayer = update.mulliganPlayer;
+      // Mulligan state — version-gated (like spellStack) so a stale sync from the
+      // waiting player can't revert the deciding player's keep/advance.
+      if (update.mulliganVersion !== undefined) {
+        const incomingVer = update.mulliganVersion || 0;
+        const currentVer = this.gameState.mulliganVersion || 0;
+        if (incomingVer >= currentVer) {
+          this.gameState.mulliganVersion = incomingVer;
+          if (update.mulliganPhase !== undefined) this.gameState.mulliganPhase = update.mulliganPhase;
+          if (update.mulliganPlayer !== undefined) this.gameState.mulliganPlayer = update.mulliganPlayer;
+        }
+      } else {
+        // Backward-compat: no version supplied (older client) — apply directly.
+        if (update.mulliganPhase !== undefined) this.gameState.mulliganPhase = update.mulliganPhase;
+        if (update.mulliganPlayer !== undefined) this.gameState.mulliganPlayer = update.mulliganPlayer;
+      }
       if (update.mulliganCounts) this.gameState.mulliganCounts = update.mulliganCounts;
 
       // Spell stack, overlays, and shared game state

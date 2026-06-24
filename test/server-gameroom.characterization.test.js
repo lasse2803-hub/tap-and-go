@@ -261,6 +261,20 @@ test('gameWon: single match finishes immediately', () => {
   assert.equal(room.status, 'finished');
 });
 
+// ── Mulligan fields are version-gated (multi-click "Keep Hand" fix) ──
+test('stateSync: mulligan fields version-gated — stale sync cannot revert', () => {
+  const room = startedRoom({ firstPlayer: 0 });
+  // Decider keeps/advances: mulliganPlayer 0 -> 1 at version 1.
+  room.processAction(0, { type: 'stateSync', state: { mulliganPhase: true, mulliganPlayer: 1, mulliganVersion: 1 } });
+  assert.equal(room.gameState.mulliganPlayer, 1);
+  // Waiting player's stale (lower-version) sync must NOT revert it.
+  room.processAction(1, { type: 'stateSync', state: { mulliganPlayer: 0, mulliganVersion: 0 } });
+  assert.equal(room.gameState.mulliganPlayer, 1, 'stale lower-version ignored');
+  // A newer version applies (mulligan ends).
+  room.processAction(1, { type: 'stateSync', state: { mulliganPhase: false, mulliganVersion: 2 } });
+  assert.equal(room.gameState.mulliganPhase, false);
+});
+
 // ── Etape 3.2: server-authoritative turn advancement ─────────
 test('advanceTurn: flips active player and resets phase', () => {
   const room = startedRoom({ firstPlayer: 0 });
