@@ -6733,6 +6733,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
   const [spellTargeting, setSpellTargeting] = useState(null); // { pIdx, card, effects, targetMode }
   const [abilityTargeting, setAbilityTargeting] = useState(null); // LOCAL — { pIdx, card, ability } — targeting mode for activated abilities that need a target creature
   const [cycleXChoice, setCycleXChoice] = useState(null); // LOCAL — { pIdx, cardName, creatureType, colors, keywords } — pending X/X token from cycling
+  const [cycleDrawReveal, setCycleDrawReveal] = useState(null); // LOCAL (private) — { pIdx, card, cycledName } — reveals the card drawn from cycling so the player can act on it (e.g. cast instant-speed removal) before passing
   // Pre-cast targeting: when casting a spell with targets, we show the targeting UI
   // BEFORE putting the spell on the stack. This ref stores the cast info until targets are chosen.
   const pendingCastRef = useRef(null); // { pIdx, card, asAdventure, fromExile, displayName, nonTargetedEffects }
@@ -8271,6 +8272,11 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
 
   // Cycling: discard card from hand → draw a card
   const cycleCard = (pIdx, card) => {
+    // Capture the card that will be drawn BEFORE drawing (own library is local).
+    // We reveal it so the player can decide to act on it (e.g. cast instant-speed
+    // removal) before the turn passes — they own this draw, so it's private.
+    const cyclingPlayer = getState(pIdx);
+    const drawnCard = cyclingPlayer.library.length > 0 ? cyclingPlayer.library[0] : null;
     // Move card from hand to graveyard
     setState(pIdx, prev => ({
       ...prev,
@@ -8280,8 +8286,13 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     // Draw a card
     drawCard(pIdx);
     SFX.playSpell();
-    setCastError({ pIdx, message: `Cycled ${getDisplayName(card)} — drew a card`, background: '#1a2a33' });
-    setTimeout(() => setCastError(null), 1500);
+    // Reveal the drawn card to the cycling player only (LOCAL, never synced).
+    if (drawnCard && (!onlineMode || pIdx === onlinePlayerIndex)) {
+      setCycleDrawReveal({ pIdx, card: drawnCard, cycledName: getDisplayName(card) });
+      setTimeout(() => setCycleDrawReveal(null), 6000);
+    }
+    setCastError({ pIdx, message: `Cycled ${getDisplayName(card)} — drew ${drawnCard ? getDisplayName(drawnCard) : 'a card'}`, background: '#1a2a33' });
+    setTimeout(() => setCastError(null), 2500);
 
     // Check for cycling triggers (e.g. Shark Typhoon: "When you cycle ~, create an X/X blue Shark creature token with flying")
     const allText = getOracleText(card);
@@ -11674,6 +11685,32 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       })()}
 
       {/* Cycling X/X Token — choose X value (Shark Typhoon, etc.) */}
+      {/* Cycling draw reveal — private to the cycling player; non-blocking so the
+          still-open Instant menu can be used to cast the drawn card right away. */}
+      {cycleDrawReveal && (!onlineMode || cycleDrawReveal.pIdx === onlinePlayerIndex) && (
+        <div onClick={() => setCycleDrawReveal(null)} title="Click to dismiss" style={{
+          position: 'fixed', top: 70, left: '50%', transform: 'translateX(-50%)',
+          zIndex: 10050, background: 'rgba(10,18,26,0.97)',
+          border: '2px solid rgba(96,200,232,0.55)', borderRadius: 12, padding: '10px 14px',
+          display: 'flex', alignItems: 'center', gap: 12, cursor: 'pointer',
+          boxShadow: '0 6px 28px rgba(0,0,0,0.6), 0 0 18px rgba(60,180,220,0.18)',
+          animation: 'fadeIn 0.15s ease',
+        }}>
+          <CardImg card={cycleDrawReveal.card} alt={getDisplayName(cycleDrawReveal.card)}
+            style={{ height: 150, borderRadius: 8 }} />
+          <div style={{ maxWidth: 180 }}>
+            <div style={{ fontSize: 10, color: '#6cf', fontWeight: 700, textTransform: 'uppercase', letterSpacing: 1 }}>
+              🔄 Cycled {cycleDrawReveal.cycledName}
+            </div>
+            <div style={{ fontSize: 14, color: '#fff', fontWeight: 700, margin: '4px 0' }}>
+              You drew: {getDisplayName(cycleDrawReveal.card)}
+            </div>
+            <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.55)' }}>
+              It's in your hand. If it's an instant and you have mana, cast it now from the ⚡ Instant menu before passing. (Click to dismiss)
+            </div>
+          </div>
+        </div>
+      )}
       {cycleXChoice && (
         <div style={{
           position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
