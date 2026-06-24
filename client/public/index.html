@@ -7892,7 +7892,14 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     if (shouldActAsCounter) {
       // Check counter type restrictions (e.g. "counter target instant or sorcery spell" can't counter creatures)
       const counterOracle = (topSpell.card.oracle_text || '').toLowerCase();
-      const targetTypeLine = (spellBelow.card.type_line || '').toLowerCase();
+      // For an adventure cast as its adventure (e.g. Stomp), use the ADVENTURE
+      // face's type (Instant/Sorcery) — not the creature face — so noncreature/
+      // instant-or-sorcery counters (Dovin's Veto, etc.) correctly target it.
+      let targetTypeLine = (spellBelow.card.type_line || '').toLowerCase();
+      if (spellBelow.asAdventure) {
+        const advFace = getAdventureFace(spellBelow.card);
+        if (advFace && advFace.type_line) targetTypeLine = advFace.type_line.toLowerCase();
+      }
       let counterTypeValid = true;
       if (/counter target instant or sorcery spell/.test(counterOracle)) {
         counterTypeValid = targetTypeLine.includes('instant') || targetTypeLine.includes('sorcery');
