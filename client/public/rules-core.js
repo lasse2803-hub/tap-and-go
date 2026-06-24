@@ -643,6 +643,108 @@
       }
       return effects;
     };
+
+  // ── getLandManaColors (moved from index.html, Etape 4 groundwork) ──
+  const getLandManaColors = (card) => {
+    if (card.produced_mana && card.produced_mana.length > 0) {
+      return card.produced_mana.filter(c => ['W', 'U', 'B', 'R', 'G', 'C'].includes(c));
+    }
+    // Fallback: check type line for basic land types
+    const tl = (card.type_line || '').toLowerCase();
+    const colors = [];
+    if (tl.includes('plains')) colors.push('W');
+    if (tl.includes('island')) colors.push('U');
+    if (tl.includes('swamp')) colors.push('B');
+    if (tl.includes('mountain')) colors.push('R');
+    if (tl.includes('forest')) colors.push('G');
+    return colors.length > 0 ? colors : ['C'];
+  };
+
+  // ── calculateDevotion (moved from index.html, Etape 4 groundwork) ──
+  const calculateDevotion = (battlefield) => {
+    const devotion = { W: 0, U: 0, B: 0, R: 0, G: 0 };
+    for (const card of battlefield) {
+      if (isLand(card)) continue; // Lands don't contribute to devotion
+      let costStr = card.mana_cost || '';
+      if (card.layout === 'adventure' && card.card_faces?.[0]) {
+        costStr = card.card_faces[0].mana_cost || '';
+      }
+      const symbols = costStr.match(/\{([WUBRG])\}/g) || [];
+      for (const sym of symbols) {
+        const color = sym.charAt(1);
+        if (devotion.hasOwnProperty(color)) devotion[color]++;
+      }
+      // Hybrid mana counts for both colors
+      const hybrids = costStr.match(/\{([WUBRG])\/([WUBRG])\}/g) || [];
+      for (const h of hybrids) {
+        const c1 = h.charAt(1);
+        const c2 = h.charAt(3);
+        if (devotion.hasOwnProperty(c1)) devotion[c1]++;
+        if (devotion.hasOwnProperty(c2)) devotion[c2]++;
+      }
+    }
+    return devotion;
+  };
+
+  // ── parseDevotionText (moved from index.html, Etape 4 groundwork) ──
+  const parseDevotionText = (text) => {
+    const colorMap = { white: 'W', blue: 'U', black: 'B', red: 'R', green: 'G' };
+    const match = text.match(/devotion to (\w+)/i);
+    if (!match) return null;
+    const color = colorMap[match[1].toLowerCase()];
+    if (!color) return null;
+    const numWords = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10 };
+    const thresholdMatch = text.match(/devotion to \w+ is (\w+) or more/i);
+    let threshold = null;
+    if (thresholdMatch) {
+      const val = thresholdMatch[1].toLowerCase();
+      threshold = numWords[val] || parseInt(val) || null;
+    }
+    return { color, colorName: match[1], threshold };
+  };
+
+  // ── getDevotionInfo (moved from index.html, Etape 4 groundwork) ──
+  const getDevotionInfo = (card) => {
+    const text = card.oracle_text || '';
+    if (card.card_faces) {
+      for (const face of card.card_faces) {
+        if ((face.oracle_text || '').toLowerCase().includes('devotion')) {
+          return parseDevotionText(face.oracle_text);
+        }
+      }
+    }
+    if (!text.toLowerCase().includes('devotion')) return null;
+    return parseDevotionText(text);
+  };
+
+  // ── getBasePower (moved from index.html, Etape 4 groundwork) ──
+  const getBasePower = (card) => {
+    if (card.power !== undefined && card.power !== null) return card.power;
+    if (card.card_faces && card.card_faces[0]) return card.card_faces[0].power;
+    return undefined;
+  };
+
+  // ── getBaseToughness (moved from index.html, Etape 4 groundwork) ──
+  const getBaseToughness = (card) => {
+    if (card.toughness !== undefined && card.toughness !== null) return card.toughness;
+    if (card.card_faces && card.card_faces[0]) return card.card_faces[0].toughness;
+    return undefined;
+  };
+
+  // ── hasBasePT (moved from index.html, Etape 4 groundwork) ──
+  const hasBasePT = (card) => getBasePower(card) !== undefined;
+
+  // ── isSorcery (moved from index.html, Etape 4 groundwork) ──
+  const isSorcery = (card) => card.type_line && card.type_line.toLowerCase().includes('sorcery');
+
+  // ── isSpellCard (moved from index.html, Etape 4 groundwork) ──
+  const isSpellCard = (card) => isInstant(card) || isSorcery(card);
+
+  // ── isAdventureCard (moved from index.html, Etape 4 groundwork) ──
+  const isAdventureCard = (card) => card.layout === 'adventure' && card.card_faces && card.card_faces.length >= 2;
+
+  // ── isSaga (moved from index.html, Etape 4 groundwork) ──
+  const isSaga = (card) => card.type_line && card.type_line.toLowerCase().includes('saga');
   const api = {
     parseManaCost,
     canPayManaCost,
@@ -658,6 +760,17 @@
     getOracleText,
     parsePlaneswalkerAbilities,
     parseETBEffects,
+    getLandManaColors,
+    calculateDevotion,
+    parseDevotionText,
+    getDevotionInfo,
+    getBasePower,
+    getBaseToughness,
+    hasBasePT,
+    isSorcery,
+    isSpellCard,
+    isAdventureCard,
+    isSaga,
   };
 
   if (typeof module !== 'undefined' && module.exports) {

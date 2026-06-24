@@ -223,3 +223,49 @@ test('parseETBEffects: target opponent loses life', () => {
 test('parseETBEffects: returns [] for a card with no ETB trigger', () => {
   assert.deepEqual(R.parseETBEffects({ name: 'Grizzly Bears', oracle_text: '' }), []);
 });
+
+// ─────────────────────────────────────────────────────────────
+// Etape 4 groundwork: devotion, base P/T, type predicates, lands
+// ─────────────────────────────────────────────────────────────
+test('getLandManaColors: produced_mana wins, else basic-type fallback', () => {
+  assert.deepEqual(R.getLandManaColors({ produced_mana: ['G', 'C'], type_line: 'Land' }), ['G', 'C']);
+  assert.deepEqual(R.getLandManaColors({ type_line: 'Basic Land — Forest' }), ['G']);
+  assert.deepEqual(R.getLandManaColors({ type_line: 'Artifact' }), ['C'], 'no land type -> colorless');
+});
+
+test('calculateDevotion: counts colored pips on nonland permanents (hybrid both)', () => {
+  const bf = [
+    { mana_cost: '{B}{B}', type_line: 'Creature' },
+    { mana_cost: '{1}{B}', type_line: 'Creature' },
+    { type_line: 'Swamp' }, // land contributes nothing
+    { mana_cost: '{B/G}', type_line: 'Creature' }, // hybrid counts both
+  ];
+  const dev = R.calculateDevotion(bf);
+  assert.equal(dev.B, 4);
+  assert.equal(dev.G, 1);
+});
+
+test('parseDevotionText / getDevotionInfo: extract color + threshold', () => {
+  assert.deepEqual(R.parseDevotionText('your devotion to black'), { color: 'B', colorName: 'black', threshold: null });
+  assert.deepEqual(R.parseDevotionText('as long as your devotion to white is five or more'),
+    { color: 'W', colorName: 'white', threshold: 5 });
+  assert.equal(R.getDevotionInfo({ oracle_text: 'A vanilla creature.' }), null);
+  assert.equal(R.getDevotionInfo({ oracle_text: 'X is your devotion to black.' }).color, 'B');
+});
+
+test('getBasePower / getBaseToughness / hasBasePT: handle plain + card_faces', () => {
+  assert.equal(R.getBasePower({ power: '2', toughness: '3' }), '2');
+  assert.equal(R.getBaseToughness({ card_faces: [{ power: '4', toughness: '5' }] }), '5');
+  assert.equal(R.hasBasePT({ power: '0', toughness: '1' }), true);
+  assert.equal(R.hasBasePT({ type_line: 'Instant' }), false);
+});
+
+test('type predicates: isSorcery / isSpellCard / isAdventureCard / isSaga', () => {
+  assert.equal(R.isSorcery({ type_line: 'Sorcery' }), true);
+  assert.equal(R.isSpellCard({ type_line: 'Instant' }), true);
+  assert.equal(R.isSpellCard({ type_line: 'Sorcery' }), true);
+  assert.equal(R.isSpellCard({ type_line: 'Creature — Bear' }), false);
+  assert.equal(R.isAdventureCard({ layout: 'adventure', card_faces: [{}, {}] }), true);
+  assert.equal(R.isAdventureCard({ layout: 'normal' }), false);
+  assert.equal(R.isSaga({ type_line: 'Enchantment — Saga' }), true);
+});

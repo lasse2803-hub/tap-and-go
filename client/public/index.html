@@ -1457,80 +1457,19 @@ const loadDeckFromList = async (entries, onProgress) => {
 // [moved to rules-core.js] deductManaCost
 
 // Get mana produced by a land card
-const getLandManaColors = (card) => {
-  if (card.produced_mana && card.produced_mana.length > 0) {
-    return card.produced_mana.filter(c => ['W', 'U', 'B', 'R', 'G', 'C'].includes(c));
-  }
-  // Fallback: check type line for basic land types
-  const tl = (card.type_line || '').toLowerCase();
-  const colors = [];
-  if (tl.includes('plains')) colors.push('W');
-  if (tl.includes('island')) colors.push('U');
-  if (tl.includes('swamp')) colors.push('B');
-  if (tl.includes('mountain')) colors.push('R');
-  if (tl.includes('forest')) colors.push('G');
-  return colors.length > 0 ? colors : ['C'];
-};
+// [moved to rules-core.js] getLandManaColors
 
 // Mana color display symbols
 const MANA_SYMBOLS = { W: '☀', U: '💧', B: '💀', R: '🔥', G: '🌿', C: '◇' };
 const MANA_COLORS_CSS = { W: '#f9faf4', U: '#0e67ab', B: '#150b00', R: '#d3202a', G: '#00733e', C: '#ccc2c0' };
 
 // Calculate devotion: count colored mana symbols among permanents on battlefield
-const calculateDevotion = (battlefield) => {
-  const devotion = { W: 0, U: 0, B: 0, R: 0, G: 0 };
-  for (const card of battlefield) {
-    if (isLand(card)) continue; // Lands don't contribute to devotion
-    let costStr = card.mana_cost || '';
-    if (card.layout === 'adventure' && card.card_faces?.[0]) {
-      costStr = card.card_faces[0].mana_cost || '';
-    }
-    const symbols = costStr.match(/\{([WUBRG])\}/g) || [];
-    for (const sym of symbols) {
-      const color = sym.charAt(1);
-      if (devotion.hasOwnProperty(color)) devotion[color]++;
-    }
-    // Hybrid mana counts for both colors
-    const hybrids = costStr.match(/\{([WUBRG])\/([WUBRG])\}/g) || [];
-    for (const h of hybrids) {
-      const c1 = h.charAt(1);
-      const c2 = h.charAt(3);
-      if (devotion.hasOwnProperty(c1)) devotion[c1]++;
-      if (devotion.hasOwnProperty(c2)) devotion[c2]++;
-    }
-  }
-  return devotion;
-};
+// [moved to rules-core.js] calculateDevotion
 
 // Check if a card's oracle text references devotion, and extract the color + threshold
-const getDevotionInfo = (card) => {
-  const text = card.oracle_text || '';
-  if (card.card_faces) {
-    for (const face of card.card_faces) {
-      if ((face.oracle_text || '').toLowerCase().includes('devotion')) {
-        return parseDevotionText(face.oracle_text);
-      }
-    }
-  }
-  if (!text.toLowerCase().includes('devotion')) return null;
-  return parseDevotionText(text);
-};
+// [moved to rules-core.js] getDevotionInfo
 
-const parseDevotionText = (text) => {
-  const colorMap = { white: 'W', blue: 'U', black: 'B', red: 'R', green: 'G' };
-  const match = text.match(/devotion to (\w+)/i);
-  if (!match) return null;
-  const color = colorMap[match[1].toLowerCase()];
-  if (!color) return null;
-  const numWords = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10 };
-  const thresholdMatch = text.match(/devotion to \w+ is (\w+) or more/i);
-  let threshold = null;
-  if (thresholdMatch) {
-    const val = thresholdMatch[1].toLowerCase();
-    threshold = numWords[val] || parseInt(val) || null;
-  }
-  return { color, colorName: match[1], threshold };
-};
+// [moved to rules-core.js] parseDevotionText
 
 // ============ SPELL EFFECT PARSER ============
 // Parses oracle text to identify what a spell does, returning a list of effects
@@ -1814,7 +1753,7 @@ const uid = () => Math.random().toString(36).substr(2, 9);
 // [moved to rules-core.js] isEnchantment
 // [moved to rules-core.js] isArtifact
 // [moved to rules-core.js] isPlaneswalker
-const isSaga = (card) => card.type_line && card.type_line.toLowerCase().includes('saga');
+// [moved to rules-core.js] isSaga
 // Check if a card enters the battlefield tapped, respecting "unless" and "if" conditions
 const checkSelfEntersTapped = (card, battlefield) => {
   const oracle = [card.oracle_text || '', ...(card.card_faces || []).map(f => f.oracle_text || '')].join(' ').toLowerCase();
@@ -1875,13 +1814,13 @@ const checkSelfEntersTapped = (card, battlefield) => {
   return true; // No condition, or condition not met — enters tapped
 };
 // [moved to rules-core.js] isInstant
-const isSorcery = (card) => card.type_line && card.type_line.toLowerCase().includes('sorcery');
-const isSpellCard = (card) => isInstant(card) || isSorcery(card);
+// [moved to rules-core.js] isSorcery
+// [moved to rules-core.js] isSpellCard
 const hasFlash = (card) => {
   const allText = getOracleText(card);
   return card.keywords?.includes('Flash') || card.keywords?.includes('flash') || allText.includes('flash') || (card.tempBuffs?.keywords || []).includes('flash');
 };
-const isAdventureCard = (card) => card.layout === 'adventure' && card.card_faces && card.card_faces.length >= 2;
+// [moved to rules-core.js] isAdventureCard
 const canCastAtInstantSpeed = (card) => {
   if (isInstant(card) || hasFlash(card)) return true;
   // Adventure cards where the adventure face is an instant (e.g. Bonecrusher Giant → Stomp)
@@ -2342,17 +2281,9 @@ const getCreatureLandData = (card) => {
 };
 
 // Get base power/toughness (handles transform/flip cards with card_faces)
-const getBasePower = (card) => {
-  if (card.power !== undefined && card.power !== null) return card.power;
-  if (card.card_faces && card.card_faces[0]) return card.card_faces[0].power;
-  return undefined;
-};
-const getBaseToughness = (card) => {
-  if (card.toughness !== undefined && card.toughness !== null) return card.toughness;
-  if (card.card_faces && card.card_faces[0]) return card.card_faces[0].toughness;
-  return undefined;
-};
-const hasBasePT = (card) => getBasePower(card) !== undefined;
+// [moved to rules-core.js] getBasePower
+// [moved to rules-core.js] getBaseToughness
+// [moved to rules-core.js] hasBasePT
 
 let _starPTStateGetter = null; // Set at runtime in the component
 let _starPTAllStatesGetter = null; // fn() => [state0, state1]
