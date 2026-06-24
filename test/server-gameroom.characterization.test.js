@@ -310,6 +310,33 @@ test('advanceTurn via processAction returns the result', () => {
   assert.equal(res.turnNumber, 2);
 });
 
+// ── Etape 3.4: server-authoritative life / poison ────────────
+test('changeLife: applies life and poison deltas', () => {
+  const room = startedRoom({ firstPlayer: 0 });
+  assert.deepEqual(room.changeLife(1, -3), { ok: true, life: 17, poison: 0, stateBasedLoss: null });
+  assert.equal(room.gameState.players[1].life, 17);
+  const r = room.changeLife(1, 0, 4);
+  assert.equal(r.poison, 4);
+});
+
+test('changeLife: dropping to <= 0 records the state-based loss', () => {
+  const room = startedRoom({ firstPlayer: 0 });
+  const r = room.changeLife(0, -20);
+  assert.equal(r.life, 0);
+  assert.deepEqual(r.stateBasedLoss, { loserIndex: 0, winnerIndex: 1, reason: 'reached 0 life' });
+});
+
+test('changeLife: invalid target rejected', () => {
+  const room = startedRoom({ firstPlayer: 0 });
+  assert.deepEqual(room.changeLife(5, -1), { error: 'Invalid target player' });
+});
+
+test('changeLife via processAction', () => {
+  const room = startedRoom({ firstPlayer: 0 });
+  const r = room.processAction(0, { type: 'changeLife', targetPlayerIndex: 1, lifeDelta: -5 });
+  assert.equal(r.life, 15);
+});
+
 // ── Etape 3.3: server-authoritative spell stack ──────────────
 test('stackPush: appends an entry, assigns id + caster, bumps version', () => {
   const room = startedRoom({ firstPlayer: 0 });

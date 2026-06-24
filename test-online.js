@@ -821,6 +821,37 @@ async function testTurnAdvanceAuthority() {
   s2.disconnect();
 }
 
+async function testLifeChangeAuthority() {
+  section('Server-Authoritative Life Change (Etape 3.4)');
+
+  const roomData = await createRoom('Alice');
+  const s1 = createSocket();
+  const s2 = createSocket();
+  await Promise.all([
+    new Promise(r => s1.on('connect', r)),
+    new Promise(r => s2.on('connect', r)),
+  ]);
+  await emitCb(s1, 'joinGame', { roomId: roomData.roomId, nickname: 'Alice' });
+  await emitCb(s2, 'joinGame', { roomId: roomData.roomId, nickname: 'Bob' });
+  const p1Start = waitForEvent(s1, 'gameStart');
+  const p2Start = waitForEvent(s2, 'gameStart');
+  await emitCb(s1, 'submitDeck', { deck: createTestDeck() });
+  await emitCb(s2, 'submitDeck', { deck: createTestDeck() });
+  await p1Start; await p2Start;
+
+  // P0 deals lethal to P1 via the authoritative life-change intent.
+  const p2Sees = waitForEvent(s2, 'stateUpdate');
+  const res = await emitCb(s1, 'gameAction', { action: { type: 'changeLife', targetPlayerIndex: 1, lifeDelta: -20 } });
+  assert(res.ok && res.life === 0, 'server applied the life delta authoritatively');
+  assert(res.stateBasedLoss && res.stateBasedLoss.winnerIndex === 0, 'lethal change records the state-based loss');
+  const u2 = await p2Sees;
+  assertEqual(u2.state.players[1].life, 0, 'opponent sees the authoritative life total');
+  console.log('  ✓ Life change applied server-side; lethal recorded; broadcast consistent');
+
+  s1.disconnect();
+  s2.disconnect();
+}
+
 async function testSpellStackAuthority() {
   section('Server-Authoritative Spell Stack (Etape 3.3)');
 
@@ -887,6 +918,7 @@ async function main() {
     await testMultipleRooms();
     await testStateBasedGameOver();
     await testTurnAdvanceAuthority();
+    await testLifeChangeAuthority();
     await testSpellStackAuthority();
   } catch (err) {
     console.error(`\n✗ FATAL ERROR: ${err.message}`);

@@ -340,6 +340,23 @@ class GameRoom {
   }
 
   /**
+   * Server-authoritative life / poison change (Etape 3.4). Applies a delta to a
+   * player's life and/or poison, then recomputes state-based loss. Life is
+   * allowed to go <= 0 (the SBA check turns that into a loss). The most-changed
+   * shared scalar, so owning it server-side removes a whole class of drift.
+   */
+  changeLife(targetPlayerIndex, lifeDelta = 0, poisonDelta = 0) {
+    if (!this.gameState || this.status !== 'playing') return { error: 'Game not in progress' };
+    const p = this.gameState.players[targetPlayerIndex];
+    if (!p) return { error: 'Invalid target player' };
+    if (lifeDelta) p.life = (p.life || 0) + lifeDelta;
+    if (poisonDelta) p.poison = (p.poison || 0) + poisonDelta;
+    this.gameState.stateBasedLoss = this.checkStateBasedGameOver();
+    this.gameState.timestamp = Date.now();
+    return { ok: true, life: p.life, poison: p.poison, stateBasedLoss: this.gameState.stateBasedLoss };
+  }
+
+  /**
    * Server-authoritative state-based game-over check (Etape 3.1).
    * Scans the authoritative (synced) life / poison / commander-damage and
    * returns { loserIndex, winnerIndex, reason } for the first player that has
@@ -460,6 +477,11 @@ class GameRoom {
     if (action.type === 'stackRemove') {
       const result = this.stackRemove(action.entryId);
       this.actionLog.push({ playerIndex, action: { type: 'stackRemove' }, timestamp: Date.now() });
+      return result;
+    }
+    if (action.type === 'changeLife') {
+      const result = this.changeLife(action.targetPlayerIndex, action.lifeDelta || 0, action.poisonDelta || 0);
+      this.actionLog.push({ playerIndex, action: { type: 'changeLife' }, timestamp: Date.now() });
       return result;
     }
 
