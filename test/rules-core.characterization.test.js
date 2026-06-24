@@ -299,3 +299,35 @@ test('shuffle returns a permutation (same multiset)', () => {
   assert.equal(out.length, 5);
   assert.deepEqual([...out].sort(), [1, 2, 3, 4, 5]);
 });
+
+// ─────────────────────────────────────────────────────────────
+// Static/triggered permanent-ability detectors (Roiling Vortex et al.)
+// ─────────────────────────────────────────────────────────────
+test('Roiling Vortex: all three abilities detected (incl. curly apostrophe)', () => {
+  const rv = {
+    name: 'Roiling Vortex',
+    oracle_text: 'Players can’t gain life.\nAt the beginning of your upkeep, Roiling Vortex deals 1 damage to each player.\nWhenever a player casts a spell, if no mana was spent to cast it, Roiling Vortex deals 5 damage to that player.',
+  };
+  assert.equal(R.preventsLifeGain(rv), true);
+  assert.equal(R.upkeepDamageEachPlayer(rv), 1);
+  // Must pick the free-cast clause's 5, NOT the upkeep clause's 1.
+  assert.equal(R.freeCastPunishDamage(rv), 5);
+});
+
+test('detectors: name fallback when oracle text has not synced', () => {
+  const rv = { name: 'Roiling Vortex' };
+  assert.equal(R.preventsLifeGain(rv), true);
+  assert.equal(R.upkeepDamageEachPlayer(rv), 1);
+  assert.equal(R.freeCastPunishDamage(rv), 5);
+});
+
+test('detectors: a vanilla card matches none of them', () => {
+  const bear = { name: 'Grizzly Bears', oracle_text: '' };
+  assert.equal(R.preventsLifeGain(bear), false);
+  assert.equal(R.upkeepDamageEachPlayer(bear), 0);
+  assert.equal(R.freeCastPunishDamage(bear), 0);
+});
+
+test('preventsLifeGain: generic match works for other anti-lifegain cards', () => {
+  assert.equal(R.preventsLifeGain({ name: 'Tibalt thing', oracle_text: "players can't gain life." }), true);
+});

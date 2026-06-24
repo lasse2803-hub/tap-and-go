@@ -4216,6 +4216,20 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
   // Mark a player as having been dealt damage this turn (for Spectacle etc.)
   const markDealtDamage = (pIdx) => setState(pIdx, prev => ({ ...prev, dealtDamageThisTurn: true }));
 
+  // Single chokepoint for life GAIN, so a "players can't gain life" permanent
+  // (Roiling Vortex, etc.) is enforced automatically and consistently. The
+  // manual +/- life buttons deliberately bypass this (tabletop override).
+  const gainLife = (pIdx, amount) => {
+    if (!amount || amount <= 0) return;
+    const blocked = [0, 1].some(i => (getState(i).battlefield || []).some(c => preventsLifeGain(c)));
+    if (blocked) {
+      addGameLog(pIdx, '🚫', `Life gain prevented — a permanent stops players from gaining life`);
+      return;
+    }
+    setState(pIdx, prev => ({ ...prev, life: prev.life + amount }));
+    SFX.lifeGain();
+  };
+
   // Refs for latest state — avoids stale closures in setTimeout callbacks
   const p1Ref = useRef(p1);
   const p2Ref = useRef(p2);
@@ -5036,7 +5050,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         setTimeout(() => drawCard(pIdx), i * 100);
       }
     } else if (ability.type === 'gainLife') {
-      setState(pIdx, prev => ({ ...prev, life: prev.life + ability.amount }));
+      gainLife(pIdx, ability.amount);
     } else if (ability.type === 'damage' || ability.type === 'manual') {
       setEtbReminder({ pIdx, card, effects: [{ icon: '💀', text: `Sacrificed ${card.name}: ${ability.text || ability.label}` }] });
     }
@@ -5304,7 +5318,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         setTimeout(() => drawCard(pIdx), i * 100);
       }
     } else if (ability.type === 'gainLife') {
-      setState(pIdx, prev => ({ ...prev, life: prev.life + ability.amount }));
+      gainLife(pIdx, ability.amount);
     } else if (ability.type === 'manual') {
       const targetStr = targetInfo ? ` → ${targetInfo.cardName}` : '';
       setEtbReminder({ pIdx, card: sourceCard, effects: [{ icon: '⚡', text: `${sourceCard.name}: ${ability.text || ability.label}${targetStr}` }] });
@@ -5393,17 +5407,29 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         const allText = getOracleText(card);
         const cardName = (card.name || '').toLowerCase();
         // Fallback: known cards by name (most reliable — oracle_text may not sync in online mode)
-        const knownUpkeepDmg = cardName === 'roiling vortex' ? 1 : cardName === 'sulfuric vortex' ? 2 : null;
-        // Also try regex match for generic "each player's upkeep, deals X damage"
+        // (A) "At the beginning of YOUR upkeep, ~ deals N damage to EACH player"
+        //     (Roiling Vortex). Fires only on the CONTROLLER's upkeep, hits BOTH.
+        const eachPlayerDmg = upkeepDamageEachPlayer(card);
+        if (eachPlayerDmg > 0 && pIdx === ownerIdx) {
+          [0, 1].forEach(victimIdx => {
+            setState(victimIdx, prev => ({ ...prev, life: prev.life - eachPlayerDmg }));
+            markDealtDamage(victimIdx);
+            if (typeof dirtyPlayersRef !== 'undefined' && dirtyPlayersRef.current) { dirtyPlayersRef.current.add(victimIdx); if (typeof onlineSyncNeededRef !== 'undefined' && onlineSyncNeededRef.current !== undefined) onlineSyncNeededRef.current = true; }
+          });
+          SFX.lifeLoss();
+          addGameLog(ownerIdx, '\uD83D\uDD25', `${card.name}: upkeep \u2014 deals ${eachPlayerDmg} damage to each player`);
+          continue;
+        }
+        // (B) "At the beginning of EACH player's upkeep, ~ deals N damage to THAT
+        //     player" (Sulfuric Vortex). Fires on every upkeep, hits that player.
+        const knownEachUpkeep = cardName === 'sulfuric vortex' ? 2 : null;
         const eachUpkeepDmgMatch = allText.match(/at the beginning of each player.?s upkeep,?\s*(?:~|[\w\s,]+)\s+deals?\s+(\d+)\s+damage to that player/i);
-        const dmg = knownUpkeepDmg || (eachUpkeepDmgMatch ? parseInt(eachUpkeepDmgMatch[1]) : null);
+        const dmg = knownEachUpkeep || (eachUpkeepDmgMatch ? parseInt(eachUpkeepDmgMatch[1]) : null);
         if (dmg) {
-          console.log('[Upkeep] Roiling Vortex / each-player upkeep trigger:', card.name, 'deals', dmg, 'to player', pIdx);
           setState(pIdx, prev => ({ ...prev, life: prev.life - dmg }));
           markDealtDamage(pIdx);
           SFX.lifeLoss();
           addGameLog(pIdx, '\uD83D\uDD25', `${card.name}: upkeep \u2014 deals ${dmg} damage to ${getStateRef(pIdx).name}`);
-          // Mark dirty so the life change syncs to server immediately
           if (typeof dirtyPlayersRef !== 'undefined' && dirtyPlayersRef.current) {
             dirtyPlayersRef.current.add(pIdx);
             if (typeof onlineSyncNeededRef !== 'undefined' && onlineSyncNeededRef.current !== undefined) {
@@ -7011,8 +7037,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
           return; // Stop processing — remaining effects will fire via onComplete
         }
         case 'gain_life':
-          setState(pIdx, prev => ({ ...prev, life: prev.life + (effect.amount || 0) }));
-          SFX.lifeGain();
+          gainLife(pIdx, effect.amount || 0);
           break;
         case 'each_opponent_loses_life': {
           // For Gray Merchant-style: devotion-based damage
@@ -7987,6 +8012,23 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
 
     // Pay mana immediately
     const newPool = deductManaCost(p.manaPool, cost);
+
+    // Free-cast punisher (Roiling Vortex, etc.): "whenever a player casts a spell,
+    // if no mana was spent, deals N damage to that player." Fires only on a truly
+    // free cast (0 total mana) AND when such a permanent is in play — double-gated.
+    const totalManaPaid = (cost.generic || 0)
+      + ['W', 'U', 'B', 'R', 'G', 'C'].reduce((s, c) => s + (cost[c] || 0), 0)
+      + (cost._hybrid ? cost._hybrid.length : 0);
+    if (totalManaPaid === 0) {
+      let punish = 0;
+      [0, 1].forEach(i => { for (const c of (getState(i).battlefield || [])) punish = Math.max(punish, freeCastPunishDamage(c)); });
+      if (punish > 0) {
+        setState(pIdx, prev => ({ ...prev, life: prev.life - punish }));
+        markDealtDamage(pIdx);
+        SFX.lifeLoss();
+        addGameLog(pIdx, '🔥', `${getDisplayName(card)} cast with no mana — takes ${punish} damage`);
+      }
+    }
 
     // Check if card is being cast from exile (foretell, adventure)
     const isFromExile = getState(pIdx).exile.some(c => c.id === card.id);
@@ -9930,12 +9972,12 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       resolveAttackerPhase(pair.attacker, pair.blockers, 'normal');
     }
 
-    // Apply lifelink
+    // Apply lifelink (routed through gainLife so "can't gain life" is enforced)
     if (lifelinkGainAttacker > 0) {
-      setState(attackingPlayer, prev => ({ ...prev, life: prev.life + lifelinkGainAttacker }));
+      gainLife(attackingPlayer, lifelinkGainAttacker);
     }
     if (lifelinkGainDefender > 0) {
-      setState(defendingPlayer, prev => ({ ...prev, life: prev.life + lifelinkGainDefender }));
+      gainLife(defendingPlayer, lifelinkGainDefender);
     }
 
     // Apply damage to defending player

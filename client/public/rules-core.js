@@ -866,6 +866,40 @@
 
   // ── uid (moved from index.html) ──
   const uid = () => Math.random().toString(36).substr(2, 9);
+
+  // ── Static / triggered permanent-ability detectors (data-driven, generic) ──
+  // These read the card's own text, so they work for ANY card with the ability,
+  // not just one named card. A name fallback covers the case where oracle_text
+  // hasn't synced. getOracleText already lowercases; we also normalise the curly
+  // apostrophe (U+2019) so "can't" matches regardless of source.
+  const _normText = (card) => getOracleText(card).replace(/’/g, "'");
+
+  // "Players can't gain life" (Roiling Vortex, Erebos, etc.)
+  const preventsLifeGain = (card) => {
+    if (!card) return false;
+    if (/(?:players|you|each player|your opponents?) can't gain life/.test(_normText(card))) return true;
+    return (card.name || '').toLowerCase() === 'roiling vortex';
+  };
+
+  // "At the beginning of your upkeep, ~ deals N damage to each player" -> N (else 0)
+  const upkeepDamageEachPlayer = (card) => {
+    if (!card) return 0;
+    const m = _normText(card).match(/at the beginning of your upkeep,[^.]*deals?\s+(\d+)\s+damage to each player/);
+    if (m) return parseInt(m[1], 10);
+    return (card.name || '').toLowerCase() === 'roiling vortex' ? 1 : 0;
+  };
+
+  // "Whenever a player casts a spell, if no mana was spent to cast it, ~ deals N
+  // damage to that player" -> N (else 0). The free-cast punisher.
+  const freeCastPunishDamage = (card) => {
+    if (!card) return 0;
+    const t = _normText(card);
+    // Scope the damage to the free-cast sentence (stay within it: no sentence break).
+    const m = t.match(/no mana was spent to cast it,?\s*[^.]*?deals?\s+(\d+)\s+damage/);
+    if (m) return parseInt(m[1], 10);
+    return (card.name || '').toLowerCase() === 'roiling vortex' ? 5 : 0;
+  };
+
   const api = {
     parseManaCost,
     canPayManaCost,
@@ -903,6 +937,9 @@
     countGraveyardTypes,
     shuffle,
     uid,
+    preventsLifeGain,
+    upkeepDamageEachPlayer,
+    freeCastPunishDamage,
   };
 
   if (typeof module !== 'undefined' && module.exports) {
