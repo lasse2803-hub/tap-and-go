@@ -821,6 +821,42 @@ async function testTurnAdvanceAuthority() {
   s2.disconnect();
 }
 
+async function testLostLifeAuthority() {
+  section('Server-Authoritative lostLifeThisTurn (robust Spectacle fix)');
+
+  const roomData = await createRoom('Alice');
+  const s1 = createSocket();
+  const s2 = createSocket();
+  await Promise.all([
+    new Promise(r => s1.on('connect', r)),
+    new Promise(r => s2.on('connect', r)),
+  ]);
+  await emitCb(s1, 'joinGame', { roomId: roomData.roomId, nickname: 'Alice' });
+  await emitCb(s2, 'joinGame', { roomId: roomData.roomId, nickname: 'Bob' });
+  const p1Start = waitForEvent(s1, 'gameStart');
+  const p2Start = waitForEvent(s2, 'gameStart');
+  await emitCb(s1, 'submitDeck', { deck: createTestDeck() });
+  await emitCb(s2, 'submitDeck', { deck: createTestDeck() });
+  await p1Start; await p2Start;
+
+  // P0 (attacker) reports P1 took 4 damage (e.g. Boros Charm). 20 -> 16.
+  const p1Sees = waitForEvent(s1, 'stateUpdate');
+  await emitCb(s1, 'gameAction', { action: { type: 'stateSync', state: { players: [{}, { life: 16 }] } } });
+  const u1 = await p1Sees;
+  assert(u1.state.players[1].lostLifeThisTurn === true, 'broadcast marks P1 as having lost life this turn');
+  console.log('  ✓ Opponent life loss recorded server-side (lostLifeThisTurn)');
+
+  // The defender (P1) re-syncs itself with the flag false — the OLD dual-writer race.
+  const p1Sees2 = waitForEvent(s1, 'stateUpdate');
+  await emitCb(s2, 'gameAction', { action: { type: 'stateSync', state: { players: [{}, { life: 16, lostLifeThisTurn: false }] } } });
+  const u1b = await p1Sees2;
+  assert(u1b.state.players[1].lostLifeThisTurn === true, 'flag survives the defender re-sync (no clobber)');
+  console.log('  ✓ Defender cannot clobber the flag → Spectacle stays available');
+
+  s1.disconnect();
+  s2.disconnect();
+}
+
 async function testLifeChangeAuthority() {
   section('Server-Authoritative Life Change (Etape 3.4)');
 
@@ -919,6 +955,7 @@ async function main() {
     await testStateBasedGameOver();
     await testTurnAdvanceAuthority();
     await testLifeChangeAuthority();
+    await testLostLifeAuthority();
     await testSpellStackAuthority();
   } catch (err) {
     console.error(`\n✗ FATAL ERROR: ${err.message}`);

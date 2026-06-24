@@ -3897,6 +3897,8 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
           libraryCount: serverOpp.libraryCount ?? prev.libraryCount,
           landPlayedThisTurn: serverOpp.landPlayedThisTurn ?? prev.landPlayedThisTurn,
           dealtDamageThisTurn: serverOpp.dealtDamageThisTurn ?? prev.dealtDamageThisTurn,
+          // Server-authoritative "lost life this turn" (robust Spectacle fix).
+          lostLifeThisTurn: serverOpp.lostLifeThisTurn ?? prev.lostLifeThisTurn,
           commanderCastCount: serverOpp.commanderCastCount ?? prev.commanderCastCount,
           commanderDamageReceived: serverOpp.commanderDamageReceived || prev.commanderDamageReceived,
         };
@@ -5914,7 +5916,9 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         const cardOracle2 = [card.oracle_text || '', ...(card.card_faces || []).map(f => f.oracle_text || '')].join(' ').toLowerCase();
         const spectacleMatch = cardOracle2.match(/spectacle \{([^}]+)\}/);
         const opponentIdx = pIdx === 0 ? 1 : 0;
-        const opponentDealt = getState(opponentIdx).dealtDamageThisTurn;
+        // Prefer the server-authoritative flag (online); fall back to the local
+        // flag (hotseat, where there is no server to own it).
+        const opponentDealt = getState(opponentIdx).lostLifeThisTurn || getState(opponentIdx).dealtDamageThisTurn;
         if (spectacleMatch && opponentDealt) {
           const spectacleCostStr = '{' + spectacleMatch[1] + '}';
           actions.push({ label: `🔥 Cast — Spectacle (${spectacleCostStr})`, fn: () => castCard(pIdx, card, false, spectacleCostStr) });

@@ -293,6 +293,8 @@ class GameRoom {
     this.gameState.currentStep = 'untap';
     if (next === 0) this.gameState.turnNumber = (this.gameState.turnNumber || 1) + 1;
     this.gameState.endOfTurnRespond = false;
+    // New turn → "lost life this turn" resets for both players (Spectacle, etc.).
+    for (const p of this.gameState.players) { if (p) p.lostLifeThisTurn = false; }
     this.gameState.timestamp = Date.now();
     return { ok: true, activePlayer: next, turnNumber: this.gameState.turnNumber, currentPhase: 'main1' };
   }
@@ -349,7 +351,10 @@ class GameRoom {
     if (!this.gameState || this.status !== 'playing') return { error: 'Game not in progress' };
     const p = this.gameState.players[targetPlayerIndex];
     if (!p) return { error: 'Invalid target player' };
-    if (lifeDelta) p.life = (p.life || 0) + lifeDelta;
+    if (lifeDelta) {
+      p.life = (p.life || 0) + lifeDelta;
+      if (lifeDelta < 0) p.lostLifeThisTurn = true;
+    }
     if (poisonDelta) p.poison = (p.poison || 0) + poisonDelta;
     this.gameState.stateBasedLoss = this.checkStateBasedGameOver();
     this.gameState.timestamp = Date.now();
@@ -498,7 +503,13 @@ class GameRoom {
           const s = this.gameState.players[i];
 
           // Update public zones (any player can modify — e.g. combat affects opponent)
-          if (u.life !== undefined) s.life = u.life;
+          // Server-authoritative "lost life this turn" (robust Spectacle fix):
+          // detect any life decrease here and own the flag — clients never set it,
+          // so the previous dual-writer race (defender re-syncing it false) is gone.
+          if (u.life !== undefined) {
+            if (typeof s.life === 'number' && u.life < s.life) s.lostLifeThisTurn = true;
+            s.life = u.life;
+          }
           if (u.poison !== undefined) s.poison = u.poison;
           if (u.battlefield) s.battlefield = u.battlefield;
           if (u.graveyard) s.graveyard = u.graveyard;

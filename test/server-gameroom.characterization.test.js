@@ -337,6 +337,44 @@ test('changeLife via processAction', () => {
   assert.equal(r.life, 15);
 });
 
+// ── Robust Spectacle fix: server-authoritative lostLifeThisTurn ──
+test('stateSync: a life DECREASE sets server-owned lostLifeThisTurn', () => {
+  const room = startedRoom({ firstPlayer: 0 });
+  // P0 reports P1 took damage (life 20 -> 15).
+  room.processAction(0, { type: 'stateSync', state: { players: [{}, { life: 15 }] } });
+  assert.equal(room.gameState.players[1].lostLifeThisTurn, true);
+  assert.ok(!room.gameState.players[0].lostLifeThisTurn, 'untouched player not flagged');
+});
+
+test('stateSync: life gain or no-change does NOT set lostLifeThisTurn', () => {
+  const room = startedRoom({ firstPlayer: 0 });
+  room.processAction(0, { type: 'stateSync', state: { players: [{}, { life: 25 }] } }); // gained
+  assert.ok(!room.gameState.players[1].lostLifeThisTurn);
+});
+
+test('lostLifeThisTurn is server-owned: a client cannot clear it via stateSync', () => {
+  const room = startedRoom({ firstPlayer: 0 });
+  room.processAction(0, { type: 'stateSync', state: { players: [{}, { life: 15 }] } });
+  assert.equal(room.gameState.players[1].lostLifeThisTurn, true);
+  // P1's client tries to re-sync itself with the flag false (the old dual-writer race).
+  room.processAction(1, { type: 'stateSync', state: { players: [{}, { life: 15, lostLifeThisTurn: false }] } });
+  assert.equal(room.gameState.players[1].lostLifeThisTurn, true, 'still true — client value ignored');
+});
+
+test('advanceTurn resets lostLifeThisTurn for both players', () => {
+  const room = startedRoom({ firstPlayer: 0 });
+  room.processAction(0, { type: 'stateSync', state: { players: [{}, { life: 15 }] } });
+  room.advanceTurn(0);
+  assert.equal(room.gameState.players[1].lostLifeThisTurn, false);
+});
+
+test('changeLife with a negative delta sets lostLifeThisTurn', () => {
+  const room = startedRoom({ firstPlayer: 0 });
+  const r = room.changeLife(1, -4);
+  assert.equal(r.life, 16);
+  assert.equal(room.gameState.players[1].lostLifeThisTurn, true);
+});
+
 // ── Etape 3.3: server-authoritative spell stack ──────────────
 test('stackPush: appends an entry, assigns id + caster, bumps version', () => {
   const room = startedRoom({ firstPlayer: 0 });
