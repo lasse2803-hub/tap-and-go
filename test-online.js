@@ -778,6 +778,49 @@ async function testStateBasedGameOver() {
   s2.disconnect();
 }
 
+async function testTurnAdvanceAuthority() {
+  section('Server-Authoritative Turn Advance (Etape 3.2)');
+
+  const roomData = await createRoom('Alice');
+  const s1 = createSocket();
+  const s2 = createSocket();
+  await Promise.all([
+    new Promise(r => s1.on('connect', r)),
+    new Promise(r => s2.on('connect', r)),
+  ]);
+  await emitCb(s1, 'joinGame', { roomId: roomData.roomId, nickname: 'Alice' });
+  await emitCb(s2, 'joinGame', { roomId: roomData.roomId, nickname: 'Bob' });
+  const p1Start = waitForEvent(s1, 'gameStart');
+  const p2Start = waitForEvent(s2, 'gameStart');
+  await emitCb(s1, 'submitDeck', { deck: createTestDeck() });
+  await emitCb(s2, 'submitDeck', { deck: createTestDeck() });
+  const gs1 = await p1Start;
+  await p2Start;
+
+  const active = gs1.state.activePlayer;
+  const other = active === 0 ? 1 : 0;
+  const activeSocket = active === 0 ? s1 : s2;
+  const otherSocket = active === 0 ? s2 : s1;
+
+  // Active player advances the turn → both clients see the flip.
+  const p1Sees = waitForEvent(s1, 'stateUpdate');
+  const p2Sees = waitForEvent(s2, 'stateUpdate');
+  await emitCb(activeSocket, 'gameAction', { action: { type: 'advanceTurn' } });
+  const [u1, u2] = await Promise.all([p1Sees, p2Sees]);
+  assertEqual(u1.state.activePlayer, other, 'P1 view: active player flipped by server');
+  assertEqual(u2.state.activePlayer, other, 'P2 view: active player flipped by server');
+  console.log(`  ✓ Turn advanced authoritatively: active ${active} → ${other}`);
+
+  // After the flip the ORIGINAL active player is now out-of-turn; their attempt
+  // to advance again is rejected by the server (error returned, no broadcast).
+  const rej = await emitCb(activeSocket, 'gameAction', { action: { type: 'advanceTurn' } });
+  assert(rej && rej.error === 'Not your turn', 'out-of-turn advance is rejected by the server');
+  console.log(`  ✓ Out-of-turn advance rejected: ${rej.error}`);
+
+  s1.disconnect();
+  s2.disconnect();
+}
+
 async function main() {
   console.log('═══════════════════════════════════════');
   console.log('  Tap & Go — Integration Test Suite');
@@ -799,6 +842,7 @@ async function main() {
     await testCombatDamageSync();
     await testMultipleRooms();
     await testStateBasedGameOver();
+    await testTurnAdvanceAuthority();
   } catch (err) {
     console.error(`\n✗ FATAL ERROR: ${err.message}`);
     console.error(err.stack);

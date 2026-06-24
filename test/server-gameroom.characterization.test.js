@@ -261,6 +261,46 @@ test('gameWon: single match finishes immediately', () => {
   assert.equal(room.status, 'finished');
 });
 
+// ── Etape 3.2: server-authoritative turn advancement ─────────
+test('advanceTurn: flips active player and resets phase', () => {
+  const room = startedRoom({ firstPlayer: 0 });
+  const res = room.advanceTurn(0);
+  assert.equal(res.ok, true);
+  assert.equal(res.activePlayer, 1);
+  assert.equal(room.gameState.activePlayer, 1);
+  assert.equal(room.gameState.priorityPlayer, 1);
+  assert.equal(room.gameState.currentPhase, 'main1');
+});
+
+test('advanceTurn: turnNumber increments only when play returns to player 0', () => {
+  const room = startedRoom({ firstPlayer: 0 });
+  assert.equal(room.gameState.turnNumber, 1);
+  room.advanceTurn(0); // -> P1, still turn 1
+  assert.equal(room.gameState.turnNumber, 1);
+  room.advanceTurn(1); // -> P0, turn 2
+  assert.equal(room.gameState.turnNumber, 2);
+});
+
+test('advanceTurn: only the active player may advance', () => {
+  const room = startedRoom({ firstPlayer: 0 });
+  assert.deepEqual(room.advanceTurn(1), { error: 'Not your turn' });
+  assert.equal(room.gameState.activePlayer, 0, 'unchanged');
+});
+
+test('advanceTurn: rejected while the stack is not empty', () => {
+  const room = startedRoom({ firstPlayer: 0 });
+  room.gameState.spellStack = [{ id: 's1' }];
+  assert.deepEqual(room.advanceTurn(0), { error: 'Resolve the stack before passing the turn' });
+});
+
+test('advanceTurn via processAction returns the result', () => {
+  const room = startedRoom({ firstPlayer: 1 });
+  const res = room.processAction(1, { type: 'advanceTurn' });
+  assert.equal(res.ok, true);
+  assert.equal(res.activePlayer, 0);
+  assert.equal(res.turnNumber, 2);
+});
+
 // ── Etape 3.1: server-authoritative state-based game-over ─────
 test('checkStateBasedGameOver: detects life <= 0, poison, commander damage', () => {
   const room = startedRoom();

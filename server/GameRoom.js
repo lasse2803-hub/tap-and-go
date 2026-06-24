@@ -265,6 +265,32 @@ class GameRoom {
   }
 
   /**
+   * Server-authoritative turn advancement (Etape 3.2).
+   * Owns the scalar turn truth (activePlayer / turnNumber / phase reset) so the
+   * two clients can't disagree on whose turn it is. Mirrors the client's rule:
+   * turnNumber increments when play returns to player 0. Per-turn side-effects
+   * (untap, draw, buff cleanup) remain client-side for now, driven by the
+   * broadcast activePlayer change.
+   * Returns { ok, activePlayer, turnNumber, currentPhase } or { error }.
+   */
+  advanceTurn(playerIndex) {
+    if (!this.gameState || this.status !== 'playing') return { error: 'Game not in progress' };
+    if (playerIndex !== this.gameState.activePlayer) return { error: 'Not your turn' };
+    if (Array.isArray(this.gameState.spellStack) && this.gameState.spellStack.length > 0) {
+      return { error: 'Resolve the stack before passing the turn' };
+    }
+    const next = this.gameState.activePlayer === 0 ? 1 : 0;
+    this.gameState.activePlayer = next;
+    this.gameState.priorityPlayer = next;
+    this.gameState.currentPhase = 'main1';
+    this.gameState.currentStep = 'untap';
+    if (next === 0) this.gameState.turnNumber = (this.gameState.turnNumber || 1) + 1;
+    this.gameState.endOfTurnRespond = false;
+    this.gameState.timestamp = Date.now();
+    return { ok: true, activePlayer: next, turnNumber: this.gameState.turnNumber, currentPhase: 'main1' };
+  }
+
+  /**
    * Server-authoritative state-based game-over check (Etape 3.1).
    * Scans the authoritative (synced) life / poison / commander-damage and
    * returns { loserIndex, winnerIndex, reason } for the first player that has
@@ -359,6 +385,16 @@ class GameRoom {
   processAction(playerIndex, action) {
     if (!this.gameState) return { error: 'Game not started' };
     this.lastActivity = Date.now();
+
+    // Server-authoritative turn advancement (Etape 3.2). Reachable via the
+    // gameAction channel; the existing broadcast then carries the new turn
+    // state to both clients.
+    if (action.type === 'advanceTurn') {
+      const result = this.advanceTurn(playerIndex);
+      this.gameState.stateBasedLoss = this.checkStateBasedGameOver();
+      this.actionLog.push({ playerIndex, action: { type: 'advanceTurn' }, timestamp: Date.now() });
+      return result;
+    }
 
     // For MVP: the client sends the updated state for its own zones.
     // Server merges and broadcasts.
