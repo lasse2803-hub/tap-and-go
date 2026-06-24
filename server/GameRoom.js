@@ -297,6 +297,48 @@ class GameRoom {
     return { ok: true, activePlayer: next, turnNumber: this.gameState.turnNumber, currentPhase: 'main1' };
   }
 
+  // ── Server-authoritative spell stack (Etape 3.3) ────────────────
+  // The server owns stack membership & order; effect RESOLUTION stays
+  // client-side for now (the caster has the library/targets). Every op bumps
+  // spellStackVersion so this stays compatible with the existing versioned sync.
+
+  /** Push a spell/ability entry onto the stack. Assigns an id if missing. */
+  stackPush(playerIndex, entry) {
+    if (!this.gameState || this.status !== 'playing') return { error: 'Game not in progress' };
+    if (!entry || typeof entry !== 'object') return { error: 'Invalid stack entry' };
+    if (!Array.isArray(this.gameState.spellStack)) this.gameState.spellStack = [];
+    const item = { ...entry, pIdx: entry.pIdx !== undefined ? entry.pIdx : playerIndex };
+    if (!item.id) item.id = crypto.randomBytes(6).toString('hex');
+    this.gameState.spellStack.push(item);
+    this.gameState.spellStackVersion = (this.gameState.spellStackVersion || 0) + 1;
+    this.gameState.timestamp = Date.now();
+    return { ok: true, entryId: item.id, spellStack: this.gameState.spellStack, spellStackVersion: this.gameState.spellStackVersion };
+  }
+
+  /** Pop the top (last-added) entry — its effects are resolved client-side. */
+  stackResolveTop() {
+    if (!this.gameState || this.status !== 'playing') return { error: 'Game not in progress' };
+    const stack = this.gameState.spellStack;
+    if (!Array.isArray(stack) || stack.length === 0) return { error: 'Stack is empty' };
+    const resolved = stack.pop();
+    this.gameState.spellStackVersion = (this.gameState.spellStackVersion || 0) + 1;
+    this.gameState.timestamp = Date.now();
+    return { ok: true, resolved, spellStack: stack, spellStackVersion: this.gameState.spellStackVersion };
+  }
+
+  /** Remove a specific entry by id (e.g. a countered spell). */
+  stackRemove(entryId) {
+    if (!this.gameState || this.status !== 'playing') return { error: 'Game not in progress' };
+    const stack = this.gameState.spellStack;
+    if (!Array.isArray(stack) || stack.length === 0) return { error: 'Stack is empty' };
+    const idx = stack.findIndex(e => e && e.id === entryId);
+    if (idx === -1) return { error: 'Stack entry not found' };
+    const [removed] = stack.splice(idx, 1);
+    this.gameState.spellStackVersion = (this.gameState.spellStackVersion || 0) + 1;
+    this.gameState.timestamp = Date.now();
+    return { ok: true, removed, spellStack: stack, spellStackVersion: this.gameState.spellStackVersion };
+  }
+
   /**
    * Server-authoritative state-based game-over check (Etape 3.1).
    * Scans the authoritative (synced) life / poison / commander-damage and
@@ -400,6 +442,24 @@ class GameRoom {
       const result = this.advanceTurn(playerIndex);
       this.gameState.stateBasedLoss = this.checkStateBasedGameOver();
       this.actionLog.push({ playerIndex, action: { type: 'advanceTurn' }, timestamp: Date.now() });
+      return result;
+    }
+
+    // Server-authoritative spell stack (Etape 3.3), reachable via gameAction.
+    if (action.type === 'stackPush') {
+      const result = this.stackPush(playerIndex, action.entry);
+      this.actionLog.push({ playerIndex, action: { type: 'stackPush' }, timestamp: Date.now() });
+      return result;
+    }
+    if (action.type === 'stackResolveTop') {
+      const result = this.stackResolveTop();
+      this.gameState.stateBasedLoss = this.checkStateBasedGameOver();
+      this.actionLog.push({ playerIndex, action: { type: 'stackResolveTop' }, timestamp: Date.now() });
+      return result;
+    }
+    if (action.type === 'stackRemove') {
+      const result = this.stackRemove(action.entryId);
+      this.actionLog.push({ playerIndex, action: { type: 'stackRemove' }, timestamp: Date.now() });
       return result;
     }
 

@@ -821,6 +821,50 @@ async function testTurnAdvanceAuthority() {
   s2.disconnect();
 }
 
+async function testSpellStackAuthority() {
+  section('Server-Authoritative Spell Stack (Etape 3.3)');
+
+  const roomData = await createRoom('Alice');
+  const s1 = createSocket();
+  const s2 = createSocket();
+  await Promise.all([
+    new Promise(r => s1.on('connect', r)),
+    new Promise(r => s2.on('connect', r)),
+  ]);
+  await emitCb(s1, 'joinGame', { roomId: roomData.roomId, nickname: 'Alice' });
+  await emitCb(s2, 'joinGame', { roomId: roomData.roomId, nickname: 'Bob' });
+  const p1Start = waitForEvent(s1, 'gameStart');
+  const p2Start = waitForEvent(s2, 'gameStart');
+  await emitCb(s1, 'submitDeck', { deck: createTestDeck() });
+  await emitCb(s2, 'submitDeck', { deck: createTestDeck() });
+  await p1Start; await p2Start;
+
+  // P0 casts a spell onto the stack → both clients see it via the broadcast.
+  const p2Sees = waitForEvent(s2, 'stateUpdate');
+  const push = await emitCb(s1, 'gameAction', { action: { type: 'stackPush', entry: { card: { name: 'Lightning Strike' }, displayName: 'Lightning Strike', pIdx: 0 } } });
+  assert(push.ok && push.entryId, 'stackPush returns an entry id');
+  const u2 = await p2Sees;
+  assertEqual(u2.state.spellStack.length, 1, 'opponent sees the spell on the server stack');
+  console.log('  ✓ Cast pushed to the authoritative stack; opponent sees it');
+
+  // P1 responds with a counter onto the stack.
+  await emitCb(s2, 'gameAction', { action: { type: 'stackPush', entry: { card: { name: 'Counterspell' }, pIdx: 1 } } });
+  // P1 counters P0's spell by removing it by id (the countered entry).
+  const rem = await emitCb(s2, 'gameAction', { action: { type: 'stackRemove', entryId: push.entryId } });
+  assert(rem.ok && rem.removed.card.name === 'Lightning Strike', 'countered entry removed by id');
+  console.log('  ✓ Counter removed the targeted entry by id');
+
+  // Resolve the remaining top (Counterspell). Assert on the authoritative
+  // result (the broadcast is racy across rapid ops).
+  const res = await emitCb(s2, 'gameAction', { action: { type: 'stackResolveTop' } });
+  assert(res.ok && res.resolved.card.name === 'Counterspell', 'top of stack resolved');
+  assertEqual(res.spellStack.length, 0, 'server stack is empty after resolution');
+  console.log('  ✓ Resolve popped the top; authoritative stack empty');
+
+  s1.disconnect();
+  s2.disconnect();
+}
+
 async function main() {
   console.log('═══════════════════════════════════════');
   console.log('  Tap & Go — Integration Test Suite');
@@ -843,6 +887,7 @@ async function main() {
     await testMultipleRooms();
     await testStateBasedGameOver();
     await testTurnAdvanceAuthority();
+    await testSpellStackAuthority();
   } catch (err) {
     console.error(`\n✗ FATAL ERROR: ${err.message}`);
     console.error(err.stack);

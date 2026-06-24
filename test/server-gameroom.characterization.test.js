@@ -310,6 +310,55 @@ test('advanceTurn via processAction returns the result', () => {
   assert.equal(res.turnNumber, 2);
 });
 
+// ── Etape 3.3: server-authoritative spell stack ──────────────
+test('stackPush: appends an entry, assigns id + caster, bumps version', () => {
+  const room = startedRoom({ firstPlayer: 0 });
+  const r1 = room.stackPush(0, { card: { name: 'Lightning Strike' }, displayName: 'Lightning Strike' });
+  assert.equal(r1.ok, true);
+  assert.ok(r1.entryId, 'entry got an id');
+  assert.equal(room.gameState.spellStack.length, 1);
+  assert.equal(room.gameState.spellStack[0].pIdx, 0, 'caster recorded');
+  assert.equal(room.gameState.spellStackVersion, 1);
+
+  const r2 = room.stackPush(1, { card: { name: 'Counterspell' }, pIdx: 1 });
+  assert.equal(room.gameState.spellStack.length, 2);
+  assert.equal(room.gameState.spellStackVersion, 2);
+  // LIFO order: last pushed is on top.
+  assert.equal(room.gameState.spellStack[1].card.name, 'Counterspell');
+});
+
+test('stackResolveTop: pops the top entry (LIFO); errors when empty', () => {
+  const room = startedRoom({ firstPlayer: 0 });
+  room.stackPush(0, { card: { name: 'A' } });
+  room.stackPush(1, { card: { name: 'B' } });
+  const res = room.stackResolveTop();
+  assert.equal(res.ok, true);
+  assert.equal(res.resolved.card.name, 'B', 'top (last-added) resolved first');
+  assert.equal(room.gameState.spellStack.length, 1);
+  room.stackResolveTop(); // resolve A
+  assert.deepEqual(room.stackResolveTop(), { error: 'Stack is empty' });
+});
+
+test('stackRemove: removes a specific entry by id (counter); errors if missing', () => {
+  const room = startedRoom({ firstPlayer: 0 });
+  const a = room.stackPush(0, { card: { name: 'A' } }).entryId;
+  const b = room.stackPush(1, { card: { name: 'B' } }).entryId;
+  const res = room.stackRemove(a); // counter the bottom spell
+  assert.equal(res.ok, true);
+  assert.equal(res.removed.card.name, 'A');
+  assert.deepEqual(room.gameState.spellStack.map(e => e.card.name), ['B']);
+  assert.deepEqual(room.stackRemove('nope'), { error: 'Stack entry not found' });
+});
+
+test('stack ops via processAction return results and bump version together', () => {
+  const room = startedRoom({ firstPlayer: 0 });
+  const push = room.processAction(0, { type: 'stackPush', entry: { card: { name: 'Bolt' } } });
+  assert.equal(push.ok, true);
+  const resolve = room.processAction(0, { type: 'stackResolveTop' });
+  assert.equal(resolve.resolved.card.name, 'Bolt');
+  assert.equal(room.gameState.spellStack.length, 0);
+});
+
 // ── Etape 3.1: server-authoritative state-based game-over ─────
 test('checkStateBasedGameOver: detects life <= 0, poison, commander damage', () => {
   const room = startedRoom();
