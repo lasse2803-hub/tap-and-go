@@ -287,6 +287,15 @@ test('advanceTurn: only the active player may advance', () => {
   assert.equal(room.gameState.activePlayer, 0, 'unchanged');
 });
 
+test('advanceTurn: non-active player may advance during end-of-turn respond (Proceed)', () => {
+  const room = startedRoom({ firstPlayer: 0 });
+  room.gameState.endOfTurnRespond = true; // active player passed; opponent confirms
+  const res = room.advanceTurn(1); // non-active "Proceed"
+  assert.equal(res.ok, true);
+  assert.equal(res.activePlayer, 1);
+  assert.equal(room.gameState.endOfTurnRespond, false, 'respond window cleared on advance');
+});
+
 test('advanceTurn: rejected while the stack is not empty', () => {
   const room = startedRoom({ firstPlayer: 0 });
   room.gameState.spellStack = [{ id: 's1' }];

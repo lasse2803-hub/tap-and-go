@@ -275,7 +275,14 @@ class GameRoom {
    */
   advanceTurn(playerIndex) {
     if (!this.gameState || this.status !== 'playing') return { error: 'Game not in progress' };
-    if (playerIndex !== this.gameState.activePlayer) return { error: 'Not your turn' };
+    // Mirrors the proven stateSync acceptance logic: the active player advances
+    // their own turn, OR the non-active player confirms the advance during the
+    // end-of-turn respond window ("Proceed"), OR during the mulligan phase.
+    const isActive = playerIndex === this.gameState.activePlayer;
+    const isEndOfTurnProceed = !!this.gameState.endOfTurnRespond && !isActive;
+    if (!isActive && !isEndOfTurnProceed && !this.gameState.mulliganPhase) {
+      return { error: 'Not your turn' };
+    }
     if (Array.isArray(this.gameState.spellStack) && this.gameState.spellStack.length > 0) {
       return { error: 'Resolve the stack before passing the turn' };
     }
