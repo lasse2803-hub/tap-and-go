@@ -269,3 +269,33 @@ test('type predicates: isSorcery / isSpellCard / isAdventureCard / isSaga', () =
   assert.equal(R.isAdventureCard({ layout: 'normal' }), false);
   assert.equal(R.isSaga({ type_line: 'Enchantment — Saga' }), true);
 });
+
+// ─────────────────────────────────────────────────────────────
+// Etape 4 groundwork (batch 2): display / cycling / foretell / saga / delirium
+// ─────────────────────────────────────────────────────────────
+test('getDisplayName / getReskinArt honor reskin overrides', () => {
+  assert.equal(R.getDisplayName({ name: 'Goblin Token' }), 'Goblin Token');
+  assert.equal(R.getDisplayName({ name: 'Goblin Token', _reskin: { customName: 'Pikachu' } }), 'Pikachu');
+  assert.equal(R.getReskinArt({ _reskin: { customImage: 'http://x/pika.png' } }), 'http://x/pika.png');
+  assert.equal(R.getReskinArt({ name: 'X' }), null);
+});
+
+test('getCyclingCost / getForetellCost gate on card.keywords, then parse the cost', () => {
+  // The function requires the Scryfall keyword to be present before parsing.
+  assert.equal(R.getCyclingCost({ keywords: ['Cycling'], oracle_text: 'Cycling {2}' }), '{2}');
+  assert.equal(R.getCyclingCost({ oracle_text: 'Cycling {2}' }), null, 'no keyword -> null');
+  assert.ok(R.getForetellCost({ keywords: ['Foretell'], oracle_text: 'Foretell {1}{U}' }));
+});
+
+test('hasDelirium / countGraveyardTypes count distinct card types in graveyard', () => {
+  const gy = { graveyard: [{ type_line: 'Creature — Bear' }, { type_line: 'Instant' }, { type_line: 'Sorcery' }, { type_line: 'Land' }] };
+  assert.equal(R.countGraveyardTypes(gy), 4);
+  assert.equal(R.hasDelirium(gy), true);
+  assert.equal(R.hasDelirium({ graveyard: [{ type_line: 'Creature' }, { type_line: 'Instant' }] }), false);
+});
+
+test('shuffle returns a permutation (same multiset)', () => {
+  const out = R.shuffle([1, 2, 3, 4, 5]);
+  assert.equal(out.length, 5);
+  assert.deepEqual([...out].sort(), [1, 2, 3, 4, 5]);
+});

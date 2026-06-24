@@ -745,6 +745,127 @@
 
   // ── isSaga (moved from index.html, Etape 4 groundwork) ──
   const isSaga = (card) => card.type_line && card.type_line.toLowerCase().includes('saga');
+
+  // ── getDisplayName (moved from index.html) ──
+  const getDisplayName = (card) => card._reskin?.customName || card.name;
+
+  // ── getReskinArt (moved from index.html) ──
+  const getReskinArt = (card) => card._reskin?.customImage || null;
+
+  // ── getSpellTargetMode (moved from index.html) ──
+  const getSpellTargetMode = (effects) => {
+    for (const e of effects) {
+      if (['destroy', 'exile', 'bounce', 'damage', 'boost', 'counter_add', 'fight'].includes(e.type)) {
+        return 'battlefield'; // needs a target on the battlefield
+      }
+      if (e.type === 'discard') return 'player';
+      if (e.type === 'counter_spell') return 'stack'; // not applicable in our game
+    }
+    return 'none'; // self-effect, no target needed
+  };
+
+  // ── getLegalTargetTypes (moved from index.html) ──
+  const getLegalTargetTypes = (effects) => {
+    let creature = false, planeswalker = false, artifact = false, enchantment = false;
+    for (const e of effects) {
+      // Effects that implicitly target creatures (no targetDesc/targetType needed)
+      if (['boost', 'fight'].includes(e.type)) creature = true;
+      if (e.type === 'counter_add') creature = true;
+      // Explicit target descriptions from oracle text
+      const desc = ((e.targetDesc || '') + ' ' + (e.targetType || '')).toLowerCase();
+      if (desc.includes('any target') || desc.includes('permanent')) {
+        creature = true; planeswalker = true; artifact = true; enchantment = true;
+      }
+      if (desc.includes('creature')) creature = true;
+      if (desc.includes('planeswalker')) planeswalker = true;
+      if (desc.includes('artifact')) artifact = true;
+      if (desc.includes('enchantment')) enchantment = true;
+      // Damage to "target creature or player" — also allows creatures
+      if (e.type === 'damage' && desc.includes('creature or player')) creature = true;
+    }
+    return { creature, planeswalker, artifact, enchantment };
+  };
+
+  // ── getCyclingCost (moved from index.html) ──
+  const getCyclingCost = (card) => {
+    // Check keywords first
+    if (card.keywords?.some(k => k.toLowerCase().startsWith('cycling'))) {
+      // Try to extract cost from oracle text
+      const allText = getOracleText(card);
+      const cycleMatch = allText.match(/cycling\s*(\{[^}]+\}(?:\{[^}]+\})*)/);
+      return cycleMatch ? cycleMatch[1] : '{2}'; // default to {2} if can't parse
+    }
+    return null;
+  };
+
+  // ── getForetellCost (moved from index.html) ──
+  const getForetellCost = (card) => {
+    const kws = (card.keywords || []).map(k => k.toLowerCase());
+    if (!kws.includes('foretell')) return null;
+    const allText = getOracleText(card);
+    // Foretell cost pattern: "Foretell {W}{W}" or "Foretell {2}{U}"
+    const ftMatch = allText.match(/foretell\s+((?:\{[^}]+\})+)/);
+    return ftMatch ? ftMatch[1] : '{2}'; // default {2} if can't parse
+  };
+
+  // ── parseSagaChapters (moved from index.html) ──
+  const parseSagaChapters = (card) => {
+    const oracle = [card.oracle_text || '', ...(card.card_faces || []).map(f => f.oracle_text || '')].filter(Boolean).join('\n');
+    const chapters = [];
+    // Match patterns like "I —", "II —", "III —", "I, II —", "II, III —" etc.
+    const chapterRegex = /([IVX]+(?:,\s*[IVX]+)*)\s*[—\-]\s*([^\n]+(?:\n(?![IVX]+[\s,]*[—\-])[^\n]*)*)/g;
+    let match;
+    while ((match = chapterRegex.exec(oracle)) !== null) {
+      const romanNums = match[1].split(',').map(s => s.trim());
+      const text = match[2].trim();
+      // Convert roman to number
+      const romanToNum = (r) => {
+        const map = { 'I': 1, 'II': 2, 'III': 3, 'IV': 4, 'V': 5 };
+        return map[r] || 0;
+      };
+      const nums = romanNums.map(romanToNum).filter(n => n > 0);
+      chapters.push({ nums, text: text.length > 60 ? text.slice(0, 57) + '...' : text, fullText: text });
+    }
+    return chapters;
+  };
+
+  // ── hasDelirium (moved from index.html) ──
+  const hasDelirium = (playerState) => {
+    if (!playerState || !playerState.graveyard) return false;
+    const types = new Set();
+    const typeKeywords = ['creature', 'instant', 'sorcery', 'artifact', 'enchantment', 'land', 'planeswalker', 'tribal', 'battle', 'kindred'];
+    for (const c of playerState.graveyard) {
+      const tl = (c.type_line || '').toLowerCase();
+      for (const tk of typeKeywords) { if (tl.includes(tk)) types.add(tk); }
+      if (types.size >= 4) return true; // Early exit
+    }
+    return types.size >= 4;
+  };
+
+  // ── countGraveyardTypes (moved from index.html) ──
+  const countGraveyardTypes = (playerState) => {
+    if (!playerState || !playerState.graveyard) return 0;
+    const types = new Set();
+    const typeKeywords = ['creature', 'instant', 'sorcery', 'artifact', 'enchantment', 'land', 'planeswalker', 'tribal', 'battle', 'kindred'];
+    for (const c of playerState.graveyard) {
+      const tl = (c.type_line || '').toLowerCase();
+      for (const tk of typeKeywords) { if (tl.includes(tk)) types.add(tk); }
+    }
+    return types.size;
+  };
+
+  // ── shuffle (moved from index.html) ──
+  const shuffle = (arr) => {
+    const a = [...arr];
+    for (let i = a.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [a[i], a[j]] = [a[j], a[i]];
+    }
+    return a;
+  };
+
+  // ── uid (moved from index.html) ──
+  const uid = () => Math.random().toString(36).substr(2, 9);
   const api = {
     parseManaCost,
     canPayManaCost,
@@ -771,6 +892,17 @@
     isSpellCard,
     isAdventureCard,
     isSaga,
+    getDisplayName,
+    getReskinArt,
+    getSpellTargetMode,
+    getLegalTargetTypes,
+    getCyclingCost,
+    getForetellCost,
+    parseSagaChapters,
+    hasDelirium,
+    countGraveyardTypes,
+    shuffle,
+    uid,
   };
 
   if (typeof module !== 'undefined' && module.exports) {

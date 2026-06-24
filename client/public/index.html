@@ -1022,10 +1022,10 @@ const getCardSmall = (card) => getCardImage(card, 'small');
 const getCardNormal = (card) => getCardImage(card, 'normal');
 
 // Get the custom reskin art URL (if any) — displayed as overlay on the card art box
-const getReskinArt = (card) => card._reskin?.customImage || null;
+// [moved to rules-core.js] getReskinArt
 
 // Get display name (custom or original)
-const getDisplayName = (card) => card._reskin?.customName || card.name;
+// [moved to rules-core.js] getDisplayName
 
 // ============ AVATAR DEFINITIONS ============
 const AVATAR_CARDS = [
@@ -1476,40 +1476,12 @@ const MANA_COLORS_CSS = { W: '#f9faf4', U: '#0e67ab', B: '#150b00', R: '#d3202a'
 // [moved to rules-core.js] parseSpellEffects
 
 // Determine what targets a spell needs based on its effects
-const getSpellTargetMode = (effects) => {
-  for (const e of effects) {
-    if (['destroy', 'exile', 'bounce', 'damage', 'boost', 'counter_add', 'fight'].includes(e.type)) {
-      return 'battlefield'; // needs a target on the battlefield
-    }
-    if (e.type === 'discard') return 'player';
-    if (e.type === 'counter_spell') return 'stack'; // not applicable in our game
-  }
-  return 'none'; // self-effect, no target needed
-};
+// [moved to rules-core.js] getSpellTargetMode
 
 // Return which permanent types are legal targets for the given spell effects.
 // Combines effect-type defaults (boost/counter_add/fight always target creatures)
 // with explicit targetDesc/targetType extracted from oracle text.
-const getLegalTargetTypes = (effects) => {
-  let creature = false, planeswalker = false, artifact = false, enchantment = false;
-  for (const e of effects) {
-    // Effects that implicitly target creatures (no targetDesc/targetType needed)
-    if (['boost', 'fight'].includes(e.type)) creature = true;
-    if (e.type === 'counter_add') creature = true;
-    // Explicit target descriptions from oracle text
-    const desc = ((e.targetDesc || '') + ' ' + (e.targetType || '')).toLowerCase();
-    if (desc.includes('any target') || desc.includes('permanent')) {
-      creature = true; planeswalker = true; artifact = true; enchantment = true;
-    }
-    if (desc.includes('creature')) creature = true;
-    if (desc.includes('planeswalker')) planeswalker = true;
-    if (desc.includes('artifact')) artifact = true;
-    if (desc.includes('enchantment')) enchantment = true;
-    // Damage to "target creature or player" — also allows creatures
-    if (e.type === 'damage' && desc.includes('creature or player')) creature = true;
-  }
-  return { creature, planeswalker, artifact, enchantment };
-};
+// [moved to rules-core.js] getLegalTargetTypes
 
 // ============ CARD INFO & HANDLING GUIDE ============
 // Analyzes a card and reports what the game auto-handles vs what requires manual action
@@ -1744,7 +1716,7 @@ const getCardHandlingInfo = (card) => {
 };
 
 // ============ HELPERS ============
-const uid = () => Math.random().toString(36).substr(2, 9);
+// [moved to rules-core.js] uid
 
 // [moved to rules-core.js] getOracleText
 
@@ -2008,50 +1980,13 @@ const getConditionalBuffs = (card) => {
 };
 
 // ===== DELIRIUM: Check if a player has 4+ card types in their graveyard =====
-const hasDelirium = (playerState) => {
-  if (!playerState || !playerState.graveyard) return false;
-  const types = new Set();
-  const typeKeywords = ['creature', 'instant', 'sorcery', 'artifact', 'enchantment', 'land', 'planeswalker', 'tribal', 'battle', 'kindred'];
-  for (const c of playerState.graveyard) {
-    const tl = (c.type_line || '').toLowerCase();
-    for (const tk of typeKeywords) { if (tl.includes(tk)) types.add(tk); }
-    if (types.size >= 4) return true; // Early exit
-  }
-  return types.size >= 4;
-};
+// [moved to rules-core.js] hasDelirium
 
 // Count unique card types in graveyard (for display)
-const countGraveyardTypes = (playerState) => {
-  if (!playerState || !playerState.graveyard) return 0;
-  const types = new Set();
-  const typeKeywords = ['creature', 'instant', 'sorcery', 'artifact', 'enchantment', 'land', 'planeswalker', 'tribal', 'battle', 'kindred'];
-  for (const c of playerState.graveyard) {
-    const tl = (c.type_line || '').toLowerCase();
-    for (const tk of typeKeywords) { if (tl.includes(tk)) types.add(tk); }
-  }
-  return types.size;
-};
+// [moved to rules-core.js] countGraveyardTypes
 
 // ===== SAGA: Parse chapter abilities from oracle text =====
-const parseSagaChapters = (card) => {
-  const oracle = [card.oracle_text || '', ...(card.card_faces || []).map(f => f.oracle_text || '')].filter(Boolean).join('\n');
-  const chapters = [];
-  // Match patterns like "I —", "II —", "III —", "I, II —", "II, III —" etc.
-  const chapterRegex = /([IVX]+(?:,\s*[IVX]+)*)\s*[—\-]\s*([^\n]+(?:\n(?![IVX]+[\s,]*[—\-])[^\n]*)*)/g;
-  let match;
-  while ((match = chapterRegex.exec(oracle)) !== null) {
-    const romanNums = match[1].split(',').map(s => s.trim());
-    const text = match[2].trim();
-    // Convert roman to number
-    const romanToNum = (r) => {
-      const map = { 'I': 1, 'II': 2, 'III': 3, 'IV': 4, 'V': 5 };
-      return map[r] || 0;
-    };
-    const nums = romanNums.map(romanToNum).filter(n => n > 0);
-    chapters.push({ nums, text: text.length > 60 ? text.slice(0, 57) + '...' : text, fullText: text });
-  }
-  return chapters;
-};
+// [moved to rules-core.js] parseSagaChapters
 
 // Get all keywords for a creature including base, temp, and attachment keywords
 const getCreatureKeywords = (card, attachments = []) => {
@@ -2074,26 +2009,10 @@ const getCreatureKeywords = (card, attachments = []) => {
 };
 
 // Cycling detection — returns cycling cost string or null
-const getCyclingCost = (card) => {
-  // Check keywords first
-  if (card.keywords?.some(k => k.toLowerCase().startsWith('cycling'))) {
-    // Try to extract cost from oracle text
-    const allText = getOracleText(card);
-    const cycleMatch = allText.match(/cycling\s*(\{[^}]+\}(?:\{[^}]+\})*)/);
-    return cycleMatch ? cycleMatch[1] : '{2}'; // default to {2} if can't parse
-  }
-  return null;
-};
+// [moved to rules-core.js] getCyclingCost
 
 // Foretell: detect foretell keyword and parse the foretell cost
-const getForetellCost = (card) => {
-  const kws = (card.keywords || []).map(k => k.toLowerCase());
-  if (!kws.includes('foretell')) return null;
-  const allText = getOracleText(card);
-  // Foretell cost pattern: "Foretell {W}{W}" or "Foretell {2}{U}"
-  const ftMatch = allText.match(/foretell\s+((?:\{[^}]+\})+)/);
-  return ftMatch ? ftMatch[1] : '{2}'; // default {2} if can't parse
-};
+// [moved to rules-core.js] getForetellCost
 
 // ============ DYNAMIC HAND CARD VALUE ============
 // Calculates dynamic values for cards in hand based on game state (e.g. Zenith Flare)
@@ -2416,14 +2335,7 @@ const getPlaneswalkerStartingLoyalty = (card) => {
   return 0;
 };
 
-const shuffle = (arr) => {
-  const a = [...arr];
-  for (let i = a.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [a[i], a[j]] = [a[j], a[i]];
-  }
-  return a;
-};
+// [moved to rules-core.js] shuffle
 
 // ============ CARD IMAGE WITH RESKIN OVERLAY ============
 // Shows the original card (frame, text, stats) with custom art overlaid in the art box
