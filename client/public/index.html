@@ -6793,6 +6793,18 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     spellStackVersionRef.current++;
     _setSpellStackSync(valOrFn);
   };
+  // Stack-cutover step 1 (push): route a spell-cast onto the SERVER-authoritative
+  // stack so both clients reliably see it (no client-authoritative push race).
+  // Resolve/counter still use setSpellStack locally for now — the server's
+  // stackPush bumps the same spellStackVersion, so the version-gated sync stays
+  // coherent. Hotseat (no server) pushes locally as before.
+  const pushToStack = (entry) => {
+    if (onlineMode && serverGameAction) {
+      serverGameAction({ type: 'stackPush', entry: entry.id ? entry : { ...entry, id: uid() } });
+    } else {
+      setSpellStack(prev => [...prev, entry]);
+    }
+  };
   const stackTop = spellStack.length > 0 ? spellStack[spellStack.length - 1] : null;
   const [stackMinimized, setStackMinimized] = useState(false); // LOCAL — temporarily minimize spell stack overlay to interact with battlefield (e.g. sacrifice Cursecatcher)
   const [sacCounterChoice, _setSacCounterChoice] = useState(null); // SYNCED — { sacPIdx, sacCard, targetEntry, payAmount } — "counter unless pays" choice
@@ -8118,7 +8130,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       if (overloadMode) {
         // Overload mode — skip targeting, goes directly on stack as mass effect
         setInstantCasting(null); // Safe to clear now — spell is going on stack
-        setSpellStack(prev => [...prev, { pIdx, card, asAdventure, fromExile: isFromExile, displayName, overloadMode: true }]);
+        pushToStack({ pIdx, card, asAdventure, fromExile: isFromExile, displayName, overloadMode: true });
         addGameLog(pIdx, '🌊', `${getState(pIdx).name} casts ${displayName} with OVERLOAD`);
         return;
       }
@@ -8135,7 +8147,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
 
     // No targeting needed — put directly on the stack
     setInstantCasting(null); // Safe to clear now — spell is going on stack
-    setSpellStack(prev => [...prev, { pIdx, card, asAdventure, fromExile: isFromExile, displayName }]);
+    pushToStack({ pIdx, card, asAdventure, fromExile: isFromExile, displayName });
     addGameLog(pIdx, '🃏', `${getState(pIdx).name} casts ${displayName}`);
   };
 
@@ -8160,7 +8172,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       exile: prev.exile.filter(c => c.id !== card.id),
     }));
     // Put on stack — mark as fromExile so resolve knows destination
-    setSpellStack(prev => [...prev, { pIdx, card, asAdventure: false, fromExile: true, displayName: creatureFace.name }]);
+    pushToStack({ pIdx, card, asAdventure: false, fromExile: true, displayName: creatureFace.name });
   };
 
   // ===== CREATURE LAND ACTIVATION =====
@@ -8572,9 +8584,9 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
           pendingCastRef.current = null;
           setSpellTargeting(null);
           setInstantCasting(null); // Safe to clear now — spell is going on stack
-          setSpellStack(prev => [...prev, {
+          pushToStack({
             ...pc, resolvedTargets: { type: 'creature', pIdx, cardId: card.id, cardName: card.name },
-          }]);
+          });
           setCastError({ pIdx: pc.pIdx, message: `${pc.displayName} → ${card.name}`, background: '#1a3320' });
           setTimeout(() => setCastError(null), 1500);
         } else {
@@ -8669,9 +8681,9 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       setInstantCasting(null); // Safe to clear now — spell is going on stack
       const dmgEffects = spellTargeting.effects.filter(e => e.type === 'damage');
       const dmg = dmgEffects.length > 0 ? (dmgEffects[0].amount || 0) : 0;
-      setSpellStack(prev => [...prev, {
+      pushToStack({
         ...pc, resolvedTargets: { type: 'player', pIdx: targetPIdx, damage: dmg },
-      }]);
+      });
       setCastError({ pIdx: pc.pIdx, message: `${pc.displayName}: ${dmg} damage → ${getState(targetPIdx).name}`, background: '#1a3320' });
       setTimeout(() => setCastError(null), 1500);
       return;
@@ -9079,17 +9091,17 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       } else if (effects.some(e => e.type === 'counter_spell')) {
         // Counter mode — put on stack as counterspell
         setInstantCasting(null); // Safe to clear now — spell is going on stack
-        setSpellStack(prev => [...prev, {
+        pushToStack({
           pIdx: pending.pIdx, card: pending.card, asAdventure: pending.asAdventure,
           fromExile: pending.fromExile, displayName: pending.displayName, chosenMode: 'counter',
-        }]);
+        });
       } else {
         // Other mode — put on stack
         setInstantCasting(null); // Safe to clear now — spell is going on stack
-        setSpellStack(prev => [...prev, {
+        pushToStack({
           pIdx: pending.pIdx, card: pending.card, asAdventure: pending.asAdventure,
           fromExile: pending.fromExile, displayName: pending.displayName, chosenMode: choice.modeText,
-        }]);
+        });
       }
       setModalChoice(null);
       return; // Don't fall through to the combat trigger setModalChoice(null) below
