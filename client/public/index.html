@@ -3780,6 +3780,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       endOfTurnRespond,
       endOfTurnRespondVersion: endOfTurnRespondVersionRef.current,
       pwAbilityOnStack,
+      pwAbilityOnStackVersion: pwAbilityOnStackVersionRef.current,
       pwReminder,
       preventCombatDamage,
       modalChoice,
@@ -4057,7 +4058,13 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         _setEndOfTurnRespond(onlineState.endOfTurnRespond);
       }
     }
-    if (onlineState.pwAbilityOnStack !== undefined) _setPwAbilityOnStack(onlineState.pwAbilityOnStack);
+    {
+      const pwV = onlineState.pwAbilityOnStackVersion || 0;
+      if (pwV >= pwAbilityOnStackVersionRef.current) {
+        pwAbilityOnStackVersionRef.current = pwV;
+        if (onlineState.pwAbilityOnStack !== undefined) _setPwAbilityOnStack(onlineState.pwAbilityOnStack);
+      }
+    }
     if (onlineState.pwReminder !== undefined) _setPwReminder(onlineState.pwReminder);
     if (onlineState.preventCombatDamage !== undefined) _setPreventCombatDamage(onlineState.preventCombatDamage);
     if (onlineState.modalChoice !== undefined) _setModalChoice(onlineState.modalChoice);
@@ -6817,7 +6824,12 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     }
   }, [spellStack.length, sacCounterChoice]);
   const [pwAbilityOnStack, _setPwAbilityOnStack] = useState(null); // SYNCED — { pIdx, card, ability: { cost, text } }
-  const setPwAbilityOnStack = syncSetter(_setPwAbilityOnStack);
+  // Version-gated (like spellStack/mulligan): when the opponent clicks OK and
+  // clears this, the caster's client must not re-sync its stale value back —
+  // that caused the OK/Respond window to loop on the opponent's screen.
+  const pwAbilityOnStackVersionRef = useRef(0);
+  const _setPwAbilityOnStackSync = syncSetter(_setPwAbilityOnStack);
+  const setPwAbilityOnStack = (v) => { pwAbilityOnStackVersionRef.current++; _setPwAbilityOnStackSync(v); };
   const [pwReminder, _setPwReminder] = useState(null); // SYNCED — { pIdx, card, ability, exiledCard?, exileCastDmg? }
   const setPwReminder = syncSetter(_setPwReminder);
   const [searchExile, _setSearchExile] = useState(null); // SYNCED — { pIdx, targetPIdx, cardName } — post-counter search & exile (Test of Talents)

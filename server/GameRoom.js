@@ -604,7 +604,16 @@ class GameRoom {
           this.gameState.endOfTurnRespondVersion = incomingVer;
         }
       }
-      if (update.pwAbilityOnStack !== undefined) this.gameState.pwAbilityOnStack = update.pwAbilityOnStack;
+      if (update.pwAbilityOnStackVersion !== undefined) {
+        const inV = update.pwAbilityOnStackVersion || 0;
+        const curV = this.gameState.pwAbilityOnStackVersion || 0;
+        if (inV >= curV) {
+          this.gameState.pwAbilityOnStackVersion = inV;
+          if (update.pwAbilityOnStack !== undefined) this.gameState.pwAbilityOnStack = update.pwAbilityOnStack;
+        }
+      } else if (update.pwAbilityOnStack !== undefined) {
+        this.gameState.pwAbilityOnStack = update.pwAbilityOnStack;
+      }
       if (update.pwReminder !== undefined) this.gameState.pwReminder = update.pwReminder;
       if (update.preventCombatDamage !== undefined) this.gameState.preventCombatDamage = update.preventCombatDamage;
       if (update.modalChoice !== undefined) this.gameState.modalChoice = update.modalChoice;
