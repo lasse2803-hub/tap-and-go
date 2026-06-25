@@ -5444,7 +5444,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         }
         // (B) "At the beginning of EACH player's upkeep, ~ deals N damage to THAT
         //     player" (Sulfuric Vortex). Fires on every upkeep, hits that player.
-        const knownEachUpkeep = cardName === 'sulfuric vortex' ? 2 : null;
+        const knownEachUpkeep = cardName === 'sulfuric vortex' ? 2 : cardName === 'roiling vortex' ? 1 : null;
         const eachUpkeepDmgMatch = allText.match(/at the beginning of each player.?s upkeep,?\s*(?:~|[\w\s,]+)\s+deals?\s+(\d+)\s+damage to that player/i);
         const dmg = knownEachUpkeep || (eachUpkeepDmgMatch ? parseInt(eachUpkeepDmgMatch[1]) : null);
         if (dmg) {

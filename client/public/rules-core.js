@@ -881,12 +881,14 @@
     return (card.name || '').toLowerCase() === 'roiling vortex';
   };
 
-  // "At the beginning of your upkeep, ~ deals N damage to each player" -> N (else 0)
+  // "At the beginning of your upkeep, ~ deals N damage to each player" -> N (else 0).
+  // NOTE: Roiling Vortex is NOT this template — it's "each player's upkeep, that
+  // player" (Sulfuric-style), handled in the upkeep code's (B) branch.
   const upkeepDamageEachPlayer = (card) => {
     if (!card) return 0;
     const m = _normText(card).match(/at the beginning of your upkeep,[^.]*deals?\s+(\d+)\s+damage to each player/);
     if (m) return parseInt(m[1], 10);
-    return (card.name || '').toLowerCase() === 'roiling vortex' ? 1 : 0;
+    return 0;
   };
 
   // "Whenever a player casts a spell, if no mana was spent to cast it, ~ deals N

@@ -306,10 +306,12 @@ test('shuffle returns a permutation (same multiset)', () => {
 test('Roiling Vortex: all three abilities detected (incl. curly apostrophe)', () => {
   const rv = {
     name: 'Roiling Vortex',
-    oracle_text: 'Players can’t gain life.\nAt the beginning of your upkeep, Roiling Vortex deals 1 damage to each player.\nWhenever a player casts a spell, if no mana was spent to cast it, Roiling Vortex deals 5 damage to that player.',
+    // Real oracle: upkeep is "each player's upkeep -> that player" (Sulfuric-style),
+    // NOT "your upkeep -> each player". So upkeepDamageEachPlayer must be 0.
+    oracle_text: 'Players can’t gain life.\nAt the beginning of each player’s upkeep, Roiling Vortex deals 1 damage to that player.\nWhenever a player casts a spell, if no mana was spent to cast it, Roiling Vortex deals 5 damage to that player.',
   };
   assert.equal(R.preventsLifeGain(rv), true);
-  assert.equal(R.upkeepDamageEachPlayer(rv), 1);
+  assert.equal(R.upkeepDamageEachPlayer(rv), 0);
   // Must pick the free-cast clause's 5, NOT the upkeep clause's 1.
   assert.equal(R.freeCastPunishDamage(rv), 5);
 });
@@ -317,7 +319,8 @@ test('Roiling Vortex: all three abilities detected (incl. curly apostrophe)', ()
 test('detectors: name fallback when oracle text has not synced', () => {
   const rv = { name: 'Roiling Vortex' };
   assert.equal(R.preventsLifeGain(rv), true);
-  assert.equal(R.upkeepDamageEachPlayer(rv), 1);
+  // Not an "each player on your upkeep" card — that template returns 0.
+  assert.equal(R.upkeepDamageEachPlayer(rv), 0);
   assert.equal(R.freeCastPunishDamage(rv), 5);
 });
 
