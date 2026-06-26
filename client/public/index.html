@@ -11451,7 +11451,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
 
       {/* End of Turn — opponent can respond before turn passes */}
       {/* IMPORTANT: Hide when spellStack/targeting/modals are active — those overlays must take priority */}
-      {endOfTurnRespond && !instantCasting && spellStack.length === 0 && !spellTargeting && !abilityTargeting && !modalChoice && !scryView && !lookTopView && !gameOver && (() => {
+      {endOfTurnRespond && !instantCasting && spellStack.length === 0 && !spellTargeting && !abilityTargeting && !modalChoice && !scryView && !lookTopView && !etbReminder && !pwReminder && !cycleXChoice && !gameOver && (() => {
         const opponentIdx = activePlayer === 0 ? 1 : 0;
         const opponentName = getState(opponentIdx).name;
         const activeName = getState(activePlayer).name;
