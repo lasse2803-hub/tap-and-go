@@ -10697,13 +10697,23 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
             )}
             {isActive && !(onlineMode && pIdx !== onlinePlayerIndex) && (
               <button className="btn text-xs" style={{ borderColor: 'rgba(100,180,220,0.3)', color: '#70b8d8' }}
-                onClick={() => setScryView({ pIdx, count: 3, mode: 'scry' })}>
+                onClick={() => {
+                  // Let the player choose how many to scry (e.g. Omen of the Sea = 2),
+                  // instead of forcing 3.
+                  const x = prompt('Scry how many cards?', '1');
+                  const n = parseInt(x);
+                  if (!isNaN(n) && n > 0) setScryView({ pIdx, count: Math.min(n, getState(pIdx).library.length), mode: 'scry' });
+                }}>
                 Scry
               </button>
             )}
             {isActive && !(onlineMode && pIdx !== onlinePlayerIndex) && (
               <button className="btn text-xs" style={{ borderColor: 'rgba(140,100,200,0.3)', color: '#b090e0' }}
-                onClick={() => setScryView({ pIdx, count: 3, mode: 'surveil' })}>
+                onClick={() => {
+                  const x = prompt('Surveil how many cards?', '1');
+                  const n = parseInt(x);
+                  if (!isNaN(n) && n > 0) setScryView({ pIdx, count: Math.min(n, getState(pIdx).library.length), mode: 'surveil' });
+                }}>
                 Surveil
               </button>
             )}
