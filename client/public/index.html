@@ -7835,12 +7835,29 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     const resolveFromZone = fromExile ? 'exile' : 'hand';
     moveCard(pIdx, card, resolveFromZone, 'battlefield');
     // NOTE: moveCard already plays the appropriate SFX (planeswalkerEnters, playCreature, etc.)
-    const etbEffects = getETBEffects(card);
+    let etbEffects = getETBEffects(card);
 
     // Check battlefield for "whenever another creature enters" triggers (Purphoros, Soul Warden, etc.)
     if (isCreature(card)) {
       const otherCreatureETBs = scanOtherCreatureETBTriggers(pIdx, card);
       etbEffects.push(...otherCreatureETBs);
+    }
+
+    // Scry/draw ETB effects auto-resolve through the normal effect resolver — the same
+    // path spells and activated abilities use (opens the scry UI, draws afterward,
+    // online-aware) — instead of showing a manual button. E.g. Omen of the Sea's
+    // "scry 2, then draw a card" just resolves in order, no extra click.
+    const scryFx = etbEffects.find(e => e.actionType === 'scry');
+    const drawFx = etbEffects.find(e => e.actionType === 'draw');
+    if (scryFx || drawFx) {
+      const autoEffects = [];
+      if (scryFx) {
+        autoEffects.push({ type: 'scry', count: scryFx.count || 1, mode: scryFx.mode || 'scry' });
+        if (scryFx.drawAfter > 0) autoEffects.push({ type: 'draw', amount: scryFx.drawAfter });
+      }
+      if (drawFx) autoEffects.push({ type: 'draw', amount: drawFx.amount || 1 });
+      setTimeout(() => applyNonTargetedEffects(pIdx, card, autoEffects), 300);
+      etbEffects = etbEffects.filter(e => e !== scryFx && e !== drawFx);
     }
 
     // Auto-apply ETB damage to opponent in 1v1 (Viashino Pyromancer, etc.)
@@ -12763,39 +12780,6 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                           </button>
                         ));
                       })()}
-                    </div>
-                  )}
-                  {e.actionType === 'scry' && (
-                    <div style={{ display: 'flex', gap: 6, marginTop: 6, justifyContent: 'center' }}>
-                      <button className="btn btn-gold" style={{ padding: '4px 12px', fontSize: 11 }}
-                        onClick={() => {
-                          const rPIdx = etbReminder.pIdx;
-                          const after = e.drawAfter || 0;
-                          const onComplete = after > 0 ? () => { for (let d = 0; d < after; d++) drawCard(rPIdx); } : null;
-                          setScryView({ pIdx: rPIdx, count: e.count || 1, mode: 'scry', onComplete });
-                          setEtbReminder(prev => {
-                            const remaining = prev.effects.filter((_, idx) => idx !== i);
-                            return remaining.length > 0 ? { ...prev, effects: remaining } : null;
-                          });
-                        }}>
-                        🔮 Scry {e.count}{e.drawAfter ? ` & draw ${e.drawAfter}` : ''}
-                      </button>
-                    </div>
-                  )}
-                  {e.actionType === 'draw' && (
-                    <div style={{ display: 'flex', gap: 6, marginTop: 6, justifyContent: 'center' }}>
-                      <button className="btn btn-gold" style={{ padding: '4px 12px', fontSize: 11 }}
-                        onClick={() => {
-                          const rPIdx = etbReminder.pIdx;
-                          for (let d = 0; d < (e.amount || 1); d++) drawCard(rPIdx);
-                          addGameLog(rPIdx, '📘', `${etbReminder.card.name}: Drew ${e.amount || 1} card(s)`);
-                          setEtbReminder(prev => {
-                            const remaining = prev.effects.filter((_, idx) => idx !== i);
-                            return remaining.length > 0 ? { ...prev, effects: remaining } : null;
-                          });
-                        }}>
-                        📘 Draw {e.amount || 1}
-                      </button>
                     </div>
                   )}
                 </div>
