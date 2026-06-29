@@ -758,6 +758,21 @@ class GameRoom {
       return { ok: true, cardName: card.name, newLibraryCount: target.library.length };
     }
 
+    if (action.type === 'createBattlefieldToken') {
+      // Create a token on a (possibly opponent's) battlefield, server-authoritative.
+      // Used when one player's trigger makes a token under ANOTHER player's control
+      // (Relic Robber → defending player creates a Goblin Construct). Owning this write
+      // on the server prevents the target's own state sync from clobbering the token.
+      const { targetPlayerIndex, token } = action;
+      const target = this.gameState.players[targetPlayerIndex];
+      if (!target || !token || !token.id) return { error: 'Invalid token creation' };
+      // Idempotent: ignore a duplicate id (e.g. a retried action)
+      if (target.battlefield.some(c => c.id === token.id)) return { ok: true, tokenName: token.name };
+      target.battlefield.push({ ...token, tapped: false, counters: {} });
+      this.gameState.timestamp = Date.now();
+      return { ok: true, tokenName: token.name };
+    }
+
     if (action.type === 'mulligan') {
       // Server-side mulligan: shuffle hand+library, draw new hand
       const { targetPlayerIndex, newCount } = action;

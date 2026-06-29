@@ -8973,7 +8973,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     // Non-modal: try to auto-parse token creation
     let parsedToken = null;
     // Pattern 1: "create [Name], a [legendary] P/T [color] [type] creature token"
-    const namedTokenMatch = oracle.match(/create\s+(\w[\w\s]*?),\s+a\s+(?:legendary\s+)?(\d+)\/(\d+)\s+([\w\s]+?)\s+creature\s+token/);
+    const namedTokenMatch = oracle.match(/creates?\s+(\w[\w\s]*?),\s+a\s+(?:legendary\s+)?(\d+)\/(\d+)\s+([\w\s]+?)\s+creature\s+token/);
     if (namedTokenMatch) {
       const tokenName = namedTokenMatch[1].trim().split(' ').map(w => w[0].toUpperCase() + w.slice(1)).join(' ');
       const tp = namedTokenMatch[2], tt = namedTokenMatch[3];
@@ -8986,7 +8986,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     }
     // Pattern 2: "create a/an [P/T] [color] [type] creature token"
     if (!parsedToken) {
-      const genericTokenMatch = oracle.match(/create\s+(?:a|an)\s+(\d+)\/(\d+)\s+([\w\s]+?)\s+creature\s+token/);
+      const genericTokenMatch = oracle.match(/creates?\s+(?:a|an)\s+(?:tapped\s+)?(?:and\s+attacking\s+)?(\d+)\/(\d+)\s+([\w\s]+?)\s+creature\s+token/);
       if (genericTokenMatch) {
         const tp = genericTokenMatch[1], tt = genericTokenMatch[2];
         const colorType = genericTokenMatch[3].trim();
@@ -9002,6 +9002,25 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       const withKwMatch = oracle.match(/creature token[^.]*?\s+with\s+([\w\s,]+?)(?:\.|that|$)/);
       if (withKwMatch) {
         parsedToken.keywords = withKwMatch[1].replace(/\band\b/g, ',').split(',').map(k => k.trim()).filter(Boolean);
+      }
+    }
+
+    // Token created under ANOTHER player's control (Relic Robber: "defending player
+    // creates a ... Goblin Construct"). Mark the owner and capture the token's own
+    // abilities so the can't-block and upkeep-damage logic fire on the defender's board.
+    if (parsedToken) {
+      if (/(?:defending player|that player|each opponent|target opponent)\s+creates/i.test(oracle)) {
+        parsedToken.forDefender = true;
+      }
+      if (/can'?t block/i.test(oracle)) parsedToken.cantBlock = true;
+      if (/artifact creature token/i.test(oracle)) parsedToken.isArtifact = true;
+      const upkM = oracle.match(/beginning of your upkeep,?\s*(?:this creature|~)\s+deals?\s+(\d+)\s+damage to you/i);
+      if (upkM) parsedToken.upkeepDamageToController = parseInt(upkM[1]);
+      // Clean up the generic parser's messy name for the known Goblin Construct token
+      if (/goblin construct/i.test(oracle)) {
+        parsedToken.name = 'Goblin Construct';
+        parsedToken.type_line = 'Artifact Creature Token — Goblin Construct';
+        parsedToken.keywords = [];
       }
     }
 
@@ -9330,6 +9349,52 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
           const tk = t.trigger.token;
           const reskin = t.card._reskin;
           const tokenName = reskin?.customTokenName || tk.name;
+
+          // Relic Robber etc.: the DEFENDING player creates the token as a normal,
+          // non-attacking permanent under their control. Route via the server when
+          // online so this cross-player battlefield write is authoritative and is not
+          // clobbered by the defender's own state sync (the "vanishing token" bug).
+          if (tk.forDefender) {
+            const defPlayer = activePlayer === 0 ? 1 : 0;
+            const oracleLines = [];
+            if (tk.cantBlock) oracleLines.push("This creature can't block.");
+            if (tk.upkeepDamageToController) oracleLines.push(`At the beginning of your upkeep, this creature deals ${tk.upkeepDamageToController} damage to you.`);
+            const baseToken = {
+              id: uid(), name: tokenName, isToken: true,
+              type_line: tk.type_line, power: tk.power, toughness: tk.toughness,
+              colors: tk.color ? tk.color.split('') : [],
+              keywords: tk.keywords || [], tapped: false, counters: {}, enteredThisTurn: true,
+              cantBlock: !!tk.cantBlock,
+              oracle_text: oracleLines.join('\n'),
+            };
+            const emitToken = (tokenObj) => {
+              if (onlineMode && serverGameAction) {
+                serverGameAction({ type: 'createBattlefieldToken', targetPlayerIndex: defPlayer, token: tokenObj });
+              } else {
+                createToken(defPlayer, tokenObj, true, true);
+              }
+            };
+            // Bake the official token art into the authoritative token (so it syncs to
+            // both clients) rather than patching the board afterward.
+            if (/goblin construct/i.test(tokenName)) {
+              (async () => {
+                let withArt = baseToken;
+                try {
+                  const res = await fetch('https://api.scryfall.com/cards/tznr/11');
+                  if (res.ok) {
+                    const card = await res.json();
+                    if (card?.image_uris) withArt = { ...baseToken, image_uris: card.image_uris, tokenImageSmall: card.image_uris.small, tokenImageNormal: card.image_uris.normal };
+                  }
+                } catch (e) { /* fall back to text rendering */ }
+                emitToken(withArt);
+              })();
+            } else {
+              emitToken(baseToken);
+            }
+            addGameLog(activePlayer, '⚔️', `${t.card.name}: ${getState(defPlayer).name} creates ${tokenName} ${tk.power}/${tk.toughness}`);
+            continue;
+          }
+
           const tokenCard = {
             id: uid(), name: tokenName, isToken: true,
             type_line: tk.type_line, power: tk.power, toughness: tk.toughness,
@@ -10221,6 +10286,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       // Relic Robber: "that player creates a 0/1 colorless Goblin Construct artifact creature token"
       if (/that player creates a 0\/1.*goblin construct/i.test(trigOracle)) {
         const gcToken = {
+          id: uid(),
           name: 'Goblin Construct',
           power: '0', toughness: '1',
           type_line: 'Artifact Creature Token — Goblin Construct',
@@ -10230,25 +10296,27 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
           oracle_text: "This creature can't block.\nAt the beginning of your upkeep, this creature deals 1 damage to you.",
           keywords: [],
         };
-        createToken(defendingPlayer, gcToken, true, true);
-        // Fetch official Scryfall token art — use direct card endpoint (TZNR #11)
+        // The token enters under the DEFENDING (damaged) player's control. When online
+        // this is a cross-player battlefield write, so route it through the server —
+        // otherwise the defender's own state sync clobbers it (the "token appeared for a
+        // second then vanished" bug). Bake the art in so it's part of the synced token.
+        const emitGoblin = (tok) => {
+          if (onlineMode && serverGameAction) {
+            serverGameAction({ type: 'createBattlefieldToken', targetPlayerIndex: defendingPlayer, token: tok });
+          } else {
+            createToken(defendingPlayer, tok, true, true);
+          }
+        };
         (async () => {
+          let tok = gcToken;
           try {
             const res = await fetch('https://api.scryfall.com/cards/tznr/11');
             if (res.ok) {
               const card = await res.json();
-              if (card?.image_uris) {
-                setState(defendingPlayer, prev => ({
-                  ...prev,
-                  battlefield: prev.battlefield.map(c =>
-                    c.name === 'Goblin Construct' && !c.image_uris
-                      ? { ...c, image_uris: card.image_uris, tokenImageSmall: card.image_uris.small, tokenImageNormal: card.image_uris.normal }
-                      : c
-                  )
-                }));
-              }
+              if (card?.image_uris) tok = { ...gcToken, image_uris: card.image_uris, tokenImageSmall: card.image_uris.small, tokenImageNormal: card.image_uris.normal };
             }
           } catch(e) { /* fallback to text rendering */ }
+          emitGoblin(tok);
         })();
         addGameLog(attackingPlayer, '⚔️', `${trig.name}: Created 0/1 Goblin Construct for ${getState(defendingPlayer).name}`);
         continue;
