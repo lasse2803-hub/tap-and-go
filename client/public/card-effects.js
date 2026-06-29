@@ -103,7 +103,8 @@
     "Geralf's Messenger": [{"icon":"💀","text":"Target opponent loses 2 life"},{"icon":"⬆","text":"Put +1/+1 counter(s)"}],
     "Gray Merchant of Asphodel": [{"icon":"⚡","text":"when this creature enters, each opponent loses x life, where x is your devotion "}],
     "Viashino Pyromancer": [{"icon":"🔥","text":"Deal 2 damage to target player or planeswalker","actionType":"etb_damage_player_pw","damage":2}],
-    "Omen of the Sea": [{"icon":"📘","text":"Draw a card(s)"},{"icon":"🔮","text":"Scry"}],
+    // Omen of the Sea intentionally NOT here — it uses parseETBEffects, which now
+    // emits a structured, executable "scry 2 then draw 1" effect.
   };
   function getETBEffects(card) {
     if (!card) return [];

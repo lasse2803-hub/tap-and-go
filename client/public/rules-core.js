@@ -571,9 +571,14 @@
       // Gain life
       const lifeMatch = etbText.match(/enters.*gain (\d+) life/);
       if (lifeMatch) effects.push({ icon: '💚', text: `Gain ${lifeMatch[1]} life` });
-      // Draw cards
+      // Draw cards — structured so the reminder can actually execute it.
+      // Skip when it's the "draw" half of "scry N, then draw" (handled by the scry effect's drawAfter).
+      const _wordNum = (w) => ({ a: 1, an: 1, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7 }[String(w).toLowerCase()] || parseInt(w, 10) || 1);
       const drawMatch = etbText.match(/enters.*draw (\w+|\d+) cards?/);
-      if (drawMatch) effects.push({ icon: '📘', text: `Draw ${drawMatch[1]} card(s)` });
+      if (drawMatch && !/scry \d+,?\s*(?:then\s+)?draw/.test(etbText)) {
+        const drawN = _wordNum(drawMatch[1]);
+        effects.push({ icon: '📘', text: `Draw ${drawN} card${drawN > 1 ? 's' : ''}`, actionType: 'draw', amount: drawN });
+      }
       // Destroy/exile target
       if (/enters.*destroy target/.test(etbText)) effects.push({ icon: '💀', text: 'Destroy target permanent' });
       if (/enters.*exile target/.test(etbText)) effects.push({ icon: '🚫', text: 'Exile target permanent' });
@@ -620,8 +625,14 @@
       }
       // Discard
       if (/enters.*discard/.test(etbText)) effects.push({ icon: '🗑', text: 'Target discards' });
-      // Scry/surveil
-      if (/enters.*scry (\d+)/.test(etbText)) effects.push({ icon: '🔮', text: 'Scry' });
+      // Scry/surveil — structured + "scry N, then draw M" folded into one effect.
+      const scryM = etbText.match(/enters.*scry (\d+)/);
+      if (scryM) {
+        const scryN = parseInt(scryM[1], 10);
+        const drawAfterM = etbText.match(/scry \d+,?\s*(?:then\s+)?draw (\w+|\d+) cards?/);
+        const drawAfter = drawAfterM ? _wordNum(drawAfterM[1]) : 0;
+        effects.push({ icon: '🔮', text: `Scry ${scryN}${drawAfter ? ` then draw ${drawAfter}` : ''}`, actionType: 'scry', count: scryN, drawAfter });
+      }
       // Name-based fallback for known ETB token creators (in case regex doesn't capture them)
       const cardName = (card.name || '').toLowerCase();
       const hasTokenEffect = effects.some(e => e.actionType === 'create_token');

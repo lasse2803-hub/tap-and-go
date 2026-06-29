@@ -12697,6 +12697,39 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                       })()}
                     </div>
                   )}
+                  {e.actionType === 'scry' && (
+                    <div style={{ display: 'flex', gap: 6, marginTop: 6, justifyContent: 'center' }}>
+                      <button className="btn btn-gold" style={{ padding: '4px 12px', fontSize: 11 }}
+                        onClick={() => {
+                          const rPIdx = etbReminder.pIdx;
+                          const after = e.drawAfter || 0;
+                          const onComplete = after > 0 ? () => { for (let d = 0; d < after; d++) drawCard(rPIdx); } : null;
+                          setScryView({ pIdx: rPIdx, count: e.count || 1, mode: 'scry', onComplete });
+                          setEtbReminder(prev => {
+                            const remaining = prev.effects.filter((_, idx) => idx !== i);
+                            return remaining.length > 0 ? { ...prev, effects: remaining } : null;
+                          });
+                        }}>
+                        🔮 Scry {e.count}{e.drawAfter ? ` & draw ${e.drawAfter}` : ''}
+                      </button>
+                    </div>
+                  )}
+                  {e.actionType === 'draw' && (
+                    <div style={{ display: 'flex', gap: 6, marginTop: 6, justifyContent: 'center' }}>
+                      <button className="btn btn-gold" style={{ padding: '4px 12px', fontSize: 11 }}
+                        onClick={() => {
+                          const rPIdx = etbReminder.pIdx;
+                          for (let d = 0; d < (e.amount || 1); d++) drawCard(rPIdx);
+                          addGameLog(rPIdx, '📘', `${etbReminder.card.name}: Drew ${e.amount || 1} card(s)`);
+                          setEtbReminder(prev => {
+                            const remaining = prev.effects.filter((_, idx) => idx !== i);
+                            return remaining.length > 0 ? { ...prev, effects: remaining } : null;
+                          });
+                        }}>
+                        📘 Draw {e.amount || 1}
+                      </button>
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
