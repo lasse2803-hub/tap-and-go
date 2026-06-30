@@ -7151,7 +7151,13 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         case 'boost': {
           // e.g. "+2/+2" or "-3/-3" — applied as temporary buff (until end of turn)
           SFX.playSpell();
-          const match = effect.amount.match(/([+-]\d+)\/([+-]\d+)/);
+          let amountStr = effect.amount;
+          if (effect.variableX) {
+            const xv = parseInt(prompt('Choose X (mana paid for {X}):', '0'), 10);
+            const x = isNaN(xv) || xv < 0 ? 0 : xv;
+            amountStr = `+${x}/+${x}`;
+          }
+          const match = amountStr.match(/([+-]\d+)\/([+-]\d+)/);
           if (match) {
             const pMod = parseInt(match[1]);
             const tMod = parseInt(match[2]);
@@ -7303,9 +7309,15 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
             setCastError({ pIdx, message: 'All creatures exiled' });
             setTimeout(() => setCastError(null), 2000);
             setTimeout(() => cleanupAttachments([0, 1]), 50);
-          } else if (effect.subtype === 'minus' && effect.amount) {
-            // e.g. Languish: all creatures get -4/-4
-            const match = effect.amount.match(/-(\d+)\/-(\d+)/);
+          } else if (effect.subtype === 'minus' && (effect.amount || effect.variableX)) {
+            // e.g. Languish: all creatures get -4/-4; or The Meathook Massacre: -X/-X
+            let minusStr = effect.amount;
+            if (effect.variableX) {
+              const xv = parseInt(prompt('Choose X (mana paid for {X}):', '0'), 10);
+              const x = isNaN(xv) || xv < 0 ? 0 : xv;
+              minusStr = `-${x}/-${x}`;
+            }
+            const match = minusStr.match(/-(\d+)\/-(\d+)/);
             if (match) {
               const pMinus = parseInt(match[1]);
               const tMinus = parseInt(match[2]);
@@ -7326,7 +7338,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                 });
               });
               SFX.creatureDeath();
-              setCastError({ pIdx, message: `All creatures get ${effect.amount}` });
+              setCastError({ pIdx, message: `All creatures get ${minusStr}` });
               setTimeout(() => setCastError(null), 2000);
               setTimeout(() => cleanupAttachments([0, 1]), 50);
             }

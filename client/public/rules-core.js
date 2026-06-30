@@ -144,6 +144,9 @@
     const boostMatch = allText.match(/target creature gets? ([+-]\d+\/[+-]\d+)/);
     if (boostMatch) {
       effects.push({ type: 'boost', amount: boostMatch[1], description: `Target creature gets ${boostMatch[1]}` });
+    } else if (/target creature .*gets? \+x\/\+x/.test(allText) || /target creature gets? \+x\/\+x/.test(allText)) {
+      // Variable buff (Primal Might, etc.): X is chosen at resolution.
+      effects.push({ type: 'boost', amount: '+X/+X', variableX: true, description: 'Target creature gets +X/+X' });
     }
     if (/put.*\+1\/\+1 counter.*on target/.test(allText)) {
       effects.push({ type: 'counter_add', counterType: '+1/+1', description: 'Put +1/+1 counter on target' });
@@ -274,6 +277,9 @@
     const massMinusMatch = allText.match(/all creatures get (-\d+\/-\d+)/);
     if (massMinusMatch) {
       effects.push({ type: 'board_wipe', subtype: 'minus', amount: massMinusMatch[1], description: `All creatures get ${massMinusMatch[1]}` });
+    } else if (/all creatures get -x\/-x/.test(allText)) {
+      // Variable wipe (The Meathook Massacre, etc.): X chosen at resolution.
+      effects.push({ type: 'board_wipe', subtype: 'minus', variableX: true, description: 'All creatures get -X/-X' });
     }
     // Exile all creatures/permanents (but not Farewell "choose one or more" cards)
     if (/exile all (creatures|nonland permanents|permanents)/.test(allText) && !/exile all.*with/.test(allText) && !/choose one or more/i.test(allText)) {
