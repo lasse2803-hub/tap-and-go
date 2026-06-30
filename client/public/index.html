@@ -6864,6 +6864,28 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     const castCmc = castCard.cmc !== undefined ? castCard.cmc : (castCard.card_faces?.[0]?.cmc || 0);
     const triggers = [];
 
+    // PROWESS: casting a noncreature spell gives each of your creatures with prowess
+    // +1/+1 until end of turn (Monastery Swiftspear, Soul-Scar Mage, Monk tokens, etc.)
+    if (!castType.includes('creature')) {
+      const prowessIds = p.battlefield.filter(perm => {
+        if (perm.id === castCard.id) return false;
+        const kw = (perm.keywords || []).map(k => k.toLowerCase());
+        const o = getOracleText(perm).toLowerCase();
+        return kw.includes('prowess') || /whenever you cast a noncreature spell, this creature gets \+1\/\+1/.test(o);
+      }).map(c => c.id);
+      if (prowessIds.length > 0) {
+        setState(pIdx, prev => ({
+          ...prev,
+          battlefield: prev.battlefield.map(c => {
+            if (!prowessIds.includes(c.id)) return c;
+            const ex = c.tempBuffs || { power: 0, toughness: 0, keywords: [] };
+            return { ...c, tempBuffs: { ...ex, power: (ex.power || 0) + 1, toughness: (ex.toughness || 0) + 1, keywords: ex.keywords || [] } };
+          })
+        }));
+        addGameLog(pIdx, '✨', `Prowess: ${prowessIds.length} creature${prowessIds.length > 1 ? 's' : ''} get +1/+1 until end of turn`);
+      }
+    }
+
     for (const perm of p.battlefield) {
       if (perm.id === castCard.id) continue; // Don't trigger on itself
       const allText = getOracleText(perm);
@@ -9572,6 +9594,24 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       setCombatState(prev => ({ ...prev, phase: 'post-attackers', attackTargets: defaultTargets, blocks: {}, selectedBlocker: null }));
     }
 
+    // TRAINING: when this attacks alongside a creature with greater power, put a +1/+1
+    // counter on it (Hopeful Initiate, etc.).
+    {
+      const attackerCards = combatState.attackers.map(id => p.battlefield.find(c => c.id === id)).filter(Boolean);
+      for (const atk of attackerCards) {
+        const kw = (atk.keywords || []).map(k => k.toLowerCase());
+        const o = getOracleText(atk).toLowerCase();
+        if (kw.includes('training') || /\btraining\b/.test(o)) {
+          const myPow = getEffectivePower(atk, getAttachments(activePlayer, atk.id));
+          const hasGreater = attackerCards.some(other => other.id !== atk.id && getEffectivePower(other, getAttachments(activePlayer, other.id)) > myPow);
+          if (hasGreater) {
+            addCounter(activePlayer, atk.id, '+1/+1');
+            addGameLog(activePlayer, '🎓', `Training: ${getDisplayName(atk)} gets a +1/+1 counter`);
+          }
+        }
+      }
+    }
+
     // Check for attack triggers on ALL creatures (including creature lands)
     const attackTriggers = [];
     for (const attackerId of combatState.attackers) {
@@ -10484,6 +10524,20 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         }
       }
     }
+
+    // ENRAGE: "Whenever this creature is dealt damage, <effect>" (Ripjaw Raptor — draw a card).
+    // Fires for creatures still on the battlefield that took damage this combat.
+    [attackingPlayer, defendingPlayer].forEach(pi => {
+      for (const c of getState(pi).battlefield) {
+        if ((damageTaken[c.id] || 0) <= 0) continue;
+        const o = getOracleText(c).toLowerCase();
+        const m = o.match(/(?:whenever|when) [^,]*is dealt damage,?\s*([^.]+)/);
+        if (m) {
+          const oppPi = pi === 0 ? 1 : 0;
+          autoResolveTriggerEffect(pi, oppPi, c.name, m[1]);
+        }
+      }
+    });
 
     // Apply damage to planeswalkers (reduce loyalty counters)
     const killedPWs = [];
