@@ -157,6 +157,19 @@
       effects.push({ type: 'fight', description: 'Fight target creature' });
     }
 
+    // Keyword grants until end of turn (Heroic Intervention, Boros Charm, Simic Charm modes)
+    const teamGrant = allText.match(/(?:permanents?|creatures?) you control gains? ([a-z][a-z, ]*?) until end of turn/);
+    if (teamGrant) {
+      const kws = teamGrant[1].split(/,|\band\b/).map(s => s.trim()).filter(Boolean);
+      effects.push({ type: 'grant_keyword_team', keywords: kws, description: `Your creatures gain ${kws.join(', ')}` });
+    } else {
+      const selfGrant = allText.match(/target creature gains? ([a-z][a-z, ]*?) until end of turn/);
+      if (selfGrant) {
+        const kws = selfGrant[1].split(/,|\band\b/).map(s => s.trim()).filter(Boolean);
+        effects.push({ type: 'grant_keyword_self', keywords: kws, description: `A creature gains ${kws.join(', ')}` });
+      }
+    }
+
     // === NON-TARGETED / SELF EFFECTS ===
 
     // Scry / Surveil — parse BEFORE draw so effects array order matches "surveil X, then draw"

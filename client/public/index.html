@@ -7347,6 +7347,44 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
             }
           }
           break;
+        case 'grant_keyword_team': {
+          // Heroic Intervention, Boros Charm (indestructible), etc. — your creatures gain keyword(s).
+          const kws = (effect.keywords || []).map(k => k.toLowerCase()).filter(Boolean);
+          setState(pIdx, prev => ({
+            ...prev,
+            battlefield: prev.battlefield.map(c => {
+              if (!isCreature(c)) return c;
+              const ex = c.tempBuffs || { power: 0, toughness: 0, keywords: [] };
+              const kk = [...(ex.keywords || [])];
+              kws.forEach(k => { if (!kk.includes(k)) kk.push(k); });
+              return { ...c, tempBuffs: { ...ex, keywords: kk } };
+            })
+          }));
+          setCastError({ pIdx, message: `Your creatures gain ${kws.join(', ')} until end of turn`, background: '#2a2a1a' });
+          setTimeout(() => setCastError(null), 2000);
+          break;
+        }
+        case 'grant_keyword_self': {
+          // "Target creature gains <kw>" (Boros Charm double strike, etc.) — apply to your
+          // highest-power creature as a sensible auto-target.
+          const kws = (effect.keywords || []).map(k => k.toLowerCase()).filter(Boolean);
+          const creatures = getState(pIdx).battlefield.filter(c => isCreature(c));
+          const target = creatures.slice().sort((a, b) => (getEffectivePower(b) || 0) - (getEffectivePower(a) || 0))[0];
+          if (target) {
+            setState(pIdx, prev => ({
+              ...prev,
+              battlefield: prev.battlefield.map(c => {
+                if (c.id !== target.id) return c;
+                const ex = c.tempBuffs || { power: 0, toughness: 0, keywords: [] };
+                const kk = [...(ex.keywords || [])];
+                kws.forEach(k => { if (!kk.includes(k)) kk.push(k); });
+                return { ...c, tempBuffs: { ...ex, keywords: kk } };
+              })
+            }));
+            addGameLog(pIdx, '✨', `${getDisplayName(target)} gains ${kws.join(', ')} until end of turn`);
+          }
+          break;
+        }
         case 'search_land':
           // Cultivate, Thunderherd Migration, etc. The library is private, so this is
           // handled on the owning player's client via the search overlay.
@@ -8090,7 +8128,11 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         graveyard: [...prev.graveyard, { ...card, tapped: false }],
       }));
 
-      const effects = getCardEffects(card);
+      // For a modal spell, parse ONLY the chosen mode (not the whole card) so other modes
+      // don't also fire / force spurious targeting (Selesnya Charm, Boros Charm, etc.).
+      const effects = (stackEntry.chosenMode && stackEntry.chosenMode !== 'counter')
+        ? parseSpellEffects({ ...card, oracle_text: stackEntry.chosenMode, card_faces: undefined })
+        : getCardEffects(card);
       const targetedEffects = effects.filter(e => ['destroy', 'exile', 'bounce', 'damage', 'boost', 'counter_add', 'fight'].includes(e.type));
       const nonTargetedEffects = effects.filter(e => !['destroy', 'exile', 'bounce', 'damage', 'boost', 'counter_add', 'fight'].includes(e.type));
 
