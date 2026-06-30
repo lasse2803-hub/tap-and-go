@@ -2160,10 +2160,24 @@ const CREATURE_LAND_DATA = {
       token: { name: 'Goblin', power: '1', toughness: '1', type_line: 'Creature — Goblin', color: 'R', keywords: [] } },
   },
   'hall of storm giants': {
-    cost: { generic: 5, U: 1 }, // {5}{U}
+    cost: { generic: 5, U: 2 }, // {5}{U}{U}
     power: 7, toughness: 7,
     type_line: 'Creature Land — Giant',
     keywords: ['Ward'],
+    attackTrigger: null,
+  },
+  'celestial colonnade': {
+    cost: { generic: 3, W: 1, U: 1 }, // {3}{W}{U}
+    power: 4, toughness: 4,
+    type_line: 'Creature Land — Elemental',
+    keywords: ['Flying', 'Vigilance'],
+    attackTrigger: null,
+  },
+  'hive of the eye tyrant': {
+    cost: { generic: 1, B: 1 }, // {1}{B}
+    power: 3, toughness: 3,
+    type_line: 'Creature Land — Beholder',
+    keywords: ['Menace'],
     attackTrigger: null,
   },
   'lair of the hydra': {
@@ -4960,7 +4974,8 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
 
   // ===== SACRIFICE ABILITIES (Mind Stone, Chromatic Sphere, etc.) =====
   const getSacrificeAbilities = (card) => {
-    if (isLand(card)) return [];
+    // Lands are allowed: some have "Sacrifice ~:" abilities. Mana/fetch sacrifices
+    // for mana are filtered below.
     const allText = getOracleText(card);
     const abilities = [];
     // Match patterns like "{1}, {T}, Sacrifice ~: Draw a card" or "Sacrifice ~: effect"
@@ -5090,7 +5105,8 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
 
   // ===== ACTIVATED ABILITIES (Midnight Clock, Heliod, creatures/artifacts/enchantments) =====
   const getPaidAbilities = (card) => {
-    if (isLand(card)) return [];
+    // Lands are allowed (Castle Locthwain draw, Gavony Township, etc.). Their
+    // mana abilities, creature-land animation, and Channel are skipped below.
     const allText = getOracleText(card);
     const abilities = [];
     const lines = allText.split('\n');
@@ -5100,6 +5116,9 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       if (/sacrifice/i.test(trimmed)) continue;
       // Skip tap-for-mana abilities (handled by toggleTap / mana buttons)
       if (/^\{t\}\s*:\s*add\s/i.test(trimmed)) continue;
+      // Skip creature-land animation (handled by CREATURE_LAND_DATA) and Channel (handled separately)
+      if (/becomes? a\b[^.]*\bcreature\b/i.test(trimmed)) continue;
+      if (/^channel\b/i.test(trimmed)) continue;
       // Skip keyword ability words that look like "cost:" but aren't (e.g., "Equip {2}")
       if (/^(?:equip|crew|fortify|reconfigure)\s/i.test(trimmed)) continue;
       // Pattern 1: {T}: effect (tap-only, no mana cost)
@@ -5147,6 +5166,10 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         const pMod = parseInt(buffMatch[1]);
         const tMod = parseInt(buffMatch[2]);
         effect = { type: 'buff', power: pMod, toughness: tMod, label: `${pMod >= 0 ? '+' : ''}${pMod}/${tMod >= 0 ? '+' : ''}${tMod} until end of turn`, needsTarget };
+      // Put a counter on EACH creature you control (Gavony Township, etc.)
+      } else if (/put\s+(?:a|an|one)\s+(\+\d+\/\+\d+|\w+)\s+counter\s+on\s+each\s+creature\s+you\s+control/i.test(effectText)) {
+        const ct = effectText.match(/put\s+(?:a|an|one)\s+(\+\d+\/\+\d+|\w+)\s+counter\s+on\s+each\s+creature/i)[1];
+        effect = { type: 'addCounterEachCreature', counterType: ct, label: `${ct} counter on each creature you control` };
       // Put a counter on target/another creature
       } else if (/put\s+(?:a|an|one)\s+(\w+)\s+counter\s+on\s+(?:target|another)/i.test(effectText)) {
         const counterType = effectText.match(/put\s+(?:a|an|one)\s+(\w+)\s+counter/i)[1];
@@ -5281,6 +5304,19 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       if (sourceCard.name && sourceCard.name.toLowerCase() === 'midnight clock' && ability.counterType === 'hour' && currentCount >= 12) {
         setTimeout(() => triggerMidnightClock(pIdx, sourceCard), 300);
       }
+    } else if (ability.type === 'addCounterEachCreature') {
+      // Gavony Township etc.: put a counter on each creature you control
+      setState(pIdx, prev => ({
+        ...prev,
+        battlefield: prev.battlefield.map(c => {
+          if (!isCreature(c)) return c;
+          const counters = { ...(c.counters || {}) };
+          counters[ability.counterType] = (counters[ability.counterType] || 0) + 1;
+          return { ...c, counters };
+        })
+      }));
+      setCastError({ pIdx, message: `${sourceCard.name}: +1 ${ability.counterType} counter on each creature you control`, background: '#1a2a1a' });
+      setTimeout(() => setCastError(null), 2500);
     } else if (ability.type === 'addCounterTarget' && targetInfo) {
       addCounter(targetInfo.pIdx, targetInfo.cardId, ability.counterType);
     } else if (ability.type === 'grantKeyword' && targetInfo) {
@@ -5866,6 +5902,44 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     SFX.draw();
   };
 
+  // Channel — an activated ability used from hand: pay {cost}, discard this card, do the effect.
+  // (Takenuma, Sokenzan, etc.)
+  const getChannelAbility = (card) => {
+    const text = getOracleText(card);
+    const m = text.match(/channel\s*[—\-]\s*((?:\{[^}]+\}(?:,\s*)?)+),\s*discard[^:]*:\s*([^\n]+)/i);
+    if (!m) return null;
+    const costPart = m[1].replace(/,\s*$/, '').trim();
+    return { manaCost: parseManaCost(costPart), costStr: costPart, effectText: m[2].trim() };
+  };
+
+  const channelCard = (pIdx, card, ch) => {
+    if (onlineMode && pIdx !== onlinePlayerIndex) return;
+    const p = getState(pIdx);
+    if (ch.manaCost && !canPayManaCost(p.manaPool, ch.manaCost)) {
+      setCastError({ pIdx, message: 'Not enough mana for Channel' });
+      setTimeout(() => setCastError(null), 2000);
+      return;
+    }
+    SFX.draw();
+    setState(pIdx, prev => ({
+      ...prev,
+      manaPool: ch.manaCost ? deductManaCost(prev.manaPool, ch.manaCost) : prev.manaPool,
+      hand: prev.hand.filter(c => c.id !== card.id),
+      graveyard: [...prev.graveyard, { ...card, tapped: false, counters: {} }],
+    }));
+    addGameLog(pIdx, '🌀', `Channel — ${getDisplayName(card)}: ${ch.effectText}`);
+    // Run the effect through the normal effect resolver. Non-targeted effects
+    // (e.g. Sokenzan's "create two 1/1 red Spirit tokens with haste") auto-resolve.
+    const pseudo = { ...card, oracle_text: ch.effectText, card_faces: undefined };
+    const fx = parseSpellEffects(pseudo);
+    const nonTargeted = fx.filter(e => !/target/i.test(e.description || '') || e.type === 'create_token');
+    if (nonTargeted.length > 0) applyNonTargetedEffects(pIdx, pseudo, nonTargeted);
+    if (nonTargeted.length < fx.length || fx.length === 0) {
+      // Targeted / graveyard-return effects (e.g. Takenuma) — surface for manual resolution.
+      setEtbReminder({ pIdx, card, effects: [{ icon: '🌀', text: ch.effectText }] });
+    }
+  };
+
   // Cast a foretold card from exile for its foretell cost
   const castForetold = (pIdx, card) => {
     const isSpell = isSpellCard(card);
@@ -6025,6 +6099,11 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       const foretellCost = getForetellCost(card);
       if (foretellCost) {
         actions.push({ label: `🔮 Foretell (pay {2}, exile face-down)`, fn: () => foretellCard(pIdx, card) });
+      }
+      // Channel option — discard from hand, pay cost, do the effect (Takenuma, Sokenzan)
+      const channelAb = getChannelAbility(card);
+      if (channelAb) {
+        actions.push({ label: `🌀 Channel (${channelAb.costStr}, discard)`, fn: () => channelCard(pIdx, card, channelAb) });
       }
       actions.push({ sep: true });
       addZoneTransferActions(actions, pIdx, card, 'hand', ['hand', 'battlefield']);
