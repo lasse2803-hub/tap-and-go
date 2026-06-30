@@ -124,6 +124,8 @@
     "Teferi, Hero of Dominaria": [{"cost":"+1","text":"Draw a card. At the beginning of the next end step, untap up to two lands."},{"cost":"-3","text":"Put target nonland permanent into its owner's library third from the top."},{"cost":"-8","text":"You get an emblem with \"Whenever you draw a card, exile target permanent an opponent controls.\""}],
     "Teferi, Time Raveler": [{"cost":"+1","text":"Until your next turn, you may cast sorcery spells as though they had flash."},{"cost":"-3","text":"Return up to one target artifact, creature, or enchantment to its owner's hand. Draw a card."}],
     "Elspeth, Sun's Champion": [{"cost":"+1","text":"Create three 1/1 white Soldier creature tokens."},{"cost":"-3","text":"Destroy all creatures with power 4 or greater."},{"cost":"-7","text":"You get an emblem with \"Creatures you control get +2/+2 and have flying.\""}],
+    "Chandra, Torch of Defiance": [{"cost":"+1","text":"Exile the top card of your library. You may cast that card. If you don't, Chandra deals 2 damage to each opponent."},{"cost":"+1","text":"Add {R}{R}."},{"cost":"-3","text":"Chandra deals 4 damage to target creature."},{"cost":"-7","text":"You get an emblem with \"Whenever you cast a spell, this emblem deals 5 damage to any target.\""}],
+    "Domri, Anarch of Bolas": [{"cost":"+1","text":"Add {R} or {G}. Creature spells you cast this turn can't be countered."},{"cost":"-2","text":"Target creature you control fights target creature you don't control."}],
   };
   function getPlaneswalkerAbilities(card) {
     if (!card) return [];

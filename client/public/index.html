@@ -13789,8 +13789,17 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
               const exileTappedLifeMatch = abilityText.match(/you gain (\d+) life/i);
               // "For each player, search that player's library for a nonland card and exile it" (Jace -8 ultimate)
               const isLibraryExileUltimate = /search.*library.*nonland card.*exile/i.test(abilityText) && /cast.*without paying/i.test(abilityText);
+              // Single-target damage to a creature (Chandra, Torch of Defiance -3)
+              const pwDmgTargetMatch = abilityText.match(/deals?\s+(\d+)\s+damage to (?:target creature|any target)/i);
+              // +1/+1 counter on a target creature, optionally granting first strike (Wandering Emperor +1)
+              const pwCounterTargetMatch = abilityText.match(/put a (\+\d+\/\+\d+) counter on (?:up to one )?target creature/i);
+              const pwGrantsFirstStrike = pwCounterTargetMatch && /(?:it )?gains first strike/i.test(abilityText);
+              // Bounce a target permanent to its owner's hand (Teferi, Time Raveler -3)
+              const pwBounceMatch = /return (?:up to one )?target (?:nonland permanent|artifact, creature, or enchantment|creature|permanent).* to (?:its|their) owner'?s hand/i.test(abilityText);
+              // Fight (Domri, Anarch of Bolas -2)
+              const pwFightMatch = /target creature you control fights (?:up to one )?target creature you don'?t control/i.test(abilityText);
 
-              const hasNewPatterns = hasDrawCard || hasExtraLand || addManaMatch || addManaOrMatch || loseLifeMatch || pwBuffMatch || isTuckToLibrary || isFactOrFiction || isGraveyardReturn || isExileTapped || isLibraryExileUltimate;
+              const hasNewPatterns = hasDrawCard || hasExtraLand || addManaMatch || addManaOrMatch || loseLifeMatch || pwBuffMatch || isTuckToLibrary || isFactOrFiction || isGraveyardReturn || isExileTapped || isLibraryExileUltimate || pwDmgTargetMatch || pwCounterTargetMatch || pwBounceMatch || pwFightMatch;
 
               if (pwEffects.length > 0 || isEmblem || isUntilNextTurn || pwTokenData || isExileCastOrDamage || isPreventDamage || isSorceryFlash || hasNewPatterns) {
                 return (
@@ -14084,6 +14093,107 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                           ⚡ {creature.name} {buffStr}
                         </button>
                       ));
+                    })()}
+                    {/* Single-target damage (Chandra, Torch of Defiance -3) */}
+                    {pwDmgTargetMatch && (() => {
+                      const dmg = parseInt(pwDmgTargetMatch[1]);
+                      const targets = [0, 1].flatMap(pi => getState(pi).battlefield.filter(c => isCreature(c)).map(c => ({ c, pi })));
+                      if (targets.length === 0) return <div style={{ fontSize: 11, color: 'rgba(255,100,100,0.8)', fontStyle: 'italic' }}>No creatures to target.</div>;
+                      return targets.map(({ c, pi }) => (
+                        <button key={c.id} className="btn btn-gold" style={{ padding: '5px 12px', fontSize: 11, maxWidth: 200 }}
+                          onClick={() => {
+                            const tough = getEffectiveToughness(c);
+                            if (dmg >= tough) {
+                              moveCard(pi, c, 'battlefield', 'graveyard');
+                              addGameLog(pwReminder.pIdx, '🔥', `${pwReminder.card.name}: ${dmg} damage to ${c.name} — destroyed`);
+                            } else {
+                              setState(pi, prev => ({ ...prev, battlefield: prev.battlefield.map(x => x.id === c.id ? { ...x, damage: (x.damage || 0) + dmg } : x) }));
+                              addGameLog(pwReminder.pIdx, '🔥', `${pwReminder.card.name}: ${dmg} damage to ${c.name}`);
+                            }
+                            SFX.playerDamage();
+                            setPwReminder(null);
+                          }}>
+                          🔥 {c.name} ({dmg} dmg)
+                        </button>
+                      ));
+                    })()}
+                    {/* +1/+1 counter on target creature (+ first strike) — Wandering Emperor +1 */}
+                    {pwCounterTargetMatch && (() => {
+                      const targets = [0, 1].flatMap(pi => getState(pi).battlefield.filter(c => isCreature(c)).map(c => ({ c, pi })));
+                      if (targets.length === 0) return <div style={{ fontSize: 11, color: 'rgba(255,100,100,0.8)', fontStyle: 'italic' }}>No creatures to target.</div>;
+                      return targets.map(({ c, pi }) => (
+                        <button key={c.id} className="btn btn-gold" style={{ padding: '5px 12px', fontSize: 11, maxWidth: 200 }}
+                          onClick={() => {
+                            addCounter(pi, c.id, '+1/+1');
+                            if (pwGrantsFirstStrike) {
+                              setState(pi, prev => ({ ...prev, battlefield: prev.battlefield.map(x => { if (x.id !== c.id) return x; const ex = x.tempBuffs || { power: 0, toughness: 0, keywords: [] }; const kw = [...(ex.keywords || [])]; if (!kw.includes('first strike')) kw.push('first strike'); return { ...x, tempBuffs: { ...ex, keywords: kw } }; }) }));
+                            }
+                            addGameLog(pwReminder.pIdx, '⬆', `${pwReminder.card.name}: +1/+1 counter on ${c.name}${pwGrantsFirstStrike ? ' + first strike' : ''}`);
+                            setPwReminder(null);
+                          }}>
+                          ⬆ {c.name}{pwGrantsFirstStrike ? ' (+1/+1, first strike)' : ' (+1/+1)'}
+                        </button>
+                      ));
+                    })()}
+                    {/* Bounce target permanent to owner's hand (Teferi, Time Raveler -3) */}
+                    {pwBounceMatch && (() => {
+                      const drawsAfter = /draw a card/i.test(abilityText);
+                      const targets = [0, 1].flatMap(pi => getState(pi).battlefield.filter(c => !isLand(c) && !isPlaneswalker(c)).map(c => ({ c, pi })));
+                      const doBounce = (c, pi) => {
+                        if (c) {
+                          if (c.isToken) { setState(pi, prev => ({ ...prev, battlefield: prev.battlefield.filter(x => x.id !== c.id) })); }
+                          else { moveCard(pi, c, 'battlefield', 'hand'); }
+                          addGameLog(pwReminder.pIdx, '🤚', `${pwReminder.card.name}: Returned ${c.name} to hand`);
+                        }
+                        if (drawsAfter) drawCard(pwReminder.pIdx);
+                        setPwReminder(null);
+                      };
+                      return [
+                        ...targets.map(({ c, pi }) => (
+                          <button key={c.id} className="btn btn-gold" style={{ padding: '5px 12px', fontSize: 11, maxWidth: 200 }}
+                            onClick={() => doBounce(c, pi)}>
+                            🤚 {c.name}{drawsAfter ? ' + draw' : ''}
+                          </button>
+                        )),
+                        <button key="none" className="btn" style={{ padding: '5px 12px', fontSize: 11 }} onClick={() => doBounce(null, null)}>
+                          {drawsAfter ? 'Bounce nothing (just draw)' : 'Bounce nothing'}
+                        </button>,
+                      ];
+                    })()}
+                    {/* Fight (Domri, Anarch of Bolas -2) — two-stage target selection */}
+                    {pwFightMatch && (() => {
+                      const mine = getState(pwReminder.pIdx).battlefield.filter(c => isCreature(c));
+                      const oppIdx = pwReminder.pIdx === 0 ? 1 : 0;
+                      const theirs = getState(oppIdx).battlefield.filter(c => isCreature(c));
+                      if (!pwReminder.fightFirst) {
+                        if (mine.length === 0 || theirs.length === 0) return <div style={{ fontSize: 11, color: 'rgba(255,100,100,0.8)', fontStyle: 'italic' }}>Need a creature on each side to fight.</div>;
+                        return [<div key="lbl" style={{ fontSize: 11, color: 'rgba(200,170,60,0.8)', width: '100%' }}>Choose YOUR creature:</div>,
+                          ...mine.map(c => (
+                            <button key={c.id} className="btn btn-gold" style={{ padding: '5px 12px', fontSize: 11, maxWidth: 200 }}
+                              onClick={() => setPwReminder(prev => ({ ...prev, fightFirst: c.id }))}>
+                              ⚔️ {c.name} ({getEffectivePower(c)}/{getEffectiveToughness(c)})
+                            </button>
+                          ))];
+                      }
+                      const myC = mine.find(c => c.id === pwReminder.fightFirst);
+                      if (!myC) { setPwReminder(prev => ({ ...prev, fightFirst: null })); return null; }
+                      return [<div key="lbl" style={{ fontSize: 11, color: 'rgba(200,170,60,0.8)', width: '100%' }}>{myC.name} fights:</div>,
+                        ...theirs.map(tc => (
+                          <button key={tc.id} className="btn btn-gold" style={{ padding: '5px 12px', fontSize: 11, maxWidth: 200 }}
+                            onClick={() => {
+                              const myPow = getEffectivePower(myC), myTou = getEffectiveToughness(myC);
+                              const tcPow = getEffectivePower(tc), tcTou = getEffectiveToughness(tc);
+                              if (myPow >= tcTou) moveCard(oppIdx, tc, 'battlefield', 'graveyard');
+                              else setState(oppIdx, prev => ({ ...prev, battlefield: prev.battlefield.map(x => x.id === tc.id ? { ...x, damage: (x.damage || 0) + myPow } : x) }));
+                              if (tcPow >= myTou) moveCard(pwReminder.pIdx, myC, 'battlefield', 'graveyard');
+                              else setState(pwReminder.pIdx, prev => ({ ...prev, battlefield: prev.battlefield.map(x => x.id === myC.id ? { ...x, damage: (x.damage || 0) + tcPow } : x) }));
+                              SFX.combatDamage();
+                              addGameLog(pwReminder.pIdx, '⚔️', `${pwReminder.card.name}: ${myC.name} fights ${tc.name}`);
+                              setPwReminder(null);
+                            }}>
+                            ⚔️ {tc.name} ({getEffectivePower(tc)}/{getEffectiveToughness(tc)})
+                          </button>
+                        ))];
                     })()}
                     {/* Exile target tapped creature + gain life (Wandering Emperor -2) */}
                     {isExileTapped && (() => {
