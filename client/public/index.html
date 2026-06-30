@@ -5077,6 +5077,11 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         const effectText = match[2].trim();
         // Skip if this is a sacrifice-for-mana (already handled by toggleTap)
         if (/^add\s+(one mana|(\{[wubrgc]\}[\s,]*)+)/i.test(effectText)) continue;
+        // Only handle abilities that sacrifice THIS permanent. "Sacrifice a Blood token /
+        // another creature / two artifacts ..." sacrifice a DIFFERENT object — skip so we
+        // don't wrongly sacrifice the source card (Bloodtithe Harvester, etc.).
+        const sacClause = match[0].toLowerCase();
+        if (/sacrifice\s+(?:a|an|another|two|three|\d+|each|all|[a-z]+\s+token)\b/.test(sacClause) && !/sacrifice\s+(?:this|~)\b/.test(sacClause)) continue;
         const requiresTap = match[0].includes('{t}');
         // Parse mana cost from costPart
         let manaCost = null;
@@ -5107,6 +5112,12 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
           const payMatch = effectText.match(/unless.*pays\s*\{(\d+)\}/i);
           const payAmount = payMatch ? parseInt(payMatch[1]) : 1;
           effect = { type: 'sacCounter', payAmount, label: `Counter spell unless opponent pays {${payAmount}}` };
+        } else if (/scry\s+(\d+)/i.test(effectText)) {
+          const sc = parseInt(effectText.match(/scry\s+(\d+)/i)[1]);
+          effect = { type: 'scry', count: sc, label: `Scry ${sc}` };
+        } else if (/creatures you control gain (indestructible|hexproof|trample|flying|first strike|deathtouch|lifelink|vigilance)/i.test(effectText)) {
+          const kw = effectText.match(/creatures you control gain (indestructible|hexproof|trample|flying|first strike|deathtouch|lifelink|vigilance)/i)[1].toLowerCase();
+          effect = { type: 'teamKeyword', keyword: kw, label: `Your creatures gain ${kw}` };
         } else {
           const shortText = effectText.length > 40 ? effectText.slice(0, 37) + '...' : effectText;
           effect = { type: 'manual', text: effectText, label: shortText };
@@ -5174,6 +5185,23 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       }
     } else if (ability.type === 'gainLife') {
       gainLife(pIdx, ability.amount);
+    } else if (ability.type === 'scry') {
+      // Omen of the Sea, etc.: Sacrifice → Scry N
+      setScryView({ pIdx, count: ability.count || 1, mode: 'scry', onComplete: null });
+    } else if (ability.type === 'teamKeyword') {
+      // Selfless Spirit, etc.: your creatures gain a keyword until end of turn
+      setState(pIdx, prev => ({
+        ...prev,
+        battlefield: prev.battlefield.map(c => {
+          if (!isCreature(c)) return c;
+          const ex = c.tempBuffs || { power: 0, toughness: 0, keywords: [] };
+          const kws = [...(ex.keywords || [])];
+          if (!kws.includes(ability.keyword)) kws.push(ability.keyword);
+          return { ...c, tempBuffs: { ...ex, keywords: kws } };
+        })
+      }));
+      setCastError({ pIdx, message: `Your creatures gain ${ability.keyword} until end of turn`, background: '#2a2a1a' });
+      setTimeout(() => setCastError(null), 2000);
     } else if (ability.type === 'damage' || ability.type === 'manual') {
       setEtbReminder({ pIdx, card, effects: [{ icon: '💀', text: `Sacrificed ${card.name}: ${ability.text || ability.label}` }] });
     }
@@ -8130,6 +8158,20 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         const n = _trigNum(selfMill[1]);
         millCards(pIdx, n);
         addGameLog(pIdx, '💀', `${card.name}: mill ${n}`);
+      }
+      // Named artifact-token ETB: "create a Blood/Treasure/Clue/Food token" (Bloodtithe Harvester, etc.)
+      const tokMatch = selfOracle.match(/enters[^.]*?,?\s*create (?:a|an|one) (blood|treasure|clue|food) token/);
+      if (tokMatch) {
+        const tnameRaw = tokMatch[1];
+        const tname = tnameRaw[0].toUpperCase() + tnameRaw.slice(1);
+        const tokOracle = {
+          blood: "{1}, {T}, Sacrifice this artifact, Discard a card: Draw a card.",
+          treasure: "{T}, Sacrifice this artifact: Add one mana of any color.",
+          clue: "{2}, Sacrifice this artifact: Draw a card.",
+          food: "{2}, {T}, Sacrifice this artifact: You gain 3 life.",
+        }[tnameRaw];
+        createToken(pIdx, { name: tname, isToken: true, type_line: `Artifact Token — ${tname}`, power: '', toughness: '', colors: [], oracle_text: tokOracle, keywords: [] });
+        addGameLog(pIdx, '✦', `${card.name}: created a ${tname} token`);
       }
       // "Whenever one or more other Rogues enter under your control, each opponent mills N"
       if (/rogue/i.test(card.type_line || '')) {
