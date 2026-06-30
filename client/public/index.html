@@ -3722,6 +3722,14 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     _setInstantCastingSync(val);
   };
   const [scryView, setScryView] = useState(null); // { pIdx, count, mode: 'scry'|'surveil' }
+  // Deferred scry/surveil working set: snapshot of the top cards + per-card decisions,
+  // committed all at once (so you decide EVERY card before the view closes / draws).
+  const [scryWork, setScryWork] = useState(null); // { cards: [...], decisions: { [id]: 'top'|'bottom'|'gy' } }
+  useEffect(() => {
+    if (!scryView || (onlineMode && onlinePlayerIndex !== scryView.pIdx)) { setScryWork(null); return; }
+    const sp = getState(scryView.pIdx);
+    setScryWork({ cards: sp.library.slice(0, scryView.count), decisions: {} });
+  }, [scryView]);
   const [lookTopView, setLookTopView] = useState(null); // LOCAL ONLY — { pIdx, cards: [], toHand: N, selected: Set } — not synced (opponent's sync would overwrite it)
   const [librarySearch, _setLibrarySearch] = useState(null); // SYNCED — { pIdx, filter, tapped, source }
   const setLibrarySearch = syncSetter(_setLibrarySearch);
@@ -4366,6 +4374,18 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
   // ═══════════════════════════════════════════════════════════════
   // §4. CARD MOVEMENT & ZONE TRANSFERS
   // ═══════════════════════════════════════════════════════════════
+  // State-based action: a token in any zone other than the battlefield ceases to exist.
+  // moveCard already handles single deaths; this catches board wipes / mass effects that
+  // write creatures straight to the graveyard/exile.
+  const removeDeadTokens = () => {
+    [0, 1].forEach(pi => {
+      setState(pi, prev => {
+        if (!(prev.graveyard || []).some(c => c.isToken) && !(prev.exile || []).some(c => c.isToken)) return prev;
+        return { ...prev, graveyard: (prev.graveyard || []).filter(c => !c.isToken), exile: (prev.exile || []).filter(c => !c.isToken) };
+      });
+    });
+  };
+
   const moveCard = (pIdx, card, from, to) => {
     // ── Online mode: route cross-visibility moves through server ──
     // When moving a card TO an opponent's hand (bounce) or FROM their hand (discard),
@@ -7430,6 +7450,8 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
           break;
         }
         case 'board_wipe': {
+          // After any mass effect, tokens that hit the graveyard/exile cease to exist.
+          setTimeout(removeDeadTokens, 80);
           if (effect.subtype === 'destroy_all') {
             // Destroy all creatures for both players
             [0, 1].forEach(pi => {
@@ -10691,6 +10713,8 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         return { ...prev, battlefield: surviving, graveyard: [...prev.graveyard, ...toGY] };
       });
     }
+    // Tokens that died in combat cease to exist (after Undying/Persist returns are checked).
+    if (killAttacker.length > 0 || killDefender.length > 0) setTimeout(removeDeadTokens, 120);
 
     // Process Undying/Persist returns after a short delay
     if (undyingReturns.length > 0) {
@@ -11918,14 +11942,29 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
 
       {/* ETB Reminder Popup */}
       {/* Scry / Surveil Overlay — separate modes (only visible to scrying player in online mode) */}
-      {scryView && (!onlineMode || onlinePlayerIndex === scryView.pIdx) && (() => {
+      {scryView && scryWork && (!onlineMode || onlinePlayerIndex === scryView.pIdx) && (() => {
         const sp = getState(scryView.pIdx);
-        const topCards = sp.library.slice(0, scryView.count);
+        const cards = scryWork.cards;
+        const decisions = scryWork.decisions;
         const isScry = scryView.mode === 'scry';
         const isSurveil = scryView.mode === 'surveil';
         const accentColor = isScry ? 'rgba(100,180,220,' : 'rgba(140,100,200,';
         const textColor = isScry ? '#70b8d8' : '#b090e0';
-        const canInteract = !onlineMode || onlinePlayerIndex === scryView.pIdx;
+        const setDecision = (id, val) => setScryWork(prev => ({ ...prev, decisions: { ...prev.decisions, [id]: val } }));
+        const commit = () => {
+          const cb = scryView.onComplete;
+          const topN = cards.map(c => c.id);
+          const keptTop = cards.filter(c => (decisions[c.id] || 'top') === 'top');
+          const bottomed = cards.filter(c => decisions[c.id] === 'bottom');
+          const toGy = cards.filter(c => decisions[c.id] === 'gy');
+          setState(scryView.pIdx, prev => {
+            const rest = prev.library.filter(c => !topN.includes(c.id));
+            return { ...prev, library: [...keptTop, ...rest, ...bottomed], graveyard: [...prev.graveyard, ...toGy] };
+          });
+          if (toGy.length > 0) addGameLog(scryView.pIdx, '💀', `Surveil: ${toGy.length} card${toGy.length > 1 ? 's' : ''} to graveyard`);
+          setScryView(null); setScryWork(null);
+          if (cb) setTimeout(cb, 50);
+        };
         return (
           <div style={{
             position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.85)',
@@ -11933,80 +11972,45 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
             zIndex: 10000, animation: 'fadeIn 0.2s ease',
           }}>
             <div style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: 2, color: accentColor + '0.8)', marginBottom: 6, fontWeight: 700 }}>
-              {isScry ? '🔮 Scry' : '👁 Surveil'} — Top {topCards.length} of {sp.library.length}
+              {isScry ? '🔮 Scry' : '👁 Surveil'} — Top {cards.length} of {sp.library.length}
             </div>
             <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.35)', marginBottom: 14, fontStyle: 'italic' }}>
-              {isScry
-                ? 'For each card: keep on top of library or put on the bottom.'
-                : 'For each card: keep on top of library or put into graveyard.'}
+              Decide each card, then Confirm. {isScry ? 'Undecided cards stay on top.' : 'Undecided cards stay on top.'}
             </div>
             <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', justifyContent: 'center', maxWidth: '80vw', marginBottom: 20 }}>
-              {topCards.map((card, idx) => (
-                <div key={card.id} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
-                  <CardImg card={card} alt={card.name}
-                    style={{ height: 240, borderRadius: 10, boxShadow: '0 4px 16px rgba(0,0,0,0.5)' }} />
-                  {canInteract && (
-                  <div style={{ display: 'flex', gap: 4 }}>
-                    <button className="btn" style={{ padding: '4px 10px', fontSize: 10, borderColor: accentColor + '0.3)', color: textColor }}
-                      onClick={() => {
-                        const cb = scryView.onComplete;
-                        // Move this card to position 0 (top) of library
-                        setState(scryView.pIdx, prev => {
-                          const lib = prev.library.filter(c => c.id !== card.id);
-                          return { ...prev, library: [card, ...lib] };
-                        });
-                        setScryView(null);
-                        if (cb) setTimeout(cb, 50);
-                      }} title="Keep on top">📚 Top</button>
-                    {isScry && (
-                      <button className="btn" style={{ padding: '4px 10px', fontSize: 10, borderColor: 'rgba(180,180,60,0.3)', color: '#c0c060' }}
-                        onClick={() => {
-                          const cb = scryView.onComplete;
-                          setState(scryView.pIdx, prev => {
-                            const lib = prev.library.filter(c => c.id !== card.id);
-                            return { ...prev, library: [...lib, card] };
-                          });
-                          setScryView(null);
-                          if (cb) setTimeout(cb, 50);
-                        }} title="Put on bottom">📚 Bottom</button>
-                    )}
-                    {isSurveil && (
-                      <button className="btn" style={{ padding: '4px 10px', fontSize: 10, borderColor: 'rgba(180,80,80,0.3)', color: '#e08080' }}
-                        onClick={() => {
-                          const cb = scryView.onComplete;
-                          moveCard(scryView.pIdx, card, 'library', 'graveyard');
-                          setScryView(null);
-                          if (cb) setTimeout(cb, 50);
-                        }} title="To graveyard">💀 Graveyard</button>
-                    )}
+              {cards.map((card) => {
+                const dec = decisions[card.id] || 'top';
+                const btn = (val, label, col) => (
+                  <button className="btn" style={{ padding: '4px 10px', fontSize: 10, borderColor: col + (dec === val ? '0.9)' : '0.3)'), color: col + '1)', background: dec === val ? col + '0.25)' : 'transparent', fontWeight: dec === val ? 700 : 400 }}
+                    onClick={() => setDecision(card.id, val)}>{label}</button>
+                );
+                return (
+                  <div key={card.id} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, opacity: dec === 'top' ? 1 : 0.8 }}>
+                    <CardImg card={card} alt={card.name}
+                      style={{ height: 240, borderRadius: 10, boxShadow: '0 4px 16px rgba(0,0,0,0.5)', outline: `2px solid ${dec === 'top' ? accentColor + '0.6)' : 'transparent'}` }} />
+                    <div style={{ display: 'flex', gap: 4 }}>
+                      {btn('top', '📚 Top', 'rgba(100,180,220,')}
+                      {isScry && btn('bottom', '📚 Bottom', 'rgba(180,180,60,')}
+                      {isSurveil && btn('gy', '💀 Graveyard', 'rgba(180,80,80,')}
+                    </div>
                   </div>
-                  )}
-                </div>
-              ))}
-              {topCards.length === 0 && (
+                );
+              })}
+              {cards.length === 0 && (
                 <div style={{ color: 'rgba(255,255,255,0.3)', fontSize: 14, padding: 40 }}>Library is empty</div>
               )}
             </div>
-            {canInteract ? (
             <div style={{ display: 'flex', gap: 8 }}>
-              <button className="btn" style={{ padding: '6px 16px', fontSize: 11, borderColor: accentColor + '0.3)', color: textColor }}
-                onClick={() => setScryView({ ...scryView, count: Math.min(scryView.count + 1, sp.library.length) })}>
-                + Show More
-              </button>
-              <button className="btn" style={{ padding: '8px 24px', fontSize: 13 }}
-                onClick={() => {
-                  const cb = scryView.onComplete;
-                  setScryView(null);
-                  if (cb) setTimeout(cb, 50);
-                }}>
-                Close (Keep All)
+              {scryView.count < sp.library.length && (
+                <button className="btn" style={{ padding: '6px 16px', fontSize: 11, borderColor: accentColor + '0.3)', color: textColor }}
+                  onClick={() => setScryView({ ...scryView, count: Math.min(scryView.count + 1, sp.library.length) })}>
+                  + Show More
+                </button>
+              )}
+              <button className="btn btn-gold" style={{ padding: '8px 24px', fontSize: 13 }} onClick={commit}>
+                ✔ Confirm
               </button>
             </div>
-            ) : (
-            <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.4)', padding: '10px 0', fontStyle: 'italic' }}>
-              Opponent is {isScry ? 'scrying' : 'surveilling'}...
-            </div>
-            )}
           </div>
         );
       })()}
