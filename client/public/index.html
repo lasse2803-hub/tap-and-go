@@ -7233,6 +7233,14 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
             }
           }
           break;
+        case 'search_land':
+          // Cultivate, Thunderherd Migration, etc. The library is private, so this is
+          // handled on the owning player's client via the search overlay.
+          if (!isRemotePlayer) {
+            setLibrarySearch({ pIdx, filter: effect.filter || 'basicLand', tapped: !!effect.tapped,
+              toBattlefield: effect.toBattlefield !== false, toHandCount: effect.toHandCount || 0, source: card.name || 'Spell' });
+          }
+          break;
         case 'scry': {
           if (isRemotePlayer) {
             // Tell the caster's client to scry via synced state
@@ -12476,7 +12484,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
 
       {/* Library Search Overlay (Solemn Simulacrum, Farhaven Elf, etc.) */}
       {librarySearch && (!onlineMode || onlinePlayerIndex === librarySearch.pIdx) && (() => {
-        const { pIdx: searchPIdx, filter, tapped: enterTapped, source } = librarySearch;
+        const { pIdx: searchPIdx, filter, tapped: enterTapped, source, toBattlefield = true, toHandCount = 0 } = librarySearch;
         const lib = getState(searchPIdx).library || [];
         const BASIC_LAND_NAMES = ['plains', 'island', 'swamp', 'mountain', 'forest',
           'snow-covered plains', 'snow-covered island', 'snow-covered swamp', 'snow-covered mountain', 'snow-covered forest'];
@@ -12518,16 +12526,25 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                           const idx = newLib.findIndex(c => c.id === target.id);
                           if (idx === -1) return prev;
                           const [landCard] = newLib.splice(idx, 1);
+                          let newField = prev.battlefield;
+                          let newHand = prev.hand;
+                          if (toBattlefield) {
+                            newField = [...prev.battlefield, { ...landCard, tapped: !!enterTapped, counters: {} }];
+                          } else {
+                            newHand = [...prev.hand, { ...landCard, tapped: false, counters: {} }];
+                          }
+                          // Cultivate-style: also pull N extra matching basics into hand
+                          for (let k = 0; k < toHandCount; k++) {
+                            const isBasic = (c) => { const tl = (c.type_line || '').toLowerCase(); return (tl.includes('basic') && tl.includes('land')) || BASIC_LAND_NAMES.includes((c.name || '').toLowerCase()); };
+                            const hi = newLib.findIndex(c => filter === 'basicLand' ? isBasic(c) : (c.type_line || '').toLowerCase().includes('land'));
+                            if (hi !== -1) { const [h] = newLib.splice(hi, 1); newHand = [...newHand, { ...h, tapped: false, counters: {} }]; }
+                          }
                           // Shuffle remaining library
                           for (let si = newLib.length - 1; si > 0; si--) { const sj = Math.floor(Math.random() * (si + 1)); [newLib[si], newLib[sj]] = [newLib[sj], newLib[si]]; }
-                          return {
-                            ...prev,
-                            library: newLib,
-                            battlefield: [...prev.battlefield, { ...landCard, tapped: !!enterTapped, counters: {} }],
-                          };
+                          return { ...prev, library: newLib, battlefield: newField, hand: newHand };
                         });
-                        addGameLog(searchPIdx, '🔍', `${getState(searchPIdx).name} searched library for ${card.name}${enterTapped ? ' (tapped)' : ''} via ${source}`);
-                        setCastError({ pIdx: searchPIdx, message: `${card.name} enters the battlefield${enterTapped ? ' tapped' : ''}`, background: '#1a3320' });
+                        addGameLog(searchPIdx, '🔍', `${getState(searchPIdx).name} searched for ${card.name}${toBattlefield ? (enterTapped ? ' (tapped)' : '') : ' (to hand)'}${toHandCount > 0 ? ` +${toHandCount} to hand` : ''} via ${source}`);
+                        setCastError({ pIdx: searchPIdx, message: `${card.name}${toBattlefield ? ` enters${enterTapped ? ' tapped' : ''}` : ' to hand'}`, background: '#1a3320' });
                         setTimeout(() => setCastError(null), 1500);
                         setLibrarySearch(null);
                       }} style={{

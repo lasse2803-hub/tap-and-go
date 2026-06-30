@@ -179,6 +179,19 @@
     if (/you may put a land card from your hand onto the battlefield/.test(allText)) {
       effects.push({ type: 'extra_land_drop', description: 'You may put a land onto the battlefield' });
     }
+    // "Search your library for a/up to N basic land card(s)..." (Cultivate, Thunderherd Migration,
+    // Rampant Growth, etc.). Only when the search puts a land into play or hand (ramp), not
+    // tutors for arbitrary cards.
+    if (/search your library for .*\bland\b/.test(allText) && /(onto the battlefield|into your hand)/.test(allText)) {
+      const basic = /\bbasic land/.test(allText);
+      const toBattlefield = /onto the battlefield/.test(allText);
+      const tapped = /onto the battlefield tapped/.test(allText);
+      // Cultivate-style: "...put one onto the battlefield tapped and the other into your hand"
+      const toHandCount = /(?:and|then) .*?(?:the other|one).* into your hand/.test(allText) ? 1
+        : (toBattlefield ? 0 : 1);
+      effects.push({ type: 'search_land', filter: basic ? 'basicLand' : 'land', toBattlefield, tapped, toHandCount,
+        description: `Search library for ${basic ? 'basic ' : ''}land${toHandCount > 0 ? ' (+1 to hand)' : ''}` });
+    }
 
     // "Look at the top X cards" + "put N into your hand/onto the battlefield" (Memory Deluge, Dig Through Time, Collected Company, etc.)
     const lookTopMatch = allText.match(/look at the top (\d+|x|seven|six|five|four|three|two) cards? of your library/);
