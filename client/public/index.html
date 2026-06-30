@@ -4264,6 +4264,34 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     }
     setState(pIdx, prev => ({ ...prev, life: prev.life + amount }));
     SFX.lifeGain();
+    // "Whenever you gain life" triggers (Heliod, Sun-Crowned, etc.)
+    checkGainLifeTriggers(pIdx);
+  };
+
+  // Fire "whenever you gain life" triggers for pIdx. Currently auto-applies the common
+  // "put a +1/+1 counter on target creature or enchantment you control" (Heliod) to the
+  // controller's highest-power creature (a sensible default); other effects → reminder.
+  const checkGainLifeTriggers = (pIdx) => {
+    const st = getStateRef(pIdx);
+    for (const perm of st.battlefield) {
+      const oracle = getOracleText(perm).toLowerCase();
+      if (!/whenever you gain life/.test(oracle)) continue;
+      const effM = oracle.match(/whenever you gain life,\s*([^.]+)/);
+      const effText = effM ? effM[1].trim() : '';
+      const counterM = effText.match(/put a (\+\d+\/\+\d+) counter on/);
+      if (counterM && /creature|enchantment/.test(effText)) {
+        const creatures = st.battlefield.filter(c => isCreature(c));
+        const target = creatures.length > 0
+          ? creatures.slice().sort((a, b) => (parseInt(getBasePower(b)) || 0) - (parseInt(getBasePower(a)) || 0))[0]
+          : st.battlefield.find(c => /enchantment/i.test(c.type_line || ''));
+        if (target) {
+          addCounter(pIdx, target.id, counterM[1]);
+          addGameLog(pIdx, '⬆', `${perm.name}: +${counterM[1]} counter on ${getDisplayName(target)} (gained life)`);
+        }
+      } else if (effText) {
+        setEtbReminder({ pIdx, card: perm, effects: [{ icon: '💚', text: `${perm.name}: ${effText}` }] });
+      }
+    }
   };
 
   // Refs for latest state — avoids stale closures in setTimeout callbacks
@@ -5987,6 +6015,51 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         graveyard: [...prev.graveyard, ...milled]
       };
     });
+  };
+
+  // Auto-resolve the common, unambiguous effects of a triggered ability (mill, draw,
+  // lose-life, damage-to-player, gain-life) so they actually happen instead of only
+  // showing a text reminder. controllerIdx = the trigger's controller; victimIdx = the
+  // affected opponent (for mill/lose-life/damage). Returns true if anything was applied.
+  const _trigNum = (w) => ({ a: 1, an: 1, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7 }[String(w).toLowerCase()] ?? (parseInt(w, 10) || 1));
+  const autoResolveTriggerEffect = (controllerIdx, victimIdx, sourceName, effectText) => {
+    const t = (effectText || '').toLowerCase();
+    let handled = false;
+    const millM = t.match(/mills?\s+(\w+|\d+)(?:\s+cards?)?/);
+    if (millM) {
+      const n = _trigNum(millM[1]);
+      millCards(victimIdx, n);
+      addGameLog(controllerIdx, '💀', `${sourceName}: ${getState(victimIdx).name} mills ${n}`);
+      handled = true;
+    }
+    const drawM = t.match(/\bdraw\s+(\w+|\d+)\s+cards?/) || (/\bdraw a card/.test(t) ? [null, '1'] : null);
+    if (drawM) {
+      const n = _trigNum(drawM[1]);
+      for (let i = 0; i < n; i++) drawCard(controllerIdx);
+      addGameLog(controllerIdx, '📘', `${sourceName}: draw ${n}`);
+      handled = true;
+    }
+    const loseM = t.match(/(?:each opponent|target opponent|that player|defending player)\s+loses?\s+(\d+)\s+life/);
+    if (loseM) {
+      const n = parseInt(loseM[1]);
+      setState(victimIdx, p => ({ ...p, life: p.life - n }));
+      markDealtDamage(victimIdx);
+      SFX.lifeLoss();
+      addGameLog(controllerIdx, '💀', `${sourceName}: ${getState(victimIdx).name} loses ${n} life`);
+      handled = true;
+    }
+    const dmgM = t.match(/deals?\s+(\d+)\s+damage to (?:that player|each opponent|target (?:player|opponent)|defending player)/);
+    if (dmgM) {
+      const n = parseInt(dmgM[1]);
+      setState(victimIdx, p => ({ ...p, life: p.life - n }));
+      markDealtDamage(victimIdx);
+      SFX.playerDamage();
+      addGameLog(controllerIdx, '🔥', `${sourceName}: ${n} damage to ${getState(victimIdx).name}`);
+      handled = true;
+    }
+    const gainM = t.match(/you gain (\d+) life/);
+    if (gainM) { gainLife(controllerIdx, parseInt(gainM[1])); handled = true; }
+    return handled;
   };
 
   const returnToLibrary = (pIdx, card, from, position = 'top') => {
@@ -8585,8 +8658,13 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
           }
         }
         if (landfallTriggers.length > 0) {
-          const triggerText = landfallTriggers.map(t => `${t.name}: ${t.effect}`).join(' | ');
-          setEtbReminder({ pIdx, card, effects: landfallTriggers.map(t => ({ icon: '🌍', text: `LANDFALL — ${t.name}: ${t.effect}` })) });
+          // Auto-resolve common landfall effects (each opponent mills N — Ruin Crab, etc.);
+          // anything unrecognized falls back to a reminder.
+          const oppIdx = pIdx === 0 ? 1 : 0;
+          const leftover = landfallTriggers.filter(t => !autoResolveTriggerEffect(pIdx, oppIdx, t.name, t.effect));
+          if (leftover.length > 0) {
+            setEtbReminder({ pIdx, card, effects: leftover.map(t => ({ icon: '🌍', text: `LANDFALL — ${t.name}: ${t.effect}` })) });
+          }
         }
       }, 200);
       return;
@@ -9413,11 +9491,21 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       const modalTriggers = attackTriggers.filter(t => t.trigger.isModal);
       const simpleTriggers = attackTriggers.filter(t => !t.trigger.isModal);
 
-      // Show ETB-style reminder for non-modal triggers
+      // Auto-resolve common attack-trigger effects (each opponent mills N, draw a card,
+      // each opponent loses N life) instead of only showing a reminder. Token-creating
+      // triggers are handled by the create loop below, so skip them here.
       if (simpleTriggers.length > 0) {
-        const triggerTexts = simpleTriggers.map(t => t.trigger);
-        setEtbReminder({ pIdx: activePlayer, card: simpleTriggers[0].card,
-          effects: triggerTexts.map(t => ({ icon: t.icon, text: t.text })) });
+        const oppIdx = activePlayer === 0 ? 1 : 0;
+        const leftover = [];
+        for (const t of simpleTriggers) {
+          if (t.trigger.token) continue;
+          const handled = autoResolveTriggerEffect(activePlayer, oppIdx, t.card.name, t.trigger.text || '');
+          if (!handled) leftover.push(t.trigger);
+        }
+        if (leftover.length > 0) {
+          setEtbReminder({ pIdx: activePlayer, card: simpleTriggers[0].card,
+            effects: leftover.map(t => ({ icon: t.icon, text: t.text })) });
+        }
       }
 
       // Show modal choice overlay for "choose one" triggers (Elder Gargaroth etc.)
@@ -10415,6 +10503,13 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
           emitGoblin(tok);
         })();
         addGameLog(attackingPlayer, '⚔️', `${trig.name}: Created 0/1 Goblin Construct for ${getState(defendingPlayer).name}`);
+        continue;
+      }
+
+      // Auto-resolve common effects (mill, lose-life, damage-to-player). The player
+      // dealt combat damage is the defender. e.g. Merfolk Windrobber's "that player
+      // mills a card."
+      if (autoResolveTriggerEffect(attackingPlayer, defendingPlayer, trig.name, trig.text)) {
         continue;
       }
 
@@ -12456,7 +12551,11 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                             }
                           }
                           if (landfallTriggers.length > 0) {
-                            setEtbReminder({ pIdx: landPIdx, card: landfallTriggers[0], effects: landfallTriggers.map(t => ({ icon: '🌿', text: `${t.name}: ${t.effect}` })) });
+                            const oppLF = landPIdx === 0 ? 1 : 0;
+                            const leftoverLF = landfallTriggers.filter(t => !autoResolveTriggerEffect(landPIdx, oppLF, t.name, t.effect));
+                            if (leftoverLF.length > 0) {
+                              setEtbReminder({ pIdx: landPIdx, card: leftoverLF[0], effects: leftoverLF.map(t => ({ icon: '🌿', text: `${t.name}: ${t.effect}` })) });
+                            }
                           }
                         }, 200);
                       }} style={{
