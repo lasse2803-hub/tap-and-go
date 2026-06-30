@@ -1976,6 +1976,43 @@ const getConditionalBuffs = (card) => {
     }
   }
 
+  // ===== STATIC ANTHEMS & TEAM KEYWORD GRANTS from other permanents you control =====
+  // "(Other) creatures/<Type>s you control get +X/+X" (Anthem of Champions, lords) and
+  // "(Other) creatures/<Type>s you control have <keyword>" (Regisaur Alpha haste, etc.)
+  if (typeof isCreature === 'function' && isCreature(card)) {
+    let ownerIdx = -1;
+    for (let i = 0; i < allStates.length; i++) {
+      if (allStates[i] && allStates[i].battlefield && allStates[i].battlefield.some(c => c.id === card.id)) { ownerIdx = i; break; }
+    }
+    if (ownerIdx >= 0) {
+      const cardTypes = (card.type_line || '').toLowerCase();
+      for (const perm of (allStates[ownerIdx].battlefield || [])) {
+        const po = getOracleText(perm).toLowerCase();
+        // +X/+X anthem
+        const am = po.match(/(other )?([a-z]+) you control get \+(\d+)\/\+(\d+)/);
+        if (am) {
+          const isOther = !!am[1];
+          const group = am[2].replace(/s$/, ''); // "creatures"→"creature", "dinosaurs"→"dinosaur"
+          const applies = group === 'creature' ? true : cardTypes.includes(group);
+          if (applies && !(isOther && perm.id === card.id)) {
+            powerBuff += parseInt(am[3]);
+            toughnessBuff += parseInt(am[4]);
+          }
+        }
+        // keyword grant
+        const km = po.match(/(other )?([a-z]+) you control have ([a-z][a-z ]*?)(?:\.|$|,| until)/);
+        if (km) {
+          const isOther = !!km[1];
+          const group = km[2].replace(/s$/, '');
+          const applies = group === 'creature' ? true : cardTypes.includes(group);
+          if (applies && !(isOther && perm.id === card.id)) {
+            km[3].split(/\s+and\s+/).forEach(kw => { const k = kw.trim().toLowerCase(); if (k && !extraKeywords.includes(k)) extraKeywords.push(k); });
+          }
+        }
+      }
+    }
+  }
+
   return { power: powerBuff, toughness: toughnessBuff, keywords: extraKeywords };
 };
 
@@ -2333,6 +2370,27 @@ const getEffectiveToughness = (card, attachments = []) => {
   }
   t += getConditionalBuffs(card).toughness;
   return Math.max(0, t);
+};
+
+// Generic mana-cost reduction for a spell being cast (returns the amount to subtract from
+// generic cost). Covers self "costs {N} less" / "{X} less = total power of creatures you
+// control" (Ghalta) and other permanents' "<Type> spells you cast cost {N} less" (Otepec).
+const computeCostReduction = (card, casterState) => {
+  if (!casterState) return 0;
+  let red = 0;
+  const cardTypes = (card.type_line || '').toLowerCase();
+  const selfText = getOracleText(card).toLowerCase();
+  const selfFixed = selfText.match(/this spell costs \{(\d+)\} less/);
+  if (selfFixed) red += parseInt(selfFixed[1]);
+  if (/costs \{x\} less.*?total power of creatures you control/.test(selfText)) {
+    red += (casterState.battlefield || []).filter(c => isCreature(c)).reduce((s, c) => s + (getEffectivePower(c) || 0), 0);
+  }
+  for (const perm of (casterState.battlefield || [])) {
+    const po = getOracleText(perm).toLowerCase();
+    const m = po.match(/([a-z]+) spells you cast cost \{(\d+)\} less/);
+    if (m && (m[1] === 'creature' || cardTypes.includes(m[1]))) red += parseInt(m[2]);
+  }
+  return red;
 };
 
 // Parse Planeswalker loyalty abilities from oracle text
@@ -8059,6 +8117,17 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
           if (m) autoResolveTriggerEffect(pIdx, oppIdx, perm.name, m[1]);
         }
       }
+      // "Whenever a <type> you control enters the battlefield, it gains haste" (Otepec Huntmaster)
+      const enterTypes = (card.type_line || '').toLowerCase();
+      for (const perm of getStateRef(pIdx).battlefield) {
+        if (perm.id === card.id) continue;
+        const hm = getOracleText(perm).toLowerCase().match(/whenever an? ([a-z]+) you control enters the battlefield[^.]*it gains haste/);
+        if (hm && (hm[1] === 'creature' || enterTypes.includes(hm[1]))) {
+          setState(pIdx, prev => ({ ...prev, battlefield: prev.battlefield.map(c => c.id === card.id && !(c.keywords || []).some(k => k.toLowerCase() === 'haste') ? { ...c, keywords: [...(c.keywords || []), 'haste'] } : c) }));
+          addGameLog(pIdx, '⚡', `${perm.name}: ${getDisplayName(card)} gains haste`);
+          break;
+        }
+      }
     }
 
     // Scry/draw ETB effects auto-resolve through the normal effect resolver — the same
@@ -8291,6 +8360,11 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     const cost = parseManaCost(manaCostStr);
     if (!asAdventure && isCommander && isPlayerCommander(pIdx, card)) {
       cost.generic = (cost.generic || 0) + (p.commanderCastCount * 2);
+    }
+    // Cost reduction (Otepec Huntmaster, Ghalta, etc.) — reduces generic mana.
+    const costReduction = computeCostReduction(card, p);
+    if (costReduction > 0) {
+      cost.generic = Math.max(0, (cost.generic || 0) - costReduction);
     }
     if (!canPayManaCost(p.manaPool, cost)) {
       setCastError({ pIdx, message: asAdventure ? 'Not enough mana for adventure' : 'Not enough mana' });
@@ -9167,8 +9241,8 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         return;
       }
     }
-    // Summoning sickness check (unless haste)
-    const hasHaste = cardKw.includes('haste');
+    // Summoning sickness check (unless haste — including team-granted haste, e.g. Regisaur Alpha)
+    const hasHaste = cardKw.includes('haste') || getConditionalBuffs(card).keywords.includes('haste');
     if (card.enteredThisTurn && !hasHaste) return;
 
     setCombatState(prev => {
@@ -10718,7 +10792,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       const defendingPlayer = activePlayer === 0 ? 1 : 0;
       if (pIdx === activePlayer && combatState.attackers.includes(card.id)) return 'attacking' + glowClass;
       if (combatState.phase === 'attackers' && pIdx === activePlayer && isCreature(card) && !card.tapped) {
-        const hasHaste = card.keywords?.some(k => k.toLowerCase() === 'haste');
+        const hasHaste = card.keywords?.some(k => k.toLowerCase() === 'haste') || getConditionalBuffs(card).keywords.includes('haste');
         if (!card.enteredThisTurn || hasHaste) return 'can-attack' + glowClass;
       }
       if (combatState.phase === 'blockers' && pIdx === defendingPlayer) {
