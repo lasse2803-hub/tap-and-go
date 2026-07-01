@@ -3862,6 +3862,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       pwAbilityOnStack,
       pwAbilityOnStackVersion: pwAbilityOnStackVersionRef.current,
       pwReminder,
+      pwReminderVersion: pwReminderVersionRef.current,
       preventCombatDamage,
       modalChoice,
       searchExile,
@@ -4145,7 +4146,13 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         if (onlineState.pwAbilityOnStack !== undefined) _setPwAbilityOnStack(onlineState.pwAbilityOnStack);
       }
     }
-    if (onlineState.pwReminder !== undefined) _setPwReminder(onlineState.pwReminder);
+    if (onlineState.pwReminder !== undefined) {
+      const incomingPwRemVer = onlineState.pwReminderVersion || 0;
+      if (incomingPwRemVer >= pwReminderVersionRef.current) {
+        pwReminderVersionRef.current = incomingPwRemVer;
+        _setPwReminder(onlineState.pwReminder);
+      }
+    }
     if (onlineState.preventCombatDamage !== undefined) _setPreventCombatDamage(onlineState.preventCombatDamage);
     if (onlineState.modalChoice !== undefined) _setModalChoice(onlineState.modalChoice);
     if (onlineState.searchExile !== undefined) _setSearchExile(onlineState.searchExile);
@@ -5871,10 +5878,24 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       })
     }));
 
+    addGameLog(pIdx, '⚡', `${getState(pIdx).name} activates ${card.name} [${ability.cost}]${vorinclexNote}: ${ability.text.substring(0, 60)}${ability.text.length > 60 ? '…' : ''}`, [card.id]);
+
+    // Pure continuous permission (Teferi, Time Raveler +1: "cast sorceries as though they
+    // had flash until your next turn") — this is NOT an activated step. Apply it immediately
+    // and DON'T open a reminder modal (which was mislabeled "Activate" and could re-loop).
+    const abilityLower = (ability.text || '').toLowerCase();
+    if (/cast sorcery spells as though they had flash/.test(abilityLower)) {
+      const effect = { id: uid(), type: 'sorcery_flash', sourceName: card.name, ownerIdx: pIdx, registeredTurn: turnCount };
+      setState(pIdx, prev => ({ ...prev, untilNextTurnEffects: [...(prev.untilNextTurnEffects || []), effect] }));
+      SFX.playSpell();
+      setCastError({ pIdx, message: `⚡ ${card.name}: You may cast sorceries as though they had flash until your next turn`, background: '#1a2a3a' });
+      setTimeout(() => setCastError(null), 2800);
+      return;
+    }
+
     // Show ability on "stack" for opponent to see and optionally respond
     setPwAbilityOnStack({ pIdx, card, ability });
     SFX.playSpell();
-    addGameLog(pIdx, '⚡', `${getState(pIdx).name} activates ${card.name} [${ability.cost}]${vorinclexNote}: ${ability.text.substring(0, 60)}${ability.text.length > 60 ? '…' : ''}`, [card.id]);
   };
 
   // ===== EXILE LINKING SYSTEM =====
@@ -7126,7 +7147,11 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
   const _setPwAbilityOnStackSync = syncSetter(_setPwAbilityOnStack);
   const setPwAbilityOnStack = (v) => { pwAbilityOnStackVersionRef.current++; _setPwAbilityOnStackSync(v); };
   const [pwReminder, _setPwReminder] = useState(null); // SYNCED — { pIdx, card, ability, exiledCard?, exileCastDmg? }
-  const setPwReminder = syncSetter(_setPwReminder);
+  // Version-gated like pwAbilityOnStack: prevents the reminder from re-appearing/looping
+  // when a stale sync echoes back after one client clears it.
+  const pwReminderVersionRef = useRef(0);
+  const _setPwReminderSync = syncSetter(_setPwReminder);
+  const setPwReminder = (v) => { pwReminderVersionRef.current++; _setPwReminderSync(v); };
   const [searchExile, _setSearchExile] = useState(null); // SYNCED — { pIdx, targetPIdx, cardName } — post-counter search & exile (Test of Talents)
   const setSearchExile = syncSetter(_setSearchExile);
   const [spellResolveRequest, _setSpellResolveRequest] = useState(null); // SYNCED — { timestamp } — opponent signals caster to resolve top spell
@@ -8451,6 +8476,23 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
 
   const castCard = (pIdx, card, asAdventure = false, altCostStr = null, overloadMode = false) => {
     const p = getState(pIdx);
+
+    // ===== Teferi, Time Raveler static: "Each opponent can cast spells only any time
+    // they could cast a sorcery." If an OPPONENT controls such a permanent, this player
+    // may only cast at sorcery speed (their own main phase, empty stack). =====
+    {
+      const oppIdx = pIdx === 0 ? 1 : 0;
+      const oppHasSorceryLock = (getState(oppIdx).battlefield || []).some(c =>
+        /cast spells only any time they could cast a sorcery/i.test(getOracleText(c)));
+      if (oppHasSorceryLock) {
+        const sorcerySpeedOk = activePlayer === pIdx && (currentPhase === 'main1' || currentPhase === 'main2') && spellStack.length === 0;
+        if (!sorcerySpeedOk) {
+          setCastError({ pIdx, message: `⚠️ Teferi, Time Raveler: you can only cast spells at sorcery speed (your main phase, empty stack).`, background: '#2a1a3a' });
+          setTimeout(() => setCastError(null), 3000);
+          return;
+        }
+      }
+    }
 
     // ===== OVERLOAD DETECTION (e.g. Cyclonic Rift) =====
     // Overload: alternative cost that changes "target" → "each" (mass effect)
