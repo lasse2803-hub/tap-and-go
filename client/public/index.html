@@ -15173,6 +15173,7 @@ function useGameSocket() {
   const [roomInfo, setRoomInfo] = useState(null);
   const [playerIndex, setPlayerIndex] = useState(null);
   const [playerId, setPlayerId] = useState(null);
+  const joinCredsRef = useRef(null); // { roomId, nickname, playerId } — for re-joining on reconnect
   const [error, setError] = useState(null);
   const [gameState, setGameState] = useState(null);
   const [lastAction, setLastAction] = useState(null);
@@ -15193,13 +15194,24 @@ function useGameSocket() {
     s.on('connect', () => {
       setConnected(true);
       setError(null);
-      // On reconnect, request full state from server to resync
+      // On reconnect, the server-side socket is NEW and lost its room binding, so
+      // requestState alone fails ("Room not found"). Re-join first (the server rebinds
+      // the existing player slot by playerId), THEN pull fresh state.
       if (s._reconnecting) {
-        s.emit('requestState', (res) => {
-          if (res?.ok && res.state) {
-            setGameState(res.state);
-          }
-        });
+        const creds = joinCredsRef.current;
+        const pullState = () => s.emit('requestState', (res) => { if (res?.ok && res.state) setGameState(res.state); });
+        if (creds && creds.roomId && creds.playerId) {
+          s.emit('joinGame', { roomId: creds.roomId, nickname: creds.nickname, playerId: creds.playerId }, (res) => {
+            if (res?.ok) {
+              setPlayerIndex(res.playerIndex);
+              if (res.roomInfo) setRoomInfo(res.roomInfo);
+              setError(null);
+            }
+            pullState();
+          });
+        } else {
+          pullState();
+        }
       }
       s._reconnecting = true; // After first connect, all future connects are reconnects
     });
@@ -15276,6 +15288,7 @@ function useGameSocket() {
           setPlayerIndex(res.playerIndex);
           setPlayerId(res.playerId);
           setRoomInfo(res.roomInfo);
+          joinCredsRef.current = { roomId: data.roomId, nickname, playerId: res.playerId };
           resolve({ roomId: data.roomId, playerId: res.playerId });
         });
       });
@@ -15290,6 +15303,7 @@ function useGameSocket() {
         setPlayerIndex(res.playerIndex);
         setPlayerId(res.playerId);
         setRoomInfo(res.roomInfo);
+        joinCredsRef.current = { roomId: roomId.toUpperCase(), nickname, playerId: res.playerId };
         resolve(res);
       });
     });
