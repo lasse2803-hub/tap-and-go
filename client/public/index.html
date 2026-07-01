@@ -7113,20 +7113,34 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
   const spellStackVersionRef = useRef(0); // Version counter to prevent race conditions in online sync
   const _setSpellStackSync = syncSetter(_setSpellStack);
   const setSpellStack = (valOrFn) => {
-    spellStackVersionRef.current++;
+    // ONLINE: the SERVER owns the spell-stack version (bumped by stackPush/Resolve/Remove).
+    // The client must NOT bump it locally — otherwise the local counter drifts above the
+    // server's and the version-gated receive starts REJECTING the server's authoritative
+    // stack broadcasts, so pushed spells/creatures never appear (the "cast but not visible"
+    // bug). Local setSpellStack is an optimistic UI update only; the server broadcast reconciles.
+    if (!onlineMode) spellStackVersionRef.current++;
     _setSpellStackSync(valOrFn);
   };
-  // Stack-cutover step 1 (push): route a spell-cast onto the SERVER-authoritative
-  // stack so both clients reliably see it (no client-authoritative push race).
-  // Resolve/counter still use setSpellStack locally for now — the server's
-  // stackPush bumps the same spellStackVersion, so the version-gated sync stays
-  // coherent. Hotseat (no server) pushes locally as before.
+  // Stack cutover (server-authoritative): push AND removal go through the server so its
+  // stack content + version stay the single source of truth. Effect resolution still runs
+  // on the caster's client (it needs their hidden library). Hotseat (no server) is local.
   const pushToStack = (entry) => {
     if (onlineMode && serverGameAction) {
       serverGameAction({ type: 'stackPush', entry: entry.id ? entry : { ...entry, id: uid() } });
     } else {
       setSpellStack(prev => [...prev, entry]);
     }
+  };
+  // Remove specific stack entries (by id) authoritatively: server-side when online (keeps the
+  // server's stack from accumulating ghost spells after a local resolve), plus an optimistic
+  // local update. Used by resolve/counter instead of a blind slice.
+  const removeStackEntries = (entries) => {
+    const list = (Array.isArray(entries) ? entries : [entries]).filter(Boolean);
+    if (onlineMode && serverGameAction) {
+      list.forEach(e => { if (e.id) serverGameAction({ type: 'stackRemove', entryId: e.id }); });
+    }
+    const ids = new Set(list.map(e => e.id));
+    setSpellStack(prev => prev.filter(e => !ids.has(e.id)));
   };
   const stackTop = spellStack.length > 0 ? spellStack[spellStack.length - 1] : null;
   const [stackMinimized, setStackMinimized] = useState(false); // LOCAL — temporarily minimize spell stack overlay to interact with battlefield (e.g. sacrifice Cursecatcher)
@@ -8399,7 +8413,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
 
       if (!counterTypeValid) {
         // Target doesn't match counter's type restriction — counterspell fizzles
-        setSpellStack(prev => prev.slice(0, -1));
+        removeStackEntries(topSpell);
         setState(topSpell.pIdx, prev => ({
           ...prev,
           graveyard: [...prev.graveyard, { ...topSpell.card, tapped: false }],
@@ -8411,7 +8425,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         addGameLog(topSpell.pIdx, '⚠️', `${topSpell.displayName} fizzled — ${spellBelow.displayName} is not a valid target`);
       } else if (cardCantBeCountered(spellBelow.card)) {
         // Target can't be countered — counterspell fizzles, target stays on stack
-        setSpellStack(prev => prev.slice(0, -1)); // remove only top
+        removeStackEntries(topSpell); // remove only the counterspell
         // Move the counterspell to graveyard (card already removed from hand on cast)
         setState(topSpell.pIdx, prev => ({
           ...prev,
@@ -8427,7 +8441,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         const payMatch = counterOracle.match(/unless.*pays\s*\{(\d+)\}/i);
         const payAmount = payMatch ? parseInt(payMatch[1]) : 1;
         // Remove counterspell from stack (it resolved), move to graveyard
-        setSpellStack(prev => prev.slice(0, -1));
+        removeStackEntries(topSpell);
         setState(topSpell.pIdx, prev => ({
           ...prev,
           graveyard: [...prev.graveyard, { ...topSpell.card, tapped: false }],
@@ -8437,7 +8451,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         setSacCounterChoice({ sacPIdx: topSpell.pIdx, sacCard: topSpell.card, targetEntry: spellBelow, payAmount, isSpellCounter: true });
       } else {
         // Counter succeeds — remove both top and target from stack
-        setSpellStack(prev => prev.slice(0, -2));
+        removeStackEntries([topSpell, spellBelow]);
         // Move counterspell to graveyard (card already removed from hand on cast)
         setState(topSpell.pIdx, prev => ({
           ...prev,
@@ -8469,7 +8483,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       }
     } else {
       // Not a counterspell (or nothing below) — resolve normally
-      setSpellStack(prev => prev.slice(0, -1));
+      removeStackEntries(topSpell);
       resolveSpellFromStack(topSpell);
     }
   };
