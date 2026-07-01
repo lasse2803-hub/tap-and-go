@@ -519,5 +519,33 @@ test('gameWon: Bo3 needs two game wins', () => {
   assert.equal(room.status, 'finished');
 });
 
+// ── Cross-player board reconciliation (tombstones / keepalives) ──
+test('bf reconcile: a tucked card cannot be re-added by the owner\'s stale sync', () => {
+  const room = startedRoom();
+  const gs = room.gameState;
+  const card = { id: 'tuck1', name: 'Bonecrusher Giant', type_line: 'Creature' };
+  gs.players[1].battlefield.push(card);
+  // Player 0 tucks player 1's card into player 1's library (Teferi Hero -3).
+  const r = room.processAction(0, { type: 'tuckToLibrary', targetPlayerIndex: 1, cardId: 'tuck1', position: 2 });
+  assert.ok(r.ok);
+  assert.equal(gs.players[1].battlefield.some(c => c.id === 'tuck1'), false, 'removed from battlefield');
+  assert.equal(gs.players[1].library.some(c => c.id === 'tuck1'), true, 'placed into library');
+  // Player 1's stale client sync re-asserts the card on its own battlefield.
+  room.processAction(1, { type: 'stateSync', state: { players: [null, { battlefield: [card] }] } });
+  assert.equal(gs.players[1].battlefield.some(c => c.id === 'tuck1'), false, 'tombstone rejects the stale re-add');
+});
+
+test('bf reconcile: a server-added token survives the owner\'s stale sync', () => {
+  const room = startedRoom();
+  const gs = room.gameState;
+  const token = { id: 'tok1', name: 'Goblin Construct', isToken: true, type_line: 'Artifact Creature Token' };
+  const r = room.processAction(0, { type: 'createBattlefieldToken', targetPlayerIndex: 1, token });
+  assert.ok(r.ok);
+  assert.equal(gs.players[1].battlefield.some(c => c.id === 'tok1'), true, 'token added to battlefield');
+  // Player 1's stale client sync omits the token entirely.
+  room.processAction(1, { type: 'stateSync', state: { players: [null, { battlefield: [] }] } });
+  assert.equal(gs.players[1].battlefield.some(c => c.id === 'tok1'), true, 'keepalive preserves the token');
+});
+
 // Restore console after the suite (best-effort; node:test runs files in isolation).
 test.after?.(() => { console.log = origLog; console.warn = origWarn; });

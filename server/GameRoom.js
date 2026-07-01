@@ -453,6 +453,19 @@ class GameRoom {
    * the client sends state diffs and the server applies them.
    * This keeps the existing game logic on the client side.
    */
+  // Cross-player board reconciliation (see stateSync merge). A tombstone marks a card the
+  // server removed from a player's battlefield (their client must not re-add it); a keepalive
+  // marks a card the server added (their client must not drop it). Short TTL — just long
+  // enough for the owner's client to receive and reconcile the authoritative change.
+  _bfTombstone(playerIndex, cardId, ms = 12000) {
+    if (!this.bfTombstones) this.bfTombstones = [{}, {}];
+    if (cardId != null) this.bfTombstones[playerIndex][cardId] = Date.now() + ms;
+  }
+  _bfKeepalive(playerIndex, cardId, ms = 12000) {
+    if (!this.bfKeepalive) this.bfKeepalive = [{}, {}];
+    if (cardId != null) this.bfKeepalive[playerIndex][cardId] = Date.now() + ms;
+  }
+
   processAction(playerIndex, action) {
     if (!this.gameState) return { error: 'Game not started' };
     this.lastActivity = Date.now();
@@ -511,7 +524,24 @@ class GameRoom {
             s.life = u.life;
           }
           if (u.poison !== undefined) s.poison = u.poison;
-          if (u.battlefield) s.battlefield = u.battlefield;
+          if (u.battlefield) {
+            // Server-authoritative reconciliation of CROSS-PLAYER board changes: the owner's
+            // client is authoritative for its own board, so without this its periodic sync
+            // would UNDO changes another player made via server actions (tuck/bounce removing
+            // your card; a token added to your board). Short-lived tombstones/keepalives make
+            // those server changes stick until the owner's client has reconciled.
+            const now = Date.now();
+            const tomb = (this.bfTombstones && this.bfTombstones[i]) || {};
+            const keep = (this.bfKeepalive && this.bfKeepalive[i]) || {};
+            let bf = u.battlefield.filter(c => !(tomb[c.id] && tomb[c.id] > now)); // drop server-removed cards
+            for (const id in keep) { // re-add server-added cards the owner's stale sync dropped
+              if (keep[id] > now && !bf.some(c => c.id === id)) {
+                const existing = s.battlefield.find(c => c.id === id);
+                if (existing) bf.push(existing);
+              }
+            }
+            s.battlefield = bf;
+          }
           if (u.graveyard) s.graveyard = u.graveyard;
           if (u.exile) s.exile = u.exile;
           if (u.manaPool) s.manaPool = u.manaPool;
@@ -666,6 +696,7 @@ class GameRoom {
         delete card.temporaryControl; delete card.originalOwner; delete card.grantedHaste;
       }
       target.hand.push(card);
+      if (foundZone === 'battlefield') this._bfTombstone(targetPlayerIndex, cardId);
       this.gameState.timestamp = Date.now();
     }
 
@@ -692,6 +723,7 @@ class GameRoom {
       };
       const toBounce = target.battlefield.filter(shouldBounce);
       target.battlefield = target.battlefield.filter(c => !shouldBounce(c));
+      toBounce.forEach(c => this._bfTombstone(targetPlayerIndex, c.id));
       // Clean up bounced cards and add to hand
       for (const card of toBounce) {
         const cleaned = { ...card, tapped: false, enteredThisTurn: false };
@@ -752,6 +784,7 @@ class GameRoom {
       delete card.originalOwner; delete card.grantedHaste;
       if (card.animatedCreature) { delete card.animatedCreature; delete card.power; delete card.toughness; delete card.keywords; }
       target.battlefield.splice(idx, 1);
+      this._bfTombstone(targetPlayerIndex, cardId);
       const insertIdx = Math.min(Math.max(0, position), target.library.length);
       target.library.splice(insertIdx, 0, card);
       this.gameState.timestamp = Date.now();
@@ -769,6 +802,7 @@ class GameRoom {
       // Idempotent: ignore a duplicate id (e.g. a retried action)
       if (target.battlefield.some(c => c.id === token.id)) return { ok: true, tokenName: token.name };
       target.battlefield.push({ ...token, tapped: false, counters: {} });
+      this._bfKeepalive(targetPlayerIndex, token.id); // owner's stale sync must not drop it
       this.gameState.timestamp = Date.now();
       return { ok: true, tokenName: token.name };
     }
@@ -816,6 +850,7 @@ class GameRoom {
       if (card.animatedCreature) { delete card.animatedCreature; delete card.power; delete card.toughness; delete card.keywords; }
       // Move card
       controller.battlefield.splice(cardIdx, 1);
+      this._bfTombstone(controllerIndex, cardId); // controller's sync must not re-add the returned card
       const zone = destinationZone || 'graveyard';
       if (!owner[zone]) return { error: 'Invalid zone' };
       owner[zone].push(card);
