@@ -7171,6 +7171,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
   const [spellResolveRequest, _setSpellResolveRequest] = useState(null); // SYNCED — { timestamp } — opponent signals caster to resolve top spell
   const setSpellResolveRequest = syncSetter(_setSpellResolveRequest);
   const spellResolveHandledRef = useRef(null); // track which resolve request we already processed
+  const resolvedStackIdsRef = useRef(new Set()); // stack-entry ids already resolved (prevents double-resolution)
   const [abilityActivated, _setAbilityActivated] = useState(null); // SYNCED — { pIdx, cardName, abilityText, cardImage } — broadcast ability activation
   const setAbilityActivated = syncSetter(_setAbilityActivated);
   const [pendingRemoteDraw, _setPendingRemoteDraw] = useState(null); // SYNCED — { pIdx, count, timestamp } — tell caster to draw cards
@@ -8386,6 +8387,17 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
   const resolveTopOfStack = () => {
     if (spellStack.length === 0) return;
     const topSpell = spellStack[spellStack.length - 1];
+    // Idempotency guard: resolving the same stack entry twice (double Resolve click, or a
+    // sync race before the stack clears) would put a creature/permanent onto the battlefield
+    // TWICE. Each cast has a unique entry id, so block a repeat of the exact same entry.
+    if (topSpell.id && resolvedStackIdsRef.current.has(topSpell.id)) return;
+    if (topSpell.id) {
+      resolvedStackIdsRef.current.add(topSpell.id);
+      // Keep the set small — only recent ids matter for the race window.
+      if (resolvedStackIdsRef.current.size > 40) {
+        resolvedStackIdsRef.current = new Set(Array.from(resolvedStackIdsRef.current).slice(-20));
+      }
+    }
     const spellBelow = spellStack.length > 1 ? spellStack[spellStack.length - 2] : null;
 
     // For modal "choose one" spells (e.g. Decisive Denial), only counter if user chose counter mode
@@ -12057,12 +12069,6 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
               )}
             </div>
             <div style={{ display: 'flex', gap: 8 }}>
-              {scryView.count < sp.library.length && (
-                <button className="btn" style={{ padding: '6px 16px', fontSize: 11, borderColor: accentColor + '0.3)', color: textColor }}
-                  onClick={() => setScryView({ ...scryView, count: Math.min(scryView.count + 1, sp.library.length) })}>
-                  + Show More
-                </button>
-              )}
               <button className="btn btn-gold" style={{ padding: '8px 24px', fontSize: 13 }} onClick={commit}>
                 ✔ Confirm
               </button>
