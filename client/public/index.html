@@ -3739,8 +3739,17 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
   const endOfTurnRespondVersionRef = useRef(0);
   const _setEndOfTurnRespondSync = syncSetter(_setEndOfTurnRespond);
   const setEndOfTurnRespond = (val) => {
-    endOfTurnRespondVersionRef.current++;
-    _setEndOfTurnRespondSync(val);
+    if (onlineMode && serverGameAction) {
+      // SERVER-OWNED (turn-authority slice): one authoritative version counter.
+      // Two independent client counters drifted apart, so one side's "Pass Turn"
+      // (endOfTurnRespond=true) was silently rejected by the other — game froze.
+      // Local set is optimistic; the server broadcast carries the real version.
+      serverGameAction({ type: 'setEndOfTurnRespond', value: !!val });
+      _setEndOfTurnRespond(val);
+    } else {
+      endOfTurnRespondVersionRef.current++;
+      _setEndOfTurnRespondSync(val);
+    }
   };
 
   // Mulligan state — London Mulligan: draw 7, then put back cards equal to mulligans taken
@@ -3857,8 +3866,8 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       spellStackVersion: spellStackVersionRef.current,
       instantCasting,
       instantCastingVersion: instantCastingVersionRef.current,
-      endOfTurnRespond,
-      endOfTurnRespondVersion: endOfTurnRespondVersionRef.current,
+      // endOfTurnRespond intentionally NOT sent — server-owned via the
+      // 'setEndOfTurnRespond' intent (see setEndOfTurnRespond wrapper).
       pwAbilityOnStack,
       pwAbilityOnStackVersion: pwAbilityOnStackVersionRef.current,
       pwReminder,
@@ -4261,6 +4270,13 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     // Only the caster should resolve (the one whose library is available locally).
     // Non-caster: do NOT clear or mark handled — let sync carry the request to caster.
     if (topSpell.pIdx !== onlinePlayerIndex) return;
+    // The request must be FOR this exact spell. A stale request (the requester keeps
+    // echoing it in sync, and a refresh wipes our handled-ref) must not auto-resolve
+    // the NEXT spell we cast — that made creatures/spells resolve instantly.
+    if (spellResolveRequest.entryId && topSpell.id !== spellResolveRequest.entryId) {
+      spellResolveHandledRef.current = spellResolveRequest.timestamp; // stale — consume, don't act
+      return;
+    }
     // We ARE the caster — resolve on our client where we have full library data
     spellResolveHandledRef.current = spellResolveRequest.timestamp;
     _setSpellResolveRequest(null);
@@ -12623,7 +12639,10 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                 <button className="btn-resolve" onClick={() => {
                   if (onlineMode) {
                     // Signal the caster to resolve — they have access to their own library/hand data
-                    setSpellResolveRequest({ timestamp: Date.now() });
+                    // entryId pins the request to THIS spell: a stale request that keeps
+                    // echoing in sync must not auto-resolve a future spell the caster puts
+                    // on the stack (bug: creatures/spells resolved instantly after a refresh).
+                    setSpellResolveRequest({ timestamp: Date.now(), entryId: stackTop.id });
                   } else {
                     resolveTopOfStack();
                   }

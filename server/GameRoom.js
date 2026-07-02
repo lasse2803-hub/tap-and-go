@@ -292,6 +292,9 @@ class GameRoom {
     this.gameState.currentPhase = 'main1';
     this.gameState.currentStep = 'untap';
     if (next === 0) this.gameState.turnNumber = (this.gameState.turnNumber || 1) + 1;
+    if (this.gameState.endOfTurnRespond) {
+      this.gameState.endOfTurnRespondVersion = (this.gameState.endOfTurnRespondVersion || 0) + 1;
+    }
     this.gameState.endOfTurnRespond = false;
     // New turn → "lost life this turn" resets for both players (Spectacle, etc.).
     for (const p of this.gameState.players) { if (p) p.lostLifeThisTurn = false; }
@@ -502,6 +505,18 @@ class GameRoom {
       this.actionLog.push({ playerIndex, action: { type: 'changeLife' }, timestamp: Date.now() });
       return result;
     }
+    if (action.type === 'setEndOfTurnRespond') {
+      // Server-owned end-of-turn respond flag (turn-authority slice). One authoritative
+      // version counter kills the cross-client drift that hid "Pass Turn" from the opponent.
+      this.gameState.endOfTurnRespond = !!action.value;
+      this.gameState.endOfTurnRespondVersion = (this.gameState.endOfTurnRespondVersion || 0) + 1;
+      // When the non-active player clears the flag ("Proceed"), their activePlayer flip
+      // arrives in a stateSync moments later — allow it via a short grace window.
+      if (!action.value) this._eotClearedAt = Date.now();
+      this.gameState.timestamp = Date.now();
+      this.actionLog.push({ playerIndex, action: { type: 'setEndOfTurnRespond', value: !!action.value }, timestamp: Date.now() });
+      return { ok: true, endOfTurnRespond: this.gameState.endOfTurnRespond, endOfTurnRespondVersion: this.gameState.endOfTurnRespondVersion };
+    }
 
     // For MVP: the client sends the updated state for its own zones.
     // Server merges and broadcasts.
@@ -570,11 +585,17 @@ class GameRoom {
       // OR from the non-active player during end-of-turn (they click "Proceed")
       if (update.activePlayer !== undefined && update.activePlayer !== this.gameState.activePlayer) {
         const isActivePlayer = playerIndex === this.gameState.activePlayer;
-        const isEndOfTurnProceed = this.gameState.endOfTurnRespond && !isActivePlayer;
+        // "Proceed" clears endOfTurnRespond via intent moments BEFORE this stateSync
+        // arrives with the turn flip — honor a short grace window after the clear.
+        const recentlyCleared = this._eotClearedAt && (Date.now() - this._eotClearedAt) < 10000;
+        const isEndOfTurnProceed = (this.gameState.endOfTurnRespond || recentlyCleared) && !isActivePlayer;
         if (isActivePlayer || isEndOfTurnProceed || this.gameState.mulliganPhase) {
           this.gameState.activePlayer = update.activePlayer;
           // Reset end-of-turn state when the active player changes (new turn)
-          this.gameState.endOfTurnRespond = false;
+          if (this.gameState.endOfTurnRespond) {
+            this.gameState.endOfTurnRespond = false;
+            this.gameState.endOfTurnRespondVersion = (this.gameState.endOfTurnRespondVersion || 0) + 1;
+          }
         }
       }
       if (update.currentPhase) this.gameState.currentPhase = update.currentPhase;
@@ -626,14 +647,10 @@ class GameRoom {
           this.gameState.instantCastingVersion = incomingVer;
         }
       }
-      if (update.endOfTurnRespond !== undefined) {
-        const incomingVer = update.endOfTurnRespondVersion || 0;
-        const currentVer = this.gameState.endOfTurnRespondVersion || 0;
-        if (incomingVer >= currentVer) {
-          this.gameState.endOfTurnRespond = update.endOfTurnRespond;
-          this.gameState.endOfTurnRespondVersion = incomingVer;
-        }
-      }
+      // endOfTurnRespond is SERVER-OWNED (set via the 'setEndOfTurnRespond' intent).
+      // Clients no longer send it in stateSync; ignoring any legacy value here prevents
+      // the cross-client version drift that made Pass Turn invisible to the opponent
+      // (each client counted its own version, so one side's updates got rejected).
       if (update.pwAbilityOnStackVersion !== undefined) {
         const inV = update.pwAbilityOnStackVersion || 0;
         const curV = this.gameState.pwAbilityOnStackVersion || 0;

@@ -547,5 +547,33 @@ test('bf reconcile: a server-added token survives the owner\'s stale sync', () =
   assert.equal(gs.players[1].battlefield.some(c => c.id === 'tok1'), true, 'keepalive preserves the token');
 });
 
+// ── Server-owned endOfTurnRespond (turn-authority slice) ──────
+test('setEndOfTurnRespond intent: server owns value + version; stateSync cannot clobber', () => {
+  const room = startedRoom();
+  const gs = room.gameState;
+  const r = room.processAction(0, { type: 'setEndOfTurnRespond', value: true });
+  assert.ok(r.ok);
+  assert.equal(gs.endOfTurnRespond, true);
+  const verAfterIntent = gs.endOfTurnRespondVersion;
+  assert.ok(verAfterIntent >= 1);
+  // A stale client sync claiming endOfTurnRespond=false (with a huge version) is ignored.
+  room.processAction(1, { type: 'stateSync', state: { endOfTurnRespond: false, endOfTurnRespondVersion: 9999 } });
+  assert.equal(gs.endOfTurnRespond, true, 'stateSync no longer controls endOfTurnRespond');
+  assert.equal(gs.endOfTurnRespondVersion, verAfterIntent, 'version unchanged by stateSync');
+});
+
+test('Proceed grace: non-active flip accepted just after intent clears endOfTurnRespond', () => {
+  const room = startedRoom({ firstPlayer: 0 });
+  const gs = room.gameState;
+  // A (active=0) passes: flag goes up via intent.
+  room.processAction(0, { type: 'setEndOfTurnRespond', value: true });
+  // B proceeds: clears the flag via intent FIRST...
+  room.processAction(1, { type: 'setEndOfTurnRespond', value: false });
+  assert.equal(gs.endOfTurnRespond, false);
+  // ...then B's stateSync flips activePlayer moments later — must be accepted (grace window).
+  room.processAction(1, { type: 'stateSync', state: { activePlayer: 1 } });
+  assert.equal(gs.activePlayer, 1, 'turn flip from proceeding non-active player accepted');
+});
+
 // Restore console after the suite (best-effort; node:test runs files in isolation).
 test.after?.(() => { console.log = origLog; console.warn = origWarn; });
