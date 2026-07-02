@@ -5896,22 +5896,43 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
 
     addGameLog(pIdx, '⚡', `${getState(pIdx).name} activates ${card.name} [${ability.cost}]${vorinclexNote}: ${ability.text.substring(0, 60)}${ability.text.length > 60 ? '…' : ''}`, [card.id]);
 
-    // Pure continuous permission (Teferi, Time Raveler +1: "cast sorceries as though they
-    // had flash until your next turn") — this is NOT an activated step. Apply it immediately
-    // and DON'T open a reminder modal (which was mislabeled "Activate" and could re-loop).
-    const abilityLower = (ability.text || '').toLowerCase();
-    if (/cast sorcery spells as though they had flash/.test(abilityLower)) {
-      const effect = { id: uid(), type: 'sorcery_flash', sourceName: card.name, ownerIdx: pIdx, registeredTurn: turnCount };
-      setState(pIdx, prev => ({ ...prev, untilNextTurnEffects: [...(prev.untilNextTurnEffects || []), effect] }));
-      SFX.playSpell();
-      setCastError({ pIdx, message: `⚡ ${card.name}: You may cast sorceries as though they had flash until your next turn`, background: '#1a2a3a' });
-      setTimeout(() => setCastError(null), 2800);
-      return;
-    }
-
-    // Show ability on "stack" for opponent to see and optionally respond
+    // Loyalty abilities use the stack (MTG rules): the opponent sees the activation and
+    // may respond before it resolves. Continuous permissions (Teferi +1 sorcery-flash,
+    // Jace +1 debuff) auto-apply at RESOLUTION — see resolvePwAbilityEntry — so no
+    // misleading manual "Activate" step appears afterwards.
     setPwAbilityOnStack({ pIdx, card, ability });
     SFX.playSpell();
+  };
+
+  // Resolve a pwAbilityOnStack entry (after the opponent OKs or responds): auto-apply
+  // known continuous effects with no manual step; otherwise open the pwReminder modal
+  // for manual resolution.
+  const resolvePwAbilityEntry = (entry) => {
+    const abText = (entry.ability.text || '').toLowerCase();
+    // "Until your next turn, whenever a creature an opponent controls attacks, it gets -X/-Y" (Jace +1)
+    const debuffMatch = abText.match(/until your next turn,?\s+whenever a creature an opponent controls attacks,?\s+it gets (-?\d+)\/(-?\d+)/i);
+    if (debuffMatch) {
+      const debuffEffect = {
+        id: uid(), type: 'attacker_debuff',
+        power: parseInt(debuffMatch[1]), toughness: parseInt(debuffMatch[2]),
+        sourceName: entry.card.name, ownerIdx: entry.pIdx, registeredTurn: turnCount,
+      };
+      setState(entry.pIdx, prev => ({ ...prev, untilNextTurnEffects: [...(prev.untilNextTurnEffects || []), debuffEffect] }));
+      setCastError({ pIdx: entry.pIdx, message: `🛡️ ${entry.card.name}: Attackers get ${debuffMatch[1]}/${debuffMatch[2]} until your next turn` });
+      setTimeout(() => setCastError(null), 3000);
+      setPwReminder(null); // No manual step needed
+      return;
+    }
+    // "You may cast sorcery spells as though they had flash" (Teferi, Time Raveler +1)
+    if (/cast sorcery spells as though they had flash/.test(abText)) {
+      const effect = { id: uid(), type: 'sorcery_flash', sourceName: entry.card.name, ownerIdx: entry.pIdx, registeredTurn: turnCount };
+      setState(entry.pIdx, prev => ({ ...prev, untilNextTurnEffects: [...(prev.untilNextTurnEffects || []), effect] }));
+      setCastError({ pIdx: entry.pIdx, message: `⚡ ${entry.card.name}: Sorceries may be cast as though they had flash until your next turn`, background: '#1a2a3a' });
+      setTimeout(() => setCastError(null), 3000);
+      setPwReminder(null); // No manual step needed
+      return;
+    }
+    setPwReminder({ pIdx: entry.pIdx, card: entry.card, ability: entry.ability });
   };
 
   // ===== EXILE LINKING SYSTEM =====
@@ -13200,25 +13221,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                 <button className="btn-ok" onClick={() => {
                   const entry = pwAbilityOnStack;
                   setPwAbilityOnStack(null);
-                  // Auto-apply "until your next turn" attacker debuff (e.g. Jace +1: attackers get -1/-0)
-                  const abText = (entry.ability.text || '').toLowerCase();
-                  const debuffMatch = abText.match(/until your next turn,?\s+whenever a creature an opponent controls attacks,?\s+it gets (-?\d+)\/(-?\d+)/i);
-                  if (debuffMatch) {
-                    const debuffEffect = {
-                      id: uid(), type: 'attacker_debuff',
-                      power: parseInt(debuffMatch[1]), toughness: parseInt(debuffMatch[2]),
-                      sourceName: entry.card.name, ownerIdx: entry.pIdx, registeredTurn: turnCount,
-                    };
-                    setState(entry.pIdx, prev => ({
-                      ...prev,
-                      untilNextTurnEffects: [...(prev.untilNextTurnEffects || []), debuffEffect],
-                    }));
-                    setCastError({ pIdx: entry.pIdx, message: `🛡️ ${entry.card.name}: Attackers get ${debuffMatch[1]}/${debuffMatch[2]} until your next turn` });
-                    setTimeout(() => setCastError(null), 3000);
-                    setPwReminder(null); // No manual step needed
-                  } else {
-                    setPwReminder({ pIdx: entry.pIdx, card: entry.card, ability: entry.ability });
-                  }
+                  resolvePwAbilityEntry(entry);
                 }}>✓ OK</button>
               )}
               {(!onlineMode || onlinePlayerIndex === (pwAbilityOnStack.pIdx === 0 ? 1 : 0)) && (
@@ -13226,23 +13229,9 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                   const entry = pwAbilityOnStack;
                   const opponentPIdx = entry.pIdx === 0 ? 1 : 0;
                   setPwAbilityOnStack(null);
-                  // Auto-apply "until your next turn" attacker debuff before respond
-                  const abText2 = (entry.ability.text || '').toLowerCase();
-                  const debuffMatch2 = abText2.match(/until your next turn,?\s+whenever a creature an opponent controls attacks,?\s+it gets (-?\d+)\/(-?\d+)/i);
-                  if (debuffMatch2) {
-                    const debuffEffect2 = {
-                      id: uid(), type: 'attacker_debuff',
-                      power: parseInt(debuffMatch2[1]), toughness: parseInt(debuffMatch2[2]),
-                      sourceName: entry.card.name, ownerIdx: entry.pIdx, registeredTurn: turnCount,
-                    };
-                    setState(entry.pIdx, prev => ({
-                      ...prev,
-                      untilNextTurnEffects: [...(prev.untilNextTurnEffects || []), debuffEffect2],
-                    }));
-                    setPwReminder(null);
-                  } else {
-                    setPwReminder({ pIdx: entry.pIdx, card: entry.card, ability: entry.ability });
-                  }
+                  // Simplified model: apply the ability's continuous effect, then open the
+                  // respond window for the opponent's instant.
+                  resolvePwAbilityEntry(entry);
                   setInstantCasting({ pIdx: opponentPIdx });
                 }}>⚡ Respond</button>
               )}
