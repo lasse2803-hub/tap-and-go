@@ -2751,6 +2751,8 @@ function CardDisplay({ card, size = 60, onClick, onContext, showPreview, extraCl
   const previewElRef = useRef(null);
   const isHovering = useRef(false);
   const lastPos = useRef({ x: 0, y: 0 });
+  const showTimerRef = useRef(null); // hover-intent delay timer
+  const shownRef = useRef(false);    // preview currently visible
 
   // Use direct DOM manipulation for preview to avoid re-render issues
   const updatePreview = (x, y) => {
@@ -2758,16 +2760,19 @@ function CardDisplay({ card, size = 60, onClick, onContext, showPreview, extraCl
     if (!previewElRef.current) return;
     const el = previewElRef.current;
     el.style.display = 'block';
+    shownRef.current = true;
     el.style.left = Math.min(x + 15, window.innerWidth - 280) + 'px';
     el.style.top = Math.min(y - 100, window.innerHeight - 390) + 'px';
   };
   const hidePreview = () => {
+    shownRef.current = false;
+    if (showTimerRef.current) { clearTimeout(showTimerRef.current); showTimerRef.current = null; }
     if (previewElRef.current) previewElRef.current.style.display = 'none';
   };
 
-  // Restore preview visibility after re-render if still hovering
+  // Restore preview visibility after re-render if still hovering (and it was shown)
   useEffect(() => {
-    if (isHovering.current && previewElRef.current) {
+    if (isHovering.current && shownRef.current && previewElRef.current) {
       updatePreview(lastPos.current.x, lastPos.current.y);
     }
   });
@@ -2775,11 +2780,19 @@ function CardDisplay({ card, size = 60, onClick, onContext, showPreview, extraCl
   const handleMouseEnter = (e) => {
     if (showPreview) {
       isHovering.current = true;
-      updatePreview(e.clientX, e.clientY);
+      lastPos.current = { x: e.clientX, y: e.clientY };
+      // Hover-intent delay: only enlarge after dwelling ~a third of a second, so a
+      // quick right-click (planeswalker abilities etc.) isn't covered by the preview.
+      if (showTimerRef.current) clearTimeout(showTimerRef.current);
+      showTimerRef.current = setTimeout(() => {
+        showTimerRef.current = null;
+        if (isHovering.current) updatePreview(lastPos.current.x, lastPos.current.y);
+      }, 350);
     }
   };
   const handleMouseMove = (e) => {
-    if (isHovering.current) updatePreview(e.clientX, e.clientY);
+    lastPos.current = { x: e.clientX, y: e.clientY };
+    if (isHovering.current && shownRef.current) updatePreview(e.clientX, e.clientY);
   };
   const handleMouseLeave = () => {
     isHovering.current = false;
@@ -2844,7 +2857,13 @@ function CardDisplay({ card, size = 60, onClick, onContext, showPreview, extraCl
       onMouseEnter={handleMouseEnter}
       onMouseMove={handleMouseMove}
       onMouseLeave={handleMouseLeave}
-      onContextMenu={e => { e.preventDefault(); onContext && onContext(e, card); }}
+      onContextMenu={e => {
+        e.preventDefault();
+        // Opening the context menu keeps the cursor over the card, so mouseleave never
+        // fires — hide the enlarged preview explicitly so it doesn't cover the menu.
+        handleMouseLeave();
+        onContext && onContext(e, card);
+      }}
       style={{ position: 'relative' }}>
       {counterEntries.length > 0 && (
         <div className="card-counters">
