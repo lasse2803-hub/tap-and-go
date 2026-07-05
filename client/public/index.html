@@ -113,16 +113,13 @@
   .hand-zone > div:hover { margin-right: 4px; z-index: 20; }
   .hand-zone > div:last-child { margin-right: 0; }
 
+  /* Official MTG card back (served locally from /mtg-card-back.png, source: Scryfall).
+     Real card ratio is 745:1040 ≈ 60:84, so cover fits 1:1 with no cropping. */
   .card-back {
-    width: 60px; height: 84px; border-radius: 6px;
-    background: linear-gradient(135deg, #2a1a3e 0%, #1a1028 50%, #2a1a3e 100%);
-    border: 2px solid rgba(120,90,50,0.5);
-    box-shadow: inset 0 0 15px rgba(0,0,0,0.5), 0 2px 6px rgba(0,0,0,0.4);
+    width: 60px; height: 84px; border-radius: 4px;
+    background: url('/mtg-card-back.png') center / cover no-repeat;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.4);
     position: relative; overflow: hidden;
-  }
-  .card-back::after {
-    content: '✦'; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
-    font-size: 22px; color: rgba(200,170,60,0.25);
   }
   .hand-hidden-label {
     font-size: 10px; color: rgba(255,255,255,0.25); padding: 4px 12px;
@@ -2700,14 +2697,16 @@ function ZoneViewer({ title, cards, onClose, onCardAction }) {
             {cards.map((card, i) => (
               <div key={card.id || i} style={{ position: 'relative' }}>
                 {card.isHiddenForetold ? (
-                  /* Opponent's foretold card — shown face-down */
+                  /* Opponent's foretold card — shown face-down (official card back) */
                   <div onClick={() => onCardAction && onCardAction(card)}
                     style={{ width: '100%', height: 180, borderRadius: 8, cursor: 'pointer',
-                      background: 'linear-gradient(135deg, #2a1a4a 0%, #1a0a3a 50%, #2a1a4a 100%)',
-                      border: '2px solid rgba(130,80,220,0.4)', display: 'flex', alignItems: 'center',
-                      justifyContent: 'center', flexDirection: 'column', gap: 6 }}>
-                    <span style={{ fontSize: 32 }}>🔮</span>
-                    <span style={{ color: '#b090e0', fontSize: 11, fontWeight: 600 }}>Foretold</span>
+                      background: "url('/mtg-card-back.png') center / cover no-repeat",
+                      position: 'relative', overflow: 'hidden',
+                      boxShadow: '0 2px 8px rgba(0,0,0,0.5)' }}>
+                    <span style={{ position: 'absolute', bottom: 4, left: '50%', transform: 'translateX(-50%)',
+                      background: 'rgba(20,10,40,0.85)', border: '1px solid rgba(130,80,220,0.5)',
+                      borderRadius: 6, padding: '1px 8px', color: '#b090e0', fontSize: 10, fontWeight: 600,
+                      whiteSpace: 'nowrap' }}>🔮 Foretold</span>
                   </div>
                 ) : card.isToken ? (
                   card.tokenImageSmall ? (
