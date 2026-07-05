@@ -94,6 +94,35 @@ io.on('connection', (socket) => {
     }
   });
 
+  // Rebuild a room lost to a server restart (deploy / idle spin-down) from the
+  // client's last received state snapshot, then seat the caller in it.
+  socket.on('resurrectRoom', ({ roomId, nickname, playerId, playerIndex, snapshot }, callback) => {
+    if (!roomId || playerIndex === undefined || !snapshot) {
+      return callback?.({ error: 'Invalid resurrect payload' });
+    }
+    let room = roomManager.getRoom(roomId);
+    if (!room) {
+      room = roomManager.resurrectRoom(roomId, playerIndex, nickname, playerId, snapshot);
+      if (!room) return callback?.({ error: 'Could not resurrect room' });
+    }
+    const result = room.addPlayer(socket, nickname, playerId);
+    if (result.error) return callback?.({ error: result.error });
+
+    socket.join(room.id);
+    socket.roomId = room.id;
+    socket.playerIndex = result.playerIndex;
+    socket.playerId = result.playerId;
+
+    callback?.({
+      ok: true,
+      playerIndex: result.playerIndex,
+      playerId: result.playerId,
+      roomInfo: room.getPublicInfo(),
+      state: room.getVisibleState(result.playerIndex),
+    });
+    socket.to(room.id).emit('playerJoined', { nickname, playerIndex: result.playerIndex, roomInfo: room.getPublicInfo() });
+  });
+
   // Player submits their deck
   socket.on('submitDeck', ({ deck, avatar, matchType, sideboard }, callback) => {
     const room = roomManager.getRoom(socket.roomId);

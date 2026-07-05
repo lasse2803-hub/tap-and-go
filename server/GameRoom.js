@@ -44,6 +44,44 @@ class GameRoom {
   }
 
   /**
+   * Rebuild this room's game after a server restart (deploy / idle spin-down wiped
+   * the in-memory rooms) from a client's last received state snapshot (a
+   * getVisibleState payload). The resurrecting player's private zones are complete;
+   * the opponent's hidden zones are stored empty and repopulate automatically from
+   * that player's own periodic stateSync once they reconnect (own-index hand/library
+   * are accepted in the merge). Note: bo3 "next game" needs decks, which are not in
+   * the snapshot — resurrection covers finishing the CURRENT game.
+   */
+  resurrectFromSnapshot(playerIndex, nickname, playerId, snapshot) {
+    if (!snapshot || !Array.isArray(snapshot.players) || snapshot.players.length !== 2) {
+      return { error: 'Invalid snapshot' };
+    }
+    const oppIdx = playerIndex === 0 ? 1 : 0;
+    this.players[playerIndex].nickname = nickname || this.players[playerIndex].nickname;
+    this.players[playerIndex].playerId = playerId;
+    this.players[playerIndex].ready = true;
+    // Opponent seat is left vacant (playerId null) — their old playerId died with the
+    // restart if THEY didn't resurrect; addPlayer adopts them into this seat on rejoin.
+    this.players[oppIdx].nickname = snapshot.players[oppIdx]?.name || this.players[oppIdx].nickname || 'Opponent';
+    this.players[oppIdx].playerId = null;
+    this.players[oppIdx].ready = true;
+    if (playerIndex === 0) this.hostPlayerId = playerId;
+
+    const gs = JSON.parse(JSON.stringify(snapshot));
+    delete gs.viewerIndex;
+    if (gs.players[oppIdx]) {
+      // Hidden-zone placeholders from the snapshot must not become real cards.
+      gs.players[oppIdx].hand = [];
+      gs.players[oppIdx].library = [];
+    }
+    gs.timestamp = Date.now();
+    this.gameState = gs;
+    this.status = 'playing';
+    this.lastActivity = Date.now();
+    return { ok: true };
+  }
+
+  /**
    * Add a player to this room (connect via socket)
    */
   addPlayer(socket, nickname, existingPlayerId) {
@@ -61,6 +99,23 @@ class GameRoom {
         }
         console.log(`[GameRoom ${this.id}] Player ${idx} (${this.players[idx].nickname}) reconnected`);
         return { playerIndex: idx, playerId: existingPlayerId };
+      }
+    }
+
+    // Resurrected room: a PLAYING room can have a vacant seat (playerId null but
+    // nickname set) reserved for the other player of the original game. Their old
+    // playerId is unknown to this rebuilt room — adopt them into the seat and keep
+    // their playerId so future reconnects match normally.
+    if (this.status === 'playing') {
+      const vacantIdx = this.players.findIndex(p => p.playerId === null && p.nickname !== null);
+      if (vacantIdx !== -1) {
+        this.players[vacantIdx].playerId = existingPlayerId || this.generatePlayerId();
+        this.players[vacantIdx].socketId = socket.id;
+        this.players[vacantIdx].connected = true;
+        if (nickname) this.players[vacantIdx].nickname = nickname;
+        if (this.cleanupTimer) { clearTimeout(this.cleanupTimer); this.cleanupTimer = null; }
+        console.log(`[GameRoom ${this.id}] Player ${vacantIdx} (${this.players[vacantIdx].nickname}) adopted into resurrected room`);
+        return { playerIndex: vacantIdx, playerId: this.players[vacantIdx].playerId };
       }
     }
 

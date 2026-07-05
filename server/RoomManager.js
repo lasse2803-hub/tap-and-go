@@ -44,6 +44,24 @@ class RoomManager {
   }
 
   /**
+   * Rebuild a room lost to a server restart, keeping its original ID, from a
+   * client's last known state snapshot. If the other player resurrected it a
+   * moment earlier, return the existing room instead.
+   */
+  resurrectRoom(roomId, playerIndex, nickname, playerId, snapshot) {
+    const id = (roomId || '').toUpperCase();
+    if (!id) return null;
+    const existing = this.rooms.get(id);
+    if (existing) return existing;
+    const room = new GameRoom(id, playerIndex === 0 ? nickname : (snapshot?.players?.[0]?.name || 'Player 1'));
+    const result = room.resurrectFromSnapshot(playerIndex, nickname, playerId, snapshot);
+    if (result.error) return null;
+    this.rooms.set(id, room);
+    console.log(`[RoomManager] Room RESURRECTED: ${id} by ${nickname} (${this.rooms.size} active rooms)`);
+    return room;
+  }
+
+  /**
    * Remove a room
    */
   removeRoom(roomId) {

@@ -575,5 +575,42 @@ test('Proceed grace: non-active flip accepted just after intent clears endOfTurn
   assert.equal(gs.activePlayer, 1, 'turn flip from proceeding non-active player accepted');
 });
 
+// ── Room resurrection after server restart ────────────────────
+test('resurrect: room rebuilt from snapshot; opponent adopted; private zones restored via sync', () => {
+  const RoomManager = require('../server/RoomManager.js');
+  const room = startedRoom();
+  const snap = room.getVisibleState(0); // what player 0's client last received
+
+  // Simulate a server restart: a fresh RoomManager with no rooms.
+  const rm = new RoomManager();
+  assert.equal(rm.getRoom('TEST'), null);
+
+  // Player 0 resurrects the room from their snapshot.
+  const room2 = rm.resurrectRoom('TEST', 0, 'Alice', 'alice-id', snap);
+  assert.ok(room2, 'room resurrected');
+  assert.equal(room2.status, 'playing');
+  assert.equal(room2.gameState.players[0].hand.length, snap.players[0].hand.length, 'own hand preserved');
+  assert.deepEqual(room2.gameState.players[1].hand, [], 'opponent hidden hand stored empty (no placeholder cards)');
+  assert.deepEqual(room2.gameState.players[1].library, [], 'opponent hidden library stored empty');
+
+  // Resurrector reconnects normally by playerId.
+  const r1 = room2.addPlayer({ id: 'sock-a' }, 'Alice', 'alice-id');
+  assert.equal(r1.playerIndex, 0);
+
+  // Opponent rejoins with their OLD playerId (unknown to the rebuilt room) → adopted into the vacant seat.
+  const r2 = room2.addPlayer({ id: 'sock-b' }, 'Bob', 'bob-old-id');
+  assert.equal(r2.playerIndex, 1, 'opponent adopted into their original seat');
+  assert.equal(r2.playerId, 'bob-old-id', 'opponent keeps their playerId for future reconnects');
+
+  // Opponent's own periodic stateSync restores their private zones.
+  room2.processAction(1, { type: 'stateSync', state: { players: [null, { hand: [{ id: 'h1' }], library: [{ id: 'l1' }, { id: 'l2' }] }] } });
+  assert.equal(room2.gameState.players[1].hand.length, 1, 'hand restored from owner sync');
+  assert.equal(room2.gameState.players[1].library.length, 2, 'library restored from owner sync');
+
+  // A second resurrect attempt (the other player racing) returns the SAME room.
+  const again = rm.resurrectRoom('TEST', 1, 'Bob', 'bob-old-id', snap);
+  assert.equal(again, room2);
+});
+
 // Restore console after the suite (best-effort; node:test runs files in isolation).
 test.after?.(() => { console.log = origLog; console.warn = origWarn; });
