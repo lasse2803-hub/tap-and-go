@@ -2781,13 +2781,13 @@ function CardDisplay({ card, size = 60, onClick, onContext, showPreview, extraCl
     if (showPreview) {
       isHovering.current = true;
       lastPos.current = { x: e.clientX, y: e.clientY };
-      // Hover-intent delay: only enlarge after dwelling ~a third of a second, so a
-      // quick right-click (planeswalker abilities etc.) isn't covered by the preview.
+      // Hover-intent delay: only enlarge after deliberately dwelling on a card, so
+      // normal play (right-clicks, drags, quick scans) is never covered by the preview.
       if (showTimerRef.current) clearTimeout(showTimerRef.current);
       showTimerRef.current = setTimeout(() => {
         showTimerRef.current = null;
         if (isHovering.current) updatePreview(lastPos.current.x, lastPos.current.y);
-      }, 350);
+      }, 1800);
     }
   };
   const handleMouseMove = (e) => {
