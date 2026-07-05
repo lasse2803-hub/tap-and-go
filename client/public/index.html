@@ -2780,8 +2780,13 @@ function CardDisplay({ card, size = 60, onClick, onContext, showPreview, extraCl
     if (showPreview) {
       isHovering.current = true;
       lastPos.current = { x: e.clientX, y: e.clientY };
-      // Hover-intent delay: only enlarge after deliberately dwelling on a card, so
-      // normal play (right-clicks, drags, quick scans) is never covered by the preview.
+      // PLANESWALKERS ONLY: they're right-clicked constantly (loyalty abilities), so
+      // their preview waits for a deliberate ~1.8s dwell. All other cards enlarge
+      // instantly as before.
+      if (!isPlaneswalker(card)) {
+        updatePreview(e.clientX, e.clientY);
+        return;
+      }
       if (showTimerRef.current) clearTimeout(showTimerRef.current);
       showTimerRef.current = setTimeout(() => {
         showTimerRef.current = null;
