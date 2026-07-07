@@ -2780,9 +2780,9 @@ function CardDisplay({ card, size = 60, onClick, onContext, showPreview, slowPre
     if (showPreview) {
       isHovering.current = true;
       lastPos.current = { x: e.clientX, y: e.clientY };
-      // Delayed preview (~1.8s dwell) for cards that get clicked/right-clicked a lot:
-      // planeswalkers (loyalty abilities) and the hand (casting, via slowPreview).
-      // Everything else enlarges instantly as before.
+      // Delayed preview (~1.8s dwell) for planeswalkers only (right-clicked constantly
+      // for loyalty abilities); slowPreview lets a call site opt in explicitly.
+      // Everything else — including the hand — enlarges instantly.
       if (!isPlaneswalker(card) && !slowPreview) {
         updatePreview(e.clientX, e.clientY);
         return;
@@ -11568,7 +11568,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                     onClick={() => { if (onlineMode && pIdx !== onlinePlayerIndex) return; playCardFromHand(pIdx, card); }}
                     onContext={(e) => handleContext(e, card, pIdx, 'hand')}
                     dynamicBadge={getHandCardDynamicValue(card, p)}
-                    showPreview slowPreview />
+                    showPreview />
                 </div>
               ))}
               {p.hand.length === 0 && <span className="text-xs" style={{ padding: 20, opacity: 0.25 }}>Hand empty</span>}
