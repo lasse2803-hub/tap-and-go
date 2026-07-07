@@ -523,6 +523,16 @@ class GameRoom {
     if (!this.bfKeepalive) this.bfKeepalive = [{}, {}];
     if (cardId != null) this.bfKeepalive[playerIndex][cardId] = Date.now() + ms;
   }
+  // Same reconciliation for graveyard removals / exile additions (Ashiok's
+  // "exile each opponent's graveyard" is a cross-player write to BOTH zones).
+  _gyTombstone(playerIndex, cardId, ms = 12000) {
+    if (!this.gyTombstones) this.gyTombstones = [{}, {}];
+    if (cardId != null) this.gyTombstones[playerIndex][cardId] = Date.now() + ms;
+  }
+  _exileKeepalive(playerIndex, cardId, ms = 12000) {
+    if (!this.exileKeepalive) this.exileKeepalive = [{}, {}];
+    if (cardId != null) this.exileKeepalive[playerIndex][cardId] = Date.now() + ms;
+  }
 
   processAction(playerIndex, action) {
     if (!this.gameState) return { error: 'Game not started' };
@@ -612,8 +622,23 @@ class GameRoom {
             }
             s.battlefield = bf;
           }
-          if (u.graveyard) s.graveyard = u.graveyard;
-          if (u.exile) s.exile = u.exile;
+          if (u.graveyard) {
+            const now = Date.now();
+            const gyTomb = (this.gyTombstones && this.gyTombstones[i]) || {};
+            s.graveyard = u.graveyard.filter(c => !(gyTomb[c.id] && gyTomb[c.id] > now));
+          }
+          if (u.exile) {
+            const now = Date.now();
+            const exKeep = (this.exileKeepalive && this.exileKeepalive[i]) || {};
+            let ex = u.exile;
+            for (const id in exKeep) { // re-add server-exiled cards the owner's stale sync dropped
+              if (exKeep[id] > now && !ex.some(c => c.id === id)) {
+                const existing = (s.exile || []).find(c => c.id === id);
+                if (existing) ex = [...ex, existing];
+              }
+            }
+            s.exile = ex;
+          }
           if (u.manaPool) s.manaPool = u.manaPool;
           if (u.counters) s.counters = u.counters;
           if (u.emblems) s.emblems = u.emblems;
@@ -861,6 +886,24 @@ class GameRoom {
       target.library.splice(insertIdx, 0, card);
       this.gameState.timestamp = Date.now();
       return { ok: true, cardName: card.name, newLibraryCount: target.library.length };
+    }
+
+    if (action.type === 'exileGraveyard') {
+      // Exile a player's entire graveyard, server-authoritative (Ashiok, Dream Render).
+      // Cross-player write to graveyard+exile — tombstones/keepalives stop the owner's
+      // own sync from reverting it.
+      const { targetPlayerIndex } = action;
+      const target = this.gameState.players[targetPlayerIndex];
+      if (!target) return { error: 'Invalid target player' };
+      const moved = (target.graveyard || []).map(c => ({ ...c, tapped: false }));
+      if (moved.length > 0) {
+        target.exile = [...(target.exile || []), ...moved];
+        target.graveyard = [];
+        moved.forEach(c => { this._gyTombstone(targetPlayerIndex, c.id); this._exileKeepalive(targetPlayerIndex, c.id); });
+      }
+      this.gameState.timestamp = Date.now();
+      this.actionLog.push({ playerIndex, action: { type: 'exileGraveyard', targetPlayerIndex }, timestamp: Date.now() });
+      return { ok: true, exiledCount: moved.length };
     }
 
     if (action.type === 'createBattlefieldToken') {

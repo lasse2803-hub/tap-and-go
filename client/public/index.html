@@ -4919,17 +4919,48 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       }
       return;
     }
-    SFX.draw();
-    setState(pIdx, prev => {
-      if (prev.library.length === 0) return prev;
-      const card = prev.library[0];
-      return { ...prev, library: prev.library.slice(1), hand: [...prev.hand, card] };
-    });
+    // Narset, Parter of Veils etc.: "Each opponent can't draw more than one card each
+    // turn." If the OPPONENT controls such a permanent, block draws beyond the first
+    // in this turn. Tracked per-player via a turn key (turn number + active player),
+    // so no reset plumbing is needed at turn changes.
+    {
+      const oppOfDrawer = pIdx === 0 ? 1 : 0;
+      const drawLock = (getState(oppOfDrawer).battlefield || []).find(c =>
+        /each opponent can't draw more than one card each turn/i.test(getOracleText(c)));
+      const turnKey = `${turnCount}:${activePlayer}`;
+      const drawnThisTurn = p._drawTurnKey === turnKey ? (p.drawnThisTurn || 0) : 0;
+      if (drawLock && drawnThisTurn >= 1) {
+        setCastError({ pIdx, message: `🚫 ${getDisplayName(drawLock)}: you can't draw more than one card this turn`, background: '#2a1a3a' });
+        setTimeout(() => setCastError(null), 2500);
+        addGameLog(pIdx, '🚫', `${getDisplayName(drawLock)}: ${p.name}'s draw prevented (max one per turn)`);
+        return;
+      }
+      SFX.draw();
+      setState(pIdx, prev => {
+        if (prev.library.length === 0) return prev;
+        const card = prev.library[0];
+        const sameTurn = prev._drawTurnKey === turnKey;
+        return {
+          ...prev, library: prev.library.slice(1), hand: [...prev.hand, card],
+          _drawTurnKey: turnKey, drawnThisTurn: sameTurn ? (prev.drawnThisTurn || 0) + 1 : 1,
+        };
+      });
+    }
   };
 
   const shuffleLibrary = (pIdx) => {
     SFX.shuffle();
     setState(pIdx, prev => ({ ...prev, library: shuffle(prev.library) }));
+  };
+
+  // Ashiok, Dream Render etc.: "Spells and abilities your opponents control can't cause
+  // their controller to search their library." If the OPPONENT of pIdx controls such a
+  // permanent, pIdx's spell/ability-driven library searches are blocked. Returns the
+  // blocking permanent (for the error message) or null.
+  const searchBlockedBy = (pIdx) => {
+    const oppIdx = pIdx === 0 ? 1 : 0;
+    return (getState(oppIdx).battlefield || []).find(c =>
+      /can't cause their controllers? to search their librar/i.test(getOracleText(c))) || null;
   };
 
   // Gain control of a card: move from one player's battlefield to another's
@@ -7509,6 +7540,13 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
           // Cultivate, Thunderherd Migration, etc. The library is private, so this is
           // handled on the owning player's client via the search overlay.
           if (!isRemotePlayer) {
+            const searchLock = searchBlockedBy(pIdx);
+            if (searchLock) {
+              setCastError({ pIdx, message: `🚫 ${getDisplayName(searchLock)}: your spells can't cause you to search your library`, background: '#2a1a3a' });
+              setTimeout(() => setCastError(null), 3000);
+              addGameLog(pIdx, '🚫', `${getDisplayName(searchLock)}: ${card.name}'s library search prevented`);
+              break;
+            }
             setLibrarySearch({ pIdx, filter: effect.filter || 'basicLand', tapped: !!effect.tapped,
               toBattlefield: effect.toBattlefield !== false, toHandCount: effect.toHandCount || 0, source: card.name || 'Spell' });
           }
@@ -8402,10 +8440,17 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       // Auto-trigger library search ETB effects (Solemn Simulacrum, Farhaven Elf, etc.)
       const searchEffect = etbEffects.find(e => e.actionType === 'search_basic_land' || e.actionType === 'search_land');
       if (searchEffect) {
-        const filter = searchEffect.actionType === 'search_basic_land' ? 'basicLand' : 'land';
-        setTimeout(() => {
-          setLibrarySearch({ pIdx, filter, tapped: searchEffect.tapped || false, source: card.name });
-        }, 300);
+        const searchLock = searchBlockedBy(pIdx);
+        if (searchLock) {
+          setCastError({ pIdx, message: `🚫 ${getDisplayName(searchLock)}: your abilities can't cause you to search your library`, background: '#2a1a3a' });
+          setTimeout(() => setCastError(null), 3000);
+          addGameLog(pIdx, '🚫', `${getDisplayName(searchLock)}: ${card.name}'s library search prevented`);
+        } else {
+          const filter = searchEffect.actionType === 'search_basic_land' ? 'basicLand' : 'land';
+          setTimeout(() => {
+            setLibrarySearch({ pIdx, filter, tapped: searchEffect.tapped || false, source: card.name });
+          }, 300);
+        }
       }
 
       if (etbEffects.length > 0) {
@@ -12188,14 +12233,19 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       {lookTopView && (!onlineMode || onlinePlayerIndex === lookTopView.pIdx) && (() => {
         const { pIdx: ltPIdx, cards: ltCards, toHand, selected, toBattlefield, etaliMode, etaliLabel, selectFilter } = lookTopView;
         const selectedSet = selected instanceof Set ? selected : new Set(selected);
-        // Collected Company filter: only creature cards with mana value ≤ N are selectable
+        // Selection filters: Collected Company (creatures MV ≤ N), Narset (noncreature/nonland)
         const isSelectable = (card) => {
           if (!selectFilter) return true;
           if (selectFilter.type === 'creature' && !isCreature(card)) return false;
+          if (selectFilter.type === 'noncreatureNonland' && (isCreature(card) || isLand(card))) return false;
           if (selectFilter.maxMV !== undefined && (card.cmc || 0) > selectFilter.maxMV) return false;
           return true;
         };
-        const filterLabel = selectFilter ? ` (creatures with MV ≤ ${selectFilter.maxMV} only)` : '';
+        const filterLabel = !selectFilter ? ''
+          : selectFilter.type === 'noncreatureNonland' ? ' (noncreature, nonland only)'
+          : ` (creatures with MV ≤ ${selectFilter.maxMV} only)`;
+        // "You may..." effects (Narset): selecting FEWER than toHand — even zero — is legal.
+        const countOk = (toBattlefield || lookTopView.upTo) ? selectedSet.size <= toHand : selectedSet.size === toHand;
         return (
           <div style={{
             position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.88)',
@@ -12250,14 +12300,13 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
             <div style={{ display: 'flex', gap: 8 }}>
               <button className="btn" style={{
                 padding: '8px 24px', fontSize: 13,
-                borderColor: (toBattlefield ? selectedSet.size <= toHand : selectedSet.size === toHand) ? 'rgba(60,200,160,0.5)' : 'rgba(255,255,255,0.1)',
-                color: (toBattlefield ? selectedSet.size <= toHand : selectedSet.size === toHand) ? '#3cc8a0' : 'rgba(255,255,255,0.3)',
-                cursor: (toBattlefield ? selectedSet.size <= toHand : selectedSet.size === toHand) ? 'pointer' : 'not-allowed',
+                borderColor: countOk ? 'rgba(60,200,160,0.5)' : 'rgba(255,255,255,0.1)',
+                color: countOk ? '#3cc8a0' : 'rgba(255,255,255,0.3)',
+                cursor: countOk ? 'pointer' : 'not-allowed',
               }}
-                disabled={toBattlefield ? false : selectedSet.size !== toHand}
+                disabled={!(toBattlefield || etaliMode) && !countOk}
                 onClick={() => {
-                  if (!toBattlefield && !etaliMode && selectedSet.size !== toHand) return;
-                  if (toBattlefield && !etaliMode && selectedSet.size > toHand) return;
+                  if (!etaliMode && !countOk) return;
                   const chosenCards = ltCards.filter(c => selectedSet.has(c.id));
                   const bottomCards = ltCards.filter(c => !selectedSet.has(c.id));
 
@@ -14033,8 +14082,19 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
               const pwBounceMatch = /return (?:up to one )?target (?:nonland permanent|artifact, creature, or enchantment|creature|permanent).* to (?:its|their) owner'?s hand/i.test(abilityText);
               // Fight (Domri, Anarch of Bolas -2)
               const pwFightMatch = /target creature you control fights (?:up to one )?target creature you don'?t control/i.test(abilityText);
+              // "Target player mills N cards" (Ashiok, Dream Render -1) — optionally
+              // followed by "Then exile each opponent's graveyard."
+              const pwMillMatch = abilityText.match(/target player mills? (\w+|\d+) cards?/i);
+              const pwMillExilesGy = /exile each opponent'?s graveyard/i.test(abilityText);
+              // "Look at the top N cards of your library ... put it/them into your hand ...
+              // rest on the bottom" (Narset, Parter of Veils -2, Impulse-style PW digs)
+              const pwLookTopMatch = abilityText.match(/look at the top (\w+|\d+) cards? of your library/i);
+              const pwLookToHand = pwLookTopMatch && /into your hand/i.test(abilityText);
+              const pwLookFilter = /noncreature, nonland card/i.test(abilityText) ? { type: 'noncreatureNonland' } : null;
+              const pwLookCount = pwLookTopMatch ? ({ two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7 }[pwLookTopMatch[1].toLowerCase()] || parseInt(pwLookTopMatch[1]) || 1) : 0;
+              const pwLookToHandN = pwLookToHand ? (/reveal (?:a|one) /i.test(abilityText) ? 1 : ({ two: 2, three: 3 }[(abilityText.match(/up to (\w+)/i) || [])[1]] || 1)) : 0;
 
-              const hasNewPatterns = hasDrawCard || hasExtraLand || addManaMatch || addManaOrMatch || loseLifeMatch || pwBuffMatch || isTuckToLibrary || isFactOrFiction || isGraveyardReturn || isExileTapped || isLibraryExileUltimate || pwDmgTargetMatch || pwCounterTargetMatch || pwBounceMatch || pwFightMatch;
+              const hasNewPatterns = hasDrawCard || hasExtraLand || addManaMatch || addManaOrMatch || loseLifeMatch || pwBuffMatch || isTuckToLibrary || isFactOrFiction || isGraveyardReturn || isExileTapped || isLibraryExileUltimate || pwDmgTargetMatch || pwCounterTargetMatch || pwBounceMatch || pwFightMatch || pwMillMatch || (pwLookTopMatch && pwLookToHand);
 
               if (pwEffects.length > 0 || isEmblem || isUntilNextTurn || pwTokenData || isExileCastOrDamage || isPreventDamage || isSorceryFlash || hasNewPatterns) {
                 return (
@@ -14430,6 +14490,45 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                           </button>
                         ))];
                     })()}
+                    {/* Target player mills N (Ashiok, Dream Render -1) */}
+                    {pwMillMatch && (() => {
+                      const millN = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8 }[pwMillMatch[1].toLowerCase()] || parseInt(pwMillMatch[1]) || 1;
+                      const finishAshiok = (targetIdx) => {
+                        millCards(targetIdx, millN); // server-routed for the opponent's hidden library
+                        addGameLog(pwReminder.pIdx, '💀', `${pwReminder.card.name}: ${getState(targetIdx).name} mills ${millN}`);
+                        if (pwMillExilesGy) {
+                          const oppIdx = pwReminder.pIdx === 0 ? 1 : 0;
+                          // Exiling the opponent's graveyard is a cross-player write — the
+                          // server owns it so the owner's own sync can't revert it.
+                          if (onlineMode && serverGameAction) {
+                            setTimeout(() => serverGameAction({ type: 'exileGraveyard', targetPlayerIndex: oppIdx }), 400);
+                          } else {
+                            setTimeout(() => setState(oppIdx, prev => ({ ...prev, exile: [...prev.exile, ...prev.graveyard.map(c => ({ ...c, tapped: false }))], graveyard: [] })), 400);
+                          }
+                          addGameLog(pwReminder.pIdx, '🚫', `${pwReminder.card.name}: exiled ${getState(oppIdx).name}'s graveyard`);
+                        }
+                        setPwReminder(null);
+                      };
+                      return [0, 1].map(pi => (
+                        <button key={pi} className="btn btn-gold" style={{ padding: '5px 14px', fontSize: 11 }}
+                          onClick={() => finishAshiok(pi)}>
+                          💀 Mill {millN} → {getState(pi).name}{pwMillExilesGy ? ' (+ exile opp. graveyard)' : ''}
+                        </button>
+                      ));
+                    })()}
+                    {/* Look at top N, put up to M into hand, rest on bottom (Narset -2) */}
+                    {pwLookTopMatch && pwLookToHand && (
+                      <button className="btn btn-gold" style={{ padding: '6px 16px', fontSize: 12 }}
+                        onClick={() => {
+                          const st = getState(pwReminder.pIdx);
+                          const top = st.library.slice(0, Math.min(pwLookCount, st.library.length));
+                          setLookTopView({ pIdx: pwReminder.pIdx, cards: top, toHand: pwLookToHandN,
+                            selected: new Set(), selectFilter: pwLookFilter, upTo: true });
+                          setPwReminder(null);
+                        }}>
+                        🔍 Look at top {pwLookCount} (up to {pwLookToHandN} to hand{pwLookFilter ? ', noncreature/nonland' : ''})
+                      </button>
+                    )}
                     {/* Exile target tapped creature + gain life (Wandering Emperor -2) */}
                     {isExileTapped && (() => {
                       const oppIdx = pwReminder.pIdx === 0 ? 1 : 0;

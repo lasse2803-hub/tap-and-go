@@ -575,6 +575,26 @@ test('Proceed grace: non-active flip accepted just after intent clears endOfTurn
   assert.equal(gs.activePlayer, 1, 'turn flip from proceeding non-active player accepted');
 });
 
+// ── exileGraveyard (Ashiok) + graveyard/exile reconciliation ──
+test('exileGraveyard: moves GY to exile; owner\'s stale sync cannot revert it', () => {
+  const room = startedRoom();
+  const gs = room.gameState;
+  gs.players[1].graveyard = [{ id: 'g1', name: 'Bonecrusher Giant' }, { id: 'g2', name: 'Lava Spike' }];
+  // Player 0 (Ashiok's controller) exiles player 1's graveyard.
+  const r = room.processAction(0, { type: 'exileGraveyard', targetPlayerIndex: 1 });
+  assert.ok(r.ok);
+  assert.equal(r.exiledCount, 2);
+  assert.deepEqual(gs.players[1].graveyard, []);
+  assert.equal(gs.players[1].exile.filter(c => c.id === 'g1' || c.id === 'g2').length, 2);
+  // Player 1's stale sync re-asserts the old graveyard and an exile without the cards.
+  room.processAction(1, { type: 'stateSync', state: { players: [null, {
+    graveyard: [{ id: 'g1', name: 'Bonecrusher Giant' }, { id: 'g2', name: 'Lava Spike' }],
+    exile: [],
+  }] } });
+  assert.deepEqual(gs.players[1].graveyard, [], 'gy tombstones reject the stale re-add');
+  assert.equal(gs.players[1].exile.filter(c => c.id === 'g1' || c.id === 'g2').length, 2, 'exile keepalives preserve the exiled cards');
+});
+
 // ── Room resurrection after server restart ────────────────────
 test('resurrect: room rebuilt from snapshot; opponent adopted; private zones restored via sync', () => {
   const RoomManager = require('../server/RoomManager.js');
