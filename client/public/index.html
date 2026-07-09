@@ -4200,7 +4200,17 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     if (onlineState.pendingRemoteScry !== undefined) _setPendingRemoteScry(onlineState.pendingRemoteScry);
     if (onlineState.pendingRemoteLookTop !== undefined) _setPendingRemoteLookTop(onlineState.pendingRemoteLookTop);
     if (onlineState.putLandFromHand !== undefined) _setPutLandFromHand(onlineState.putLandFromHand);
-    if (onlineState.discardChoice !== undefined) _setDiscardChoice(onlineState.discardChoice);
+    if (onlineState.discardChoice !== undefined) {
+      _setDiscardChoice(prev => {
+        const inc = onlineState.discardChoice;
+        if (!inc) return null;
+        // The sync payload strips card details ({ pIdx } only). The OWNER's client must
+        // keep its local `selected`/`then` — letting the echo overwrite them crashed the
+        // discard overlay (reading .length of undefined).
+        if (prev && prev.pIdx === inc.pIdx) return prev;
+        return { selected: [], ...inc };
+      });
+    }
 
     // Receive game log entries from opponent (supports both array and single entry)
     const logEntries = onlineState.__logEntries || (onlineState.__logEntry ? [onlineState.__logEntry] : []);
@@ -13236,7 +13246,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
 
       {/* ===== Discard to Hand Size Overlay ===== */}
       {discardChoice && (!onlineMode || onlinePlayerIndex === discardChoice.pIdx) && (() => {
-        const { pIdx: discPIdx, selected } = discardChoice;
+        const { pIdx: discPIdx, selected = [] } = discardChoice;
         const hand = getState(discPIdx).hand;
         const mustDiscard = hand.length - MAX_HAND_SIZE;
         const canConfirm = selected.length === mustDiscard;
