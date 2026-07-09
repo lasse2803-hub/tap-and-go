@@ -5109,6 +5109,16 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         addManaToPool(pIdx, 'G');
         addGameLog(pIdx, '\u{1f333}', getDisplayName(card) + ' (Troll Aura): Added {G}{G}{G}');
       }
+      // Nissa, Who Shakes the World: "Whenever you tap a Forest for mana, add an
+      // additional {G}." Matches the Forest SUBTYPE (incl. duals like Breeding Pool).
+      if ((card.type_line || '').toLowerCase().includes('forest')) {
+        const nissaBoost = p.battlefield.find(c =>
+          /whenever you tap a forest for mana, add an additional \{g\}/i.test(getOracleText(c)));
+        if (nissaBoost) {
+          addManaToPool(pIdx, 'G');
+          addGameLog(pIdx, '🌲', `${nissaBoost.name}: +1 additional {G} (tapped a Forest)`);
+        }
+      }
       return;
     }
 
@@ -8422,6 +8432,12 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     const resolveFromZone = fromExile ? 'exile' : 'hand';
     moveCard(pIdx, card, resolveFromZone, 'battlefield');
     // NOTE: moveCard already plays the appropriate SFX (planeswalkerEnters, playCreature, etc.)
+    // Compleated (Nissa, Ascended Animist): paying {G/P} with life makes the PW enter
+    // with 2 fewer loyalty per payment — the mana model is semi-manual, so remind the caster.
+    if (isPlaneswalker(card) && /compleated/i.test(getOracleText(card))) {
+      setCastError({ pIdx, message: '⚕️ Compleated: if you paid {G/P} with 2 life, deduct the life and remove 2 loyalty per payment (− on the card).', background: '#2a1a2a' });
+      setTimeout(() => setCastError(null), 5000);
+    }
     let etbEffects = getETBEffects(card);
 
     // Check battlefield for "whenever another creature enters" triggers (Purphoros, Soul Warden, etc.)
@@ -9174,25 +9190,33 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       }
       moveCard(pIdx, card, 'hand', 'battlefield');
       setState(pIdx, prev => ({ ...prev, landPlayedThisTurn: true }));
-      // Landfall: scan battlefield for "whenever a land enters the battlefield" triggers
+      // Landfall: both the classic wording and the 2024 templating
+      // ("Whenever a land you control enters" — Ruin Crab, Nissa of Shadowed Boughs)
       setTimeout(() => {
         const st = getState(pIdx);
         const landfallTriggers = [];
         for (const bf of st.battlefield) {
           const oracle = [bf.oracle_text || '', ...(bf.card_faces || []).map(f => f.oracle_text || '')].join(' ').toLowerCase();
           const kw = (bf.keywords || []).map(k => k.toLowerCase());
-          if (kw.includes('landfall') || oracle.includes('whenever a land enters the battlefield') || oracle.includes('whenever a land enters the battlefield under your control')) {
-            // Extract the effect text after the trigger
-            const triggerMatch = oracle.match(/whenever a land enters the battlefield[^,.]*, ([^.]+)/);
+          if (kw.includes('landfall') || /whenever a land (?:you control )?enters/.test(oracle)) {
+            // Extract the effect text after the trigger (any templating)
+            const triggerMatch = oracle.match(/whenever a land[^,]*enters[^,]*,\s*([^.]+)/);
             const effectText = triggerMatch ? triggerMatch[1].trim() : 'landfall trigger';
-            landfallTriggers.push({ name: bf.name, effect: effectText });
+            landfallTriggers.push({ name: bf.name, effect: effectText, id: bf.id });
           }
         }
         if (landfallTriggers.length > 0) {
-          // Auto-resolve common landfall effects (each opponent mills N — Ruin Crab, etc.);
-          // anything unrecognized falls back to a reminder.
+          // Auto-resolve common landfall effects (mill — Ruin Crab; loyalty counter —
+          // Nissa of Shadowed Boughs); anything unrecognized falls back to a reminder.
           const oppIdx = pIdx === 0 ? 1 : 0;
-          const leftover = landfallTriggers.filter(t => !autoResolveTriggerEffect(pIdx, oppIdx, t.name, t.effect));
+          const leftover = landfallTriggers.filter(t => {
+            if (/put a loyalty counter on/.test(t.effect)) {
+              addCounter(pIdx, t.id, 'loyalty');
+              addGameLog(pIdx, '💎', `Landfall: +1 loyalty on ${t.name}`);
+              return false;
+            }
+            return !autoResolveTriggerEffect(pIdx, oppIdx, t.name, t.effect);
+          });
           if (leftover.length > 0) {
             setEtbReminder({ pIdx, card, effects: leftover.map(t => ({ icon: '🌍', text: `LANDFALL — ${t.name}: ${t.effect}` })) });
           }
@@ -12988,7 +13012,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
 
       {/* Library Search Overlay (Solemn Simulacrum, Farhaven Elf, etc.) */}
       {librarySearch && (!onlineMode || onlinePlayerIndex === librarySearch.pIdx) && (() => {
-        const { pIdx: searchPIdx, filter, tapped: enterTapped, source, toBattlefield = true, toHandCount = 0 } = librarySearch;
+        const { pIdx: searchPIdx, filter, tapped: enterTapped, source, toBattlefield = true, toHandCount = 0, repeat = false } = librarySearch;
         const lib = getState(searchPIdx).library || [];
         const BASIC_LAND_NAMES = ['plains', 'island', 'swamp', 'mountain', 'forest',
           'snow-covered plains', 'snow-covered island', 'snow-covered swamp', 'snow-covered mountain', 'snow-covered forest'];
@@ -12997,6 +13021,11 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
               const tl = (c.type_line || '').toLowerCase();
               const name = (c.name || '').toLowerCase();
               return tl.includes('basic') && tl.includes('land') || BASIC_LAND_NAMES.includes(name);
+            })
+          : filter === 'forest'
+          ? lib.filter(c => {
+              const tl = (c.type_line || '').toLowerCase();
+              return tl.includes('land') && (tl.includes('forest') || (c.name || '').toLowerCase().includes('forest'));
             })
           : lib.filter(c => (c.type_line || '').toLowerCase().includes('land'));
         return (
@@ -13014,7 +13043,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                 {source}: Search Library
               </div>
               <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.6)', marginBottom: 14 }}>
-                Choose a {filter === 'basicLand' ? 'basic land' : 'land'} card to put onto the battlefield{enterTapped ? ' tapped' : ''}. ({matchingCards.length} found in library)
+                Choose a {filter === 'basicLand' ? 'basic land' : filter === 'forest' ? 'Forest' : 'land'} card to put onto the battlefield{enterTapped ? ' tapped' : ''}{repeat ? ' — repeat as many times as you like' : ''}. ({matchingCards.length} found in library)
               </div>
               {matchingCards.length > 0 ? (
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, justifyContent: 'center', marginBottom: 14 }}>
@@ -13050,7 +13079,9 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                         addGameLog(searchPIdx, '🔍', `${getState(searchPIdx).name} searched for ${card.name}${toBattlefield ? (enterTapped ? ' (tapped)' : '') : ' (to hand)'}${toHandCount > 0 ? ` +${toHandCount} to hand` : ''} via ${source}`);
                         setCastError({ pIdx: searchPIdx, message: `${card.name}${toBattlefield ? ` enters${enterTapped ? ' tapped' : ''}` : ' to hand'}`, background: '#1a3320' });
                         setTimeout(() => setCastError(null), 1500);
-                        setLibrarySearch(null);
+                        // Repeat mode (Nissa WtSW -8: "any number of Forest cards"): stay
+                        // open while more matches remain; Done closes.
+                        if (!(repeat && matchingCards.length > 1)) setLibrarySearch(null);
                       }} style={{
                         background: 'linear-gradient(180deg, #2a4a2a, #1a3a1a)', border: '1px solid rgba(80,200,80,0.3)',
                         borderRadius: 8, padding: '8px 16px', color: '#e8e4dc', cursor: 'pointer', fontSize: 12,
@@ -13082,7 +13113,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                 background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.2)',
                 borderRadius: 8, padding: '8px 20px', color: 'rgba(255,255,255,0.5)', cursor: 'pointer', fontSize: 11,
               }}>
-                Decline (shuffle only)
+                {repeat ? 'Done (shuffle)' : 'Decline (shuffle only)'}
               </button>
             </div>
           </div>
@@ -13142,22 +13173,29 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                         } else {
                           setPutLandFromHand(null);
                         }
-                        // Trigger landfall
+                        // Trigger landfall (classic + 2024 "a land you control enters" templating)
                         setTimeout(() => {
                           const st = getState(landPIdx);
                           const landfallTriggers = [];
                           for (const bf of st.battlefield) {
                             const oracle = [bf.oracle_text || '', ...(bf.card_faces || []).map(f => f.oracle_text || '')].join(' ').toLowerCase();
                             const kw = (bf.keywords || []).map(k => k.toLowerCase());
-                            if (kw.includes('landfall') || oracle.includes('whenever a land enters the battlefield')) {
-                              const triggerMatch = oracle.match(/whenever a land enters the battlefield[^,.]*, ([^.]+)/);
+                            if (kw.includes('landfall') || /whenever a land (?:you control )?enters/.test(oracle)) {
+                              const triggerMatch = oracle.match(/whenever a land[^,]*enters[^,]*,\s*([^.]+)/);
                               const effectText = triggerMatch ? triggerMatch[1].trim() : 'landfall trigger';
-                              landfallTriggers.push({ name: bf.name, effect: effectText });
+                              landfallTriggers.push({ name: bf.name, effect: effectText, id: bf.id });
                             }
                           }
                           if (landfallTriggers.length > 0) {
                             const oppLF = landPIdx === 0 ? 1 : 0;
-                            const leftoverLF = landfallTriggers.filter(t => !autoResolveTriggerEffect(landPIdx, oppLF, t.name, t.effect));
+                            const leftoverLF = landfallTriggers.filter(t => {
+                              if (/put a loyalty counter on/.test(t.effect)) {
+                                addCounter(landPIdx, t.id, 'loyalty');
+                                addGameLog(landPIdx, '💎', `Landfall: +1 loyalty on ${t.name}`);
+                                return false;
+                              }
+                              return !autoResolveTriggerEffect(landPIdx, oppLF, t.name, t.effect);
+                            });
                             if (leftoverLF.length > 0) {
                               setEtbReminder({ pIdx: landPIdx, card: leftoverLF[0], effects: leftoverLF.map(t => ({ icon: '🌿', text: `${t.name}: ${t.effect}` })) });
                             }
@@ -14243,15 +14281,31 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
               // "You gain N life, draw N cards, then put up to N permanent cards from your
               // hand onto the battlefield" (Ugin, the Spirit Dragon -10)
               const pwBigRestock = abilityText.match(/you gain (\d+) life, draw (\w+) cards?, then put up to (\w+) permanent cards? from your hand onto the battlefield/i);
-              // "Destroy/Exile target permanent that's one or more colors" (Ugin -3s)
-              const pwRemoveTargetMatch = abilityText.match(/(destroy|exile) (?:up to one )?target permanent(?: that'?s one or more colors)?/i);
+              // "Destroy/Exile target permanent that's one or more colors" (Ugin -3s) /
+              // "Destroy target artifact or enchantment" (Nissa, Ascended Animist -1)
+              const pwRemoveTargetMatch = abilityText.match(/(destroy|exile) (?:up to one )?target (permanent(?: that'?s one or more colors)?|artifact or enchantment)/i);
               const pwRemoveColoredOnly = /one or more colors/i.test(abilityText);
               // "Exile the top card of your library face down ... create a 2/2 colorless
               // Spirit creature token. When that token leaves the battlefield, put the
               // exiled card into your hand." (Ugin, the Ineffable +1)
               const pwExileTopLinked = /exile the top card of your library face down/i.test(abilityText) && /create a (\d+)\/(\d+) colorless (\w+) creature token/i.test(abilityText);
+              // Land animation (Nissa WtSW +1: permanent 0/0 vig+haste + three counters;
+              // Nissa of Shadowed Boughs +1: 3/3 haste+menace until end of turn)
+              const pwLandAnimate = abilityText.match(/becomes? a (\d+)\/(\d+) elemental creature with ([\w\s,]+?)(?:\s+that'?s still a land|\s+until end of turn)/i);
+              const pwLandAnimateEOT = pwLandAnimate && /until end of turn/i.test(abilityText);
+              const pwLandAnimateCounters = pwLandAnimate && /put three \+1\/\+1 counters/i.test(abilityText) ? 3 : 0;
+              const pwLandAnimateNoncreature = /noncreature land/i.test(abilityText);
+              // "Create an X/X ... token, where X is Nissa's loyalty" (Ascended Animist +1)
+              const pwTokenXLoyalty = abilityText.match(/create an? x\/x ([\w\s]+?) creature token, where x is .*loyalty/i);
+              // "Creatures you control get +1/+1 for each Forest ... and gain trample" (Ascended Animist -7)
+              const pwTeamBuffPerForest = /creatures you control get \+1\/\+1 for each forest you control and gain trample/i.test(abilityText);
+              // "Put a creature card with MV <= lands you control onto the battlefield from
+              // your hand or graveyard with two +1/+1 counters" (Nissa of Shadowed Boughs -5)
+              const pwReanimateByLands = /put a creature card with mana value less than or equal to the number of lands you control onto the battlefield from your hand or graveyard/i.test(abilityText);
+              // Emblem + "search any number of Forest cards" chain (Nissa WtSW -8)
+              const pwForestSearchAfter = /search your library for any number of forest cards/i.test(abilityText);
 
-              const hasNewPatterns = hasDrawCard || hasExtraLand || addManaMatch || addManaOrMatch || loseLifeMatch || pwBuffMatch || isTuckToLibrary || isFactOrFiction || isGraveyardReturn || isExileTapped || isLibraryExileUltimate || pwDmgTargetMatch || pwCounterTargetMatch || pwBounceMatch || pwFightMatch || pwMillMatch || (pwLookTopMatch && pwLookToHand) || pwOppSacGreatest || pwBigRestock || pwRemoveTargetMatch || pwExileTopLinked || (pwGainLifeMatch && !isExileTapped);
+              const hasNewPatterns = hasDrawCard || hasExtraLand || addManaMatch || addManaOrMatch || loseLifeMatch || pwBuffMatch || isTuckToLibrary || isFactOrFiction || isGraveyardReturn || isExileTapped || isLibraryExileUltimate || pwDmgTargetMatch || pwCounterTargetMatch || pwBounceMatch || pwFightMatch || pwMillMatch || (pwLookTopMatch && pwLookToHand) || pwOppSacGreatest || pwBigRestock || pwRemoveTargetMatch || pwExileTopLinked || (pwGainLifeMatch && !isExileTapped) || pwLandAnimate || pwTokenXLoyalty || pwTeamBuffPerForest || pwReanimateByLands;
 
               if (pwEffects.length > 0 || isEmblem || isUntilNextTurn || pwTokenData || isExileCastOrDamage || isPreventDamage || isSorceryFlash || hasNewPatterns) {
                 return (
@@ -14387,9 +14441,20 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                           setState(pwReminder.pIdx, prev => ({ ...prev, emblems: [...(prev.emblems || []), emblem] }));
                           setCastError({ pIdx: pwReminder.pIdx, message: `🏷️ Emblem created: "${emblemText.slice(0, 60)}${emblemText.length > 60 ? '...' : ''}"` });
                           setTimeout(() => setCastError(null), 3000);
+                          // Nissa WtSW -8 rider: "Search your library for any number of Forest
+                          // cards, put them onto the battlefield tapped, then shuffle."
+                          if (pwForestSearchAfter) {
+                            const searchLock = searchBlockedBy(pwReminder.pIdx);
+                            if (searchLock) {
+                              setCastError({ pIdx: pwReminder.pIdx, message: `🚫 ${getDisplayName(searchLock)}: your abilities can't cause you to search your library`, background: '#2a1a3a' });
+                              setTimeout(() => setCastError(null), 3000);
+                            } else {
+                              setTimeout(() => setLibrarySearch({ pIdx: pwReminder.pIdx, filter: 'forest', tapped: true, repeat: true, source: pwReminder.card.name }), 400);
+                            }
+                          }
                           setPwReminder(null);
                         }}>
-                        🏷️ Create Emblem
+                        🏷️ Create Emblem{pwForestSearchAfter ? ' + Search Forests' : ''}
                       </button>
                     )}
                     {isUntilNextTurn && (
@@ -14755,12 +14820,15 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                         ✨ Gain {pwBigRestock[1]}, draw {pwBigRestock[2]}, put up to {pwBigRestock[3]} permanents
                       </button>
                     )}
-                    {/* Destroy/exile target (colored) permanent (Ugin, the Ineffable -3 etc.) */}
+                    {/* Destroy/exile target permanent — colored (Ugin -3) or artifact/enchantment (Nissa AA -1) */}
                     {pwRemoveTargetMatch && !isEmblem && !isExileTapped && !pwEffects.some(e => e.subtype === 'exile_mv_lte_prompt') && (() => {
                       const verb = pwRemoveTargetMatch[1].toLowerCase();
                       const destZone = verb === 'destroy' ? 'graveyard' : 'exile';
+                      const typeWord = (pwRemoveTargetMatch[2] || '').toLowerCase();
+                      const artEnchOnly = typeWord.includes('artifact or enchantment');
                       const targets = [0, 1].flatMap(pi => getState(pi).battlefield
                         .filter(c => !isLand(c))
+                        .filter(c => !artEnchOnly || isArtifact(c) || isEnchantment(c))
                         .filter(c => !pwRemoveColoredOnly || (c.colors && c.colors.length > 0))
                         .map(c => ({ c, pi })));
                       if (targets.length === 0) return <div style={{ fontSize: 11, color: 'rgba(255,100,100,0.8)', fontStyle: 'italic' }}>No {pwRemoveColoredOnly ? 'colored ' : ''}permanents to target.</div>;
@@ -14815,6 +14883,129 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                         👻 Exile top face down + create Spirit token
                       </button>
                     )}
+                    {/* Animate a land (Nissa WtSW +1 permanent; Nissa of Shadowed Boughs +1 until EOT) */}
+                    {pwLandAnimate && (() => {
+                      const [_, ap, at, kwRaw] = pwLandAnimate;
+                      const kws = kwRaw.replace(/\band\b/g, ',').split(',').map(k => k.trim()).filter(Boolean);
+                      const lands = getState(pwReminder.pIdx).battlefield.filter(c =>
+                        isLand(c) && !c.animatedCreature && !c.permanentCreature &&
+                        (!pwLandAnimateNoncreature || !(c.type_line || '').toLowerCase().includes('creature')));
+                      if (lands.length === 0) return <div style={{ fontSize: 11, color: 'rgba(255,100,100,0.8)', fontStyle: 'italic' }}>No eligible lands.</div>;
+                      const animate = (land) => {
+                        setState(pwReminder.pIdx, prev => ({
+                          ...prev,
+                          battlefield: prev.battlefield.map(c => {
+                            if (c.id !== land.id) return c;
+                            const counters = { ...(c.counters || {}) };
+                            if (pwLandAnimateCounters > 0) counters['+1/+1'] = (counters['+1/+1'] || 0) + pwLandAnimateCounters;
+                            return {
+                              ...c, tapped: false, counters,
+                              animatedCreature: pwLandAnimateEOT, // temporary → reverts at end of turn
+                              permanentCreature: !pwLandAnimateEOT || c.permanentCreature,
+                              animatedData: pwLandAnimateEOT ? {
+                                power: ap, toughness: at, type_line: 'Creature Land — Elemental',
+                                keywords: kws, attackTrigger: null, originalTypeLine: c.type_line,
+                              } : null,
+                              power: ap, toughness: at,
+                              type_line: (c.type_line || 'Land') + ' Creature — Elemental',
+                              keywords: [...(c.keywords || []), ...kws],
+                              enteredThisTurn: false,
+                            };
+                          }),
+                        }));
+                        SFX.playCreature();
+                        addGameLog(pwReminder.pIdx, '🌱', `${pwReminder.card.name}: ${getDisplayName(land)} untapped, now a ${ap}/${at} Elemental (${kws.join(', ')})${pwLandAnimateCounters ? ` +${pwLandAnimateCounters} counters` : ''}${pwLandAnimateEOT ? ' until end of turn' : ''}`);
+                        setPwReminder(null);
+                      };
+                      const buttons = lands.map(land => (
+                        <button key={land.id} className="btn btn-gold" style={{ padding: '4px 10px', fontSize: 10, maxWidth: 180 }}
+                          onClick={() => animate(land)}>
+                          🌱 {getDisplayName(land)} → {ap}/{at}{pwLandAnimateCounters ? ` (+${pwLandAnimateCounters})` : ''}
+                        </button>
+                      ));
+                      // "You may" (Nissa of Shadowed Boughs): allow plain untap without animating
+                      if (pwLandAnimateEOT) buttons.push(
+                        <button key="skipanim" className="btn" style={{ padding: '4px 10px', fontSize: 10 }}
+                          onClick={() => {
+                            setCastError({ pIdx: pwReminder.pIdx, message: 'Untap a land manually (right-click → Untap) — chose not to animate', background: '#1a2a1a' });
+                            setTimeout(() => setCastError(null), 2500);
+                            setPwReminder(null);
+                          }}>Untap only (no creature)</button>
+                      );
+                      return <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, justifyContent: 'center', maxHeight: 180, overflowY: 'auto' }}>{buttons}</div>;
+                    })()}
+                    {/* Create an X/X token where X = loyalty (Nissa, Ascended Animist +1) */}
+                    {pwTokenXLoyalty && (
+                      <button className="btn btn-gold" style={{ padding: '6px 16px', fontSize: 12 }}
+                        onClick={() => {
+                          const liveCard = getState(pwReminder.pIdx).battlefield.find(c => c.id === pwReminder.card.id);
+                          const x = Math.max(0, (liveCard?.counters?.loyalty ?? pwReminder.card.counters?.loyalty) || 0);
+                          const typeWords = pwTokenXLoyalty[1].trim();
+                          const colorMap = { white: 'W', blue: 'U', black: 'B', red: 'R', green: 'G' };
+                          const colors = Object.keys(colorMap).filter(cn => typeWords.includes(cn)).map(cn => colorMap[cn]);
+                          const creatureType = typeWords.split(' ').filter(w => !colorMap[w] && w !== 'and').map(w => w[0].toUpperCase() + w.slice(1)).join(' ');
+                          createToken(pwReminder.pIdx, {
+                            name: creatureType, isToken: true, type_line: `Token Creature — ${creatureType}`,
+                            power: String(x), toughness: String(x), colors, keywords: [], oracle_text: '',
+                          });
+                          addGameLog(pwReminder.pIdx, '✦', `${pwReminder.card.name}: Created ${x}/${x} ${creatureType} (X = loyalty)`);
+                          setPwReminder(null);
+                        }}>
+                        ✦ Create X/X token (X = current loyalty)
+                      </button>
+                    )}
+                    {/* Team +1/+1 per Forest + trample until EOT (Nissa, Ascended Animist -7) */}
+                    {pwTeamBuffPerForest && (
+                      <button className="btn btn-gold" style={{ padding: '6px 16px', fontSize: 12 }}
+                        onClick={() => {
+                          const st = getState(pwReminder.pIdx);
+                          const forests = st.battlefield.filter(c => isLand(c) && (c.type_line || '').toLowerCase().includes('forest')).length;
+                          setState(pwReminder.pIdx, prev => ({
+                            ...prev,
+                            battlefield: prev.battlefield.map(c => {
+                              if (!isCreature(c)) return c;
+                              const ex = c.tempBuffs || { power: 0, toughness: 0, keywords: [] };
+                              const kk = [...(ex.keywords || [])];
+                              if (!kk.includes('trample')) kk.push('trample');
+                              return { ...c, tempBuffs: { ...ex, power: (ex.power || 0) + forests, toughness: (ex.toughness || 0) + forests, keywords: kk } };
+                            })
+                          }));
+                          addGameLog(pwReminder.pIdx, '🌳', `${pwReminder.card.name}: Creatures get +${forests}/+${forests} and trample until end of turn (${forests} Forests)`);
+                          setPwReminder(null);
+                        }}>
+                        🌳 Creatures +X/+X & trample (X = your Forests)
+                      </button>
+                    )}
+                    {/* Put a creature (MV <= lands) from hand/graveyard with two +1/+1 counters (Nissa of Shadowed Boughs -5) */}
+                    {pwReanimateByLands && (() => {
+                      const st = getState(pwReminder.pIdx);
+                      const landCount = st.battlefield.filter(c => isLand(c)).length;
+                      const getMV = (c) => c.cmc !== undefined ? c.cmc : (c.card_faces?.[0]?.cmc || 0);
+                      const candidates = [
+                        ...st.hand.filter(c => isCreature(c) && getMV(c) <= landCount).map(c => ({ c, zone: 'hand' })),
+                        ...st.graveyard.filter(c => isCreature(c) && getMV(c) <= landCount).map(c => ({ c, zone: 'graveyard' })),
+                      ];
+                      if (candidates.length === 0) return <div style={{ fontSize: 11, color: 'rgba(255,100,100,0.8)', fontStyle: 'italic' }}>No creatures with MV ≤ {landCount} in hand/graveyard.</div>;
+                      return (
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, justifyContent: 'center', maxHeight: 180, overflowY: 'auto' }}>
+                          {candidates.map(({ c, zone }) => (
+                            <button key={c.id} className="btn btn-gold" style={{ padding: '4px 10px', fontSize: 10, maxWidth: 200 }}
+                              onClick={() => {
+                                setState(pwReminder.pIdx, prev => ({
+                                  ...prev,
+                                  [zone]: prev[zone].filter(x => x.id !== c.id),
+                                  battlefield: [...prev.battlefield, { ...c, tapped: false, enteredThisTurn: true, counters: { ...(c.counters || {}), '+1/+1': ((c.counters || {})['+1/+1'] || 0) + 2 } }],
+                                }));
+                                SFX.playCreature();
+                                addGameLog(pwReminder.pIdx, '🌿', `${pwReminder.card.name}: Put ${getDisplayName(c)} onto the battlefield from ${zone} with two +1/+1 counters`);
+                                setPwReminder(null);
+                              }}>
+                              🌿 {getDisplayName(c)} (MV {getMV(c)}, {zone === 'hand' ? 'Hand' : 'GY'})
+                            </button>
+                          ))}
+                        </div>
+                      );
+                    })()}
                     {/* Exile target tapped creature + gain life (Wandering Emperor -2) */}
                     {isExileTapped && (() => {
                       const oppIdx = pwReminder.pIdx === 0 ? 1 : 0;
