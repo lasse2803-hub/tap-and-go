@@ -2385,7 +2385,13 @@ const computeCostReduction = (card, casterState) => {
   for (const perm of (casterState.battlefield || [])) {
     const po = getOracleText(perm).toLowerCase();
     const m = po.match(/([a-z]+) spells you cast cost \{(\d+)\} less/);
-    if (m && (m[1] === 'creature' || cardTypes.includes(m[1]))) red += parseInt(m[2]);
+    if (!m) continue;
+    // "Colorless spells you cast cost {2} less" (Ugin, the Ineffable) — colorless is a
+    // COLOR property, not a type: match on the card having no colors.
+    const applies = m[1] === 'colorless'
+      ? (card.colors || []).length === 0
+      : (m[1] === 'creature' || cardTypes.includes(m[1]));
+    if (applies) red += parseInt(m[2]);
   }
   return red;
 };
@@ -4638,10 +4644,25 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     // Tokens cease to exist when they leave the battlefield (MTG rule)
     if (card.isToken && from === 'battlefield' && to !== 'battlefield') {
       SFX.toGraveyard();
+      // Linked-exile return (Ugin, the Ineffable +1): "When that token leaves the
+      // battlefield, put the exiled card into your hand." — auto-return the linked
+      // face-down card from exile to the controller's hand.
+      const returnsExiled = card.exiledCards && card.exiledCards.length > 0 &&
+        /put the exiled card into your hand/i.test(card.oracle_text || '');
       setState(pIdx, prev => {
         const fromCards = prev[from].filter(c => c.id !== card.id);
-        return { ...prev, [from]: fromCards };
+        let next = { ...prev, [from]: fromCards };
+        if (returnsExiled) {
+          const linkedIds = new Set(card.exiledCards.map(e => e.id));
+          const returning = (prev.exile || []).filter(c => linkedIds.has(c.id)).map(c => { const r = { ...c }; delete r.faceDownExile; return r; });
+          if (returning.length > 0) {
+            next.exile = prev.exile.filter(c => !linkedIds.has(c.id));
+            next.hand = [...prev.hand, ...returning];
+          }
+        }
+        return next;
       });
+      if (returnsExiled) addGameLog(pIdx, '🤚', `${getDisplayName(card)} left the battlefield: exiled card returned to hand`);
       return;
     }
 
@@ -5922,8 +5943,15 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       }
     }
 
-    const costNum = parseInt(ability.cost);
+    let costNum = parseInt(ability.cost);
     const currentLoyalty = (card.counters && card.counters['loyalty']) || 0;
+    // Variable loyalty cost (Ugin, the Spirit Dragon -X): choose X now.
+    if (isNaN(costNum) && /x/i.test(ability.cost || '')) {
+      const xv = parseInt(prompt(`Choose X for [${ability.cost}] (loyalty available: ${currentLoyalty}):`, '1'), 10);
+      if (isNaN(xv) || xv < 0) return;
+      costNum = (ability.cost || '').trim().startsWith('-') ? -xv : xv;
+    }
+    if (isNaN(costNum)) costNum = 0;
 
     // For minus abilities, check we have enough loyalty
     if (costNum < 0 && currentLoyalty + costNum < 0) {
@@ -6235,6 +6263,30 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     });
   };
 
+  // Exile the top N cards of a player's library (Ashiok, Nightmare Muse's token, etc.).
+  // Mirrors millCards: the opponent's library is hidden, so the server does it for them.
+  const exileTopCards = (pIdx, count) => {
+    if (onlineMode && pIdx !== onlinePlayerIndex && serverGameAction) {
+      serverGameAction({ type: 'millCards', targetPlayerIndex: pIdx, count, toExile: true }).then(res => {
+        if (res && res.milledCards && res.milledCards.length > 0) {
+          setState(pIdx, prev => ({
+            ...prev,
+            exile: [...prev.exile, ...res.milledCards],
+            libraryCount: res.newLibraryCount ?? prev.libraryCount,
+          }));
+          SFX.toExile();
+          addGameLog(pIdx, '🚫', `Exiled top ${res.milledCards.length} card${res.milledCards.length > 1 ? 's' : ''} of library`);
+        }
+      });
+      return;
+    }
+    SFX.toExile();
+    setState(pIdx, prev => {
+      const exiled = prev.library.slice(0, count);
+      return { ...prev, library: prev.library.slice(count), exile: [...prev.exile, ...exiled] };
+    });
+  };
+
   // Auto-resolve the common, unambiguous effects of a triggered ability (mill, draw,
   // lose-life, damage-to-player, gain-life) so they actually happen instead of only
   // showing a text reminder. controllerIdx = the trigger's controller; victimIdx = the
@@ -6248,6 +6300,14 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       const n = _trigNum(millM[1]);
       millCards(victimIdx, n);
       addGameLog(controllerIdx, '💀', `${sourceName}: ${getState(victimIdx).name} mills ${n}`);
+      handled = true;
+    }
+    // "each opponent exiles the top two cards of their library" (Ashiok NM token)
+    const exTopM = t.match(/exiles? the top (\w+|\d+) cards? of (?:their|your) librar/);
+    if (exTopM) {
+      const n = _trigNum(exTopM[1]);
+      exileTopCards(victimIdx, n);
+      addGameLog(controllerIdx, '🚫', `${sourceName}: ${getState(victimIdx).name} exiles top ${n} of library`);
       handled = true;
     }
     const drawM = t.match(/\bdraw\s+(\w+|\d+)\s+cards?/) || (/\bdraw a card/.test(t) ? [null, '1'] : null);
@@ -6501,7 +6561,8 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
           if (pwAbilities.length > 0) {
             pwAbilities.forEach((ab, i) => {
               const costNum = parseInt(ab.cost);
-              const canActivate = costNum >= 0 || (currentLoyalty + costNum >= 0);
+              // X costs (Ugin -X) are always clickable — X is chosen and validated at activation.
+              const canActivate = isNaN(costNum) ? /x/i.test(ab.cost || '') : (costNum >= 0 || (currentLoyalty + costNum >= 0));
               const shortText = ab.text.length > 50 ? ab.text.slice(0, 47) + '...' : ab.text;
               actions.push({
                 label: `${canActivate ? '⚡' : '🚫'} [${ab.cost}]: ${shortText}`,
@@ -7056,9 +7117,15 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         triggers.push({ permanent: perm, text: triggerMatch ? triggerMatch[1] : 'Whenever you cast a noncreature spell — triggered!', castCmc });
       }
       // "Whenever you cast an instant or sorcery spell" (Young Pyromancer, Guttersnipe)
-      else if (allText.includes('whenever you cast an instant or sorcery') && (castType.includes('instant') || castType.includes('sorcery'))) {
-        const triggerMatch = allText.match(/(whenever you cast an instant or sorcery[^.]*\.)/);
+      // — incl. Magecraft's "cast or copy" wording (Professor Onyx)
+      else if ((allText.includes('whenever you cast an instant or sorcery') || allText.includes('whenever you cast or copy an instant or sorcery')) && (castType.includes('instant') || castType.includes('sorcery'))) {
+        const triggerMatch = allText.match(/(whenever you cast (?:or copy )?an instant or sorcery[^.]*\.)/);
         triggers.push({ permanent: perm, text: triggerMatch ? triggerMatch[1] : 'Whenever you cast an instant or sorcery — triggered!' });
+      }
+      // "Whenever you cast a colorless spell" (Ugin, Eye of the Storms)
+      else if (/whenever you cast a colorless spell/i.test(allText) && (castCard.colors || []).length === 0 && !isLand(castCard)) {
+        const triggerMatch = allText.match(/(whenever you cast a colorless spell[^.]*\.)/i);
+        triggers.push({ permanent: perm, text: triggerMatch ? triggerMatch[1] : 'Whenever you cast a colorless spell — triggered!' });
       }
       // "Whenever you cast a creature spell" (Beast Whisperer)
       else if (allText.includes('whenever you cast a creature spell') && castType.includes('creature')) {
@@ -7105,15 +7172,38 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       }
     }
 
+    // Self-cast trigger on the spell itself ("When you cast this spell, ..." — Ugin EotS)
+    const selfCastM = getOracleText(castCard).match(/when you cast this spell,\s*([^.]+\.)/i);
+    if (selfCastM) {
+      triggers.push({ permanent: castCard, text: `When you cast this spell, ${selfCastM[1]}` });
+    }
+
     if (triggers.length > 0) {
-      const effects = triggers.map(t => ({
-        icon: '⚡',
-        text: `${t.permanent.name}: ${t.text}${t.castCmc !== undefined ? ` (cast spell MV=${t.castCmc})` : ''}`
-      }));
-      setTimeout(() => setEtbReminder({ pIdx, card: triggers[0].permanent, effects }), 400);
+      // Auto-resolve simple effects first (drain, draw, mill, damage-to-player —
+      // Professor Onyx's Magecraft, Guttersnipe, Beast Whisperer). Handled triggers
+      // skip both the reminder and the named cases below.
+      const autoHandled = new Set();
+      for (const t of triggers) {
+        const effText = ((t.text || '').match(/when(?:ever)? you cast [^,]*,\s*(.+)/i) || [])[1] || '';
+        if (effText && autoResolveTriggerEffect(pIdx, oppIdx, t.permanent.name, effText)) autoHandled.add(t);
+      }
+      const reminderTriggers = triggers.filter(t => !autoHandled.has(t));
+      if (reminderTriggers.length > 0) {
+        const effects = reminderTriggers.map(t => {
+          const eff = {
+            icon: '⚡',
+            text: `${t.permanent.name}: ${t.text}${t.castCmc !== undefined ? ` (cast spell MV=${t.castCmc})` : ''}`
+          };
+          // Ugin, Eye of the Storms: actionable exile-a-colored-permanent button
+          if (/exile up to one target permanent that'?s one or more colors/i.test(t.text)) eff.actionType = 'exile_colored';
+          return eff;
+        });
+        setTimeout(() => setEtbReminder({ pIdx, card: reminderTriggers[0].permanent, effects }), 400);
+      }
 
       // Auto-create tokens for well-known cast triggers
       for (const t of triggers) {
+        if (autoHandled.has(t)) continue;
         const permText = getOracleText(t.permanent);
         const permName = (t.permanent.name || '').toLowerCase();
 
@@ -9912,7 +10002,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         const selfAttackPattern = new RegExp('whenever ' + nameEscaped + '(?:\\s+enters the battlefield or)?\\s+attacks(?:\\s+or\\s+blocks)?');
         const shortNameAttackPattern = shortNameEscaped ? new RegExp('whenever ' + shortNameEscaped + '(?:\\s+enters the battlefield or)?\\s+attacks(?:\\s+or\\s+blocks)?') : null;
         // Also match generic "~ attacks" or "this creature attacks" patterns as fallback
-        const genericAttackPattern = /whenever (?:~|this creature)(?:\s+enters the battlefield or)?\s+attacks(?:\s+or\s+blocks)?/;
+        const genericAttackPattern = /whenever (?:~|this creature|this token)(?:\s+enters the battlefield or)?\s+attacks(?:\s+or\s+blocks)?/;
         // "whenever you attack" but NOT graveyard-only triggers like Phoenix Chick ("return this card from your graveyard")
         const hasYouAttack = /whenever you attack/.test(oracle) && !/from your graveyard/.test(oracle);
         if (selfAttackPattern.test(oracle) || (shortNameAttackPattern && shortNameAttackPattern.test(oracle)) || genericAttackPattern.test(oracle) || hasYouAttack) {
@@ -10522,7 +10612,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       // Match "whenever [name] blocks" or "whenever [name] attacks or blocks"
       const selfBlockPattern = new RegExp('whenever ' + nameEscaped + '(?:\\s+attacks\\s+or)?\\s+blocks');
       const shortNameBlockPattern = shortNameEscaped ? new RegExp('whenever ' + shortNameEscaped + '(?:\\s+attacks\\s+or)?\\s+blocks') : null;
-      const genericBlockPattern = /whenever (?:~|this creature)(?:\s+attacks\s+or)?\s+blocks/;
+      const genericBlockPattern = /whenever (?:~|this creature|this token)(?:\s+attacks\s+or)?\s+blocks/;
       if (selfBlockPattern.test(oracle) || (shortNameBlockPattern && shortNameBlockPattern.test(oracle)) || genericBlockPattern.test(oracle)) {
         try {
           const parsedTrigger = parseCombatTrigger(blocker, oracle, 'block');
@@ -10538,9 +10628,17 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       const simpleBlockTriggers = blockTriggers.filter(t => !t.trigger.isModal);
 
       if (simpleBlockTriggers.length > 0) {
-        const triggerTexts = simpleBlockTriggers.map(t => t.trigger);
-        setEtbReminder({ pIdx: defendingPlayer, card: simpleBlockTriggers[0].card,
-          effects: triggerTexts.map(t => ({ icon: t.icon, text: t.text })) });
+        // Auto-resolve common block-trigger effects (exile-top, mill, draw, life loss —
+        // Ashiok NM's token blocks too); anything unrecognized stays a reminder.
+        const atkIdx = defendingPlayer === 0 ? 1 : 0;
+        const leftoverBlock = [];
+        for (const t of simpleBlockTriggers) {
+          if (!autoResolveTriggerEffect(defendingPlayer, atkIdx, t.card.name, t.trigger.text || '')) leftoverBlock.push(t.trigger);
+        }
+        if (leftoverBlock.length > 0) {
+          setEtbReminder({ pIdx: defendingPlayer, card: simpleBlockTriggers[0].card,
+            effects: leftoverBlock.map(t => ({ icon: t.icon, text: t.text })) });
+        }
       }
 
       if (modalBlockTriggers.length > 0) {
@@ -12366,17 +12464,21 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                       }, 200 + i * 500);
                     });
                   } else {
+                    // Rest goes to bottom (default) or graveyard (Professor Onyx +1)
+                    const restToGy = lookTopView.restTo === 'graveyard';
                     setState(ltPIdx, prev => {
                       const remainingLib = prev.library.slice(ltCards.length);
                       return {
                         ...prev,
                         hand: [...prev.hand, ...chosenCards],
-                        library: [...remainingLib, ...bottomCards],
+                        library: restToGy ? remainingLib : [...remainingLib, ...bottomCards],
+                        graveyard: restToGy ? [...prev.graveyard, ...bottomCards] : prev.graveyard,
                       };
                     });
                   }
+                  const restWord = (!toBattlefield && lookTopView.restTo === 'graveyard') ? 'to graveyard' : 'to bottom';
                   setLookTopView(null);
-                  setCastError({ pIdx: ltPIdx, message: `Put ${toHand} card(s) ${toBattlefield ? 'onto battlefield' : 'into hand'}, ${bottomCards.length} to bottom` });
+                  setCastError({ pIdx: ltPIdx, message: `Put ${chosenCards.length} card(s) ${toBattlefield ? 'onto battlefield' : 'into hand'}, ${bottomCards.length} ${restWord}` });
                   setTimeout(() => setCastError(null), 2000);
                 }}>
                 ✓ Confirm Selection
@@ -12989,9 +13091,15 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
 
       {/* Put Land From Hand Overlay (Growth Spiral, Explore — "you may put a land onto the battlefield") */}
       {putLandFromHand && (!onlineMode || onlinePlayerIndex === putLandFromHand.pIdx) && (() => {
-        const { pIdx: landPIdx, source } = putLandFromHand;
+        const { pIdx: landPIdx, source, mode, remaining } = putLandFromHand;
+        // 'permanent' mode (Ugin, the Spirit Dragon -10): any permanent card, up to
+        // `remaining` picks. Default mode: a single land (Growth Spiral etc.).
+        const isPermMode = mode === 'permanent';
         const playerHand = getState(landPIdx).hand;
-        const landsInHand = playerHand.filter(c => isLand(c));
+        const isEligible = isPermMode
+          ? (c) => { const tl = (c.type_line || '').toLowerCase(); return isLand(c) || isAdventureCard(c) || !(tl.includes('instant') || tl.includes('sorcery')); }
+          : (c) => isLand(c);
+        const landsInHand = playerHand.filter(isEligible);
         // Deduplicate by name for display
         const uniqueLands = [...new Map(landsInHand.map(c => [c.name, c])).values()];
         return (
@@ -13009,7 +13117,9 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                 {source}
               </div>
               <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.6)', marginBottom: 14 }}>
-                You may put a land card from your hand onto the battlefield. ({landsInHand.length} land{landsInHand.length !== 1 ? 's' : ''} in hand)
+                {isPermMode
+                  ? `Put up to ${remaining} more permanent card${remaining !== 1 ? 's' : ''} from your hand onto the battlefield. (${landsInHand.length} eligible in hand)`
+                  : `You may put a land card from your hand onto the battlefield. (${landsInHand.length} land${landsInHand.length !== 1 ? 's' : ''} in hand)`}
               </div>
               {landsInHand.length > 0 ? (
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, justifyContent: 'center', marginBottom: 14 }}>
@@ -13018,15 +13128,20 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                     const imgUrl = card.image_uris?.small || card.card_faces?.[0]?.image_uris?.small;
                     return (
                       <button key={i} onClick={() => {
-                        const target = playerHand.find(c => c.name === card.name && isLand(c));
+                        const target = playerHand.find(c => c.name === card.name && isEligible(c));
                         if (!target) return;
-                        // Move land from hand to battlefield (this is an effect, not a "land play")
+                        // Move from hand to battlefield (this is an effect, not a "land play")
                         moveCard(landPIdx, target, 'hand', 'battlefield');
                         SFX.playLand();
                         addGameLog(landPIdx, '🌿', `${source}: Put ${card.name} onto the battlefield from hand`);
                         setCastError({ pIdx: landPIdx, message: `🌿 ${card.name} enters the battlefield via ${source}`, background: '#1a3320' });
                         setTimeout(() => setCastError(null), 2000);
-                        setPutLandFromHand(null);
+                        // Permanent mode: keep the picker open until picks are used up
+                        if (isPermMode && (remaining || 1) > 1 && playerHand.filter(isEligible).length > 1) {
+                          setPutLandFromHand({ ...putLandFromHand, remaining: remaining - 1 });
+                        } else {
+                          setPutLandFromHand(null);
+                        }
                         // Trigger landfall
                         setTimeout(() => {
                           const st = getState(landPIdx);
@@ -13064,17 +13179,17 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                 </div>
               ) : (
                 <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.4)', marginBottom: 14, fontStyle: 'italic' }}>
-                  No land cards in hand.
+                  {isPermMode ? 'No eligible permanent cards in hand.' : 'No land cards in hand.'}
                 </div>
               )}
               <button onClick={() => {
-                addGameLog(landPIdx, '🌿', `${source}: Chose not to put a land onto the battlefield`);
+                addGameLog(landPIdx, '🌿', `${source}: ${isPermMode ? 'Done putting permanents onto the battlefield' : 'Chose not to put a land onto the battlefield'}`);
                 setPutLandFromHand(null);
               }} style={{
                 background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.2)',
                 borderRadius: 8, padding: '8px 20px', color: 'rgba(255,255,255,0.5)', cursor: 'pointer', fontSize: 11,
               }}>
-                Decline
+                {isPermMode ? 'Done' : 'Decline'}
               </button>
             </div>
           </div>
@@ -13416,6 +13531,25 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                           </button>
                         ));
                       })()}
+                    </div>
+                  )}
+                  {e.actionType === 'exile_colored' && (
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 6, justifyContent: 'center', maxHeight: 160, overflowY: 'auto' }}>
+                      {[0, 1].flatMap(pi => getState(pi).battlefield
+                        .filter(c => !isLand(c) && c.colors && c.colors.length > 0)
+                        .map(c => ({ c, pi }))).map(({ c, pi }) => (
+                        <button key={c.id} className="btn btn-gold" style={{ padding: '4px 10px', fontSize: 10, maxWidth: 180 }}
+                          onClick={() => {
+                            moveCard(pi, c, 'battlefield', 'exile');
+                            addGameLog(etbReminder.pIdx, '🚫', `Exiled ${getDisplayName(c)} (colored permanent)`);
+                            setEtbReminder(prev => {
+                              const remaining = prev.effects.filter((_, idx) => idx !== i);
+                              return remaining.length > 0 ? { ...prev, effects: remaining } : null;
+                            });
+                          }}>
+                          🚫 {getDisplayName(c)} ({pi === etbReminder.pIdx ? 'Own' : 'Opp'})
+                        </button>
+                      ))}
                     </div>
                   )}
                 </div>
@@ -13987,7 +14121,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
               const pwDmgEach = abilityText.match(/deals? (\d+) damage to each creature/);
               if (pwDmgEach) pwEffects.push({ type: 'board_wipe', subtype: 'damage_each_creature', damage: parseInt(pwDmgEach[1]) });
               // Ugin-style variable X exile
-              if (/exile each permanent.*mana value.*or less/.test(abilityText)) pwEffects.push({ type: 'board_wipe', subtype: 'exile_mv_lte_prompt' });
+              if (/exile each permanent.*mana value.*or less/.test(abilityText)) pwEffects.push({ type: 'board_wipe', subtype: 'exile_mv_lte_prompt', colorOnly: /one or more colors/i.test(abilityText) });
               // Ajani-style: "exile each artifact and each creature your opponents control" with life condition
               if (/exile.*each artifact and each creature your opponents control/.test(abilityText) || /exile each.*your opponents control/.test(abilityText)) {
                 const lifeCondMatch = abilityText.match(/at least (\d+) more life than your starting life total/);
@@ -14031,7 +14165,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                   tokenPower = m[2]; tokenToughness = m[3]; colorType = m[4].trim();
                 } else {
                   tokenPower = m[2]; tokenToughness = m[3]; colorType = m[4].trim();
-                  tokenName = colorType.split(' ').filter(w => !['white','blue','black','red','green','colorless'].includes(w)).map(w => w[0].toUpperCase() + w.slice(1)).join(' ') || 'Token';
+                  tokenName = colorType.split(' ').filter(w => !['white','blue','black','red','green','colorless','and'].includes(w)).map(w => w[0].toUpperCase() + w.slice(1)).join(' ') || 'Token';
                 }
                 // Parse quantity: "three" -> 3, "two" -> 2, etc.
                 const qtyWord = (abilityText.match(/create\s+(\w+)\s+\d+\/\d+/) || [])[1] || '';
@@ -14040,11 +14174,15 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                 // Parse keywords: "with flying", "with vigilance", "with haste and trample"
                 const kwMatch = abilityText.match(/creature tokens?\s+with\s+([\w\s,]+?)(?:\.|$)/);
                 const keywords = kwMatch ? kwMatch[1].replace(/\band\b/g, ',').split(',').map(k => k.trim()).filter(Boolean) : [];
+                // Quoted triggered ability on the token (Ashiok NM: "Whenever this token
+                // attacks or blocks, each opponent exiles...") — becomes the token's oracle
+                // text so the combat-trigger scanners fire it.
+                const tokenOracleMatch = abilityText.match(/creature token with "([^"]+)"/i);
                 // Determine color
                 const colorMap = { white: 'W', blue: 'U', black: 'B', red: 'R', green: 'G' };
                 const colors = Object.keys(colorMap).filter(c => colorType.includes(c)).map(c => colorMap[c]);
-                const creatureType = colorType.split(' ').filter(w => !colorMap[w] && w !== 'colorless').map(w => w[0].toUpperCase() + w.slice(1)).join(' ');
-                pwTokenData = { name: tokenName, power: tokenPower, toughness: tokenToughness, type_line: `Creature Token — ${creatureType}`, colors, keywords, qty };
+                const creatureType = colorType.split(' ').filter(w => !colorMap[w] && w !== 'colorless' && w !== 'and').map(w => w[0].toUpperCase() + w.slice(1)).join(' ');
+                pwTokenData = { name: tokenName, power: tokenPower, toughness: tokenToughness, type_line: `Creature Token — ${creatureType}`, colors, keywords, qty, oracle_text: tokenOracleMatch ? tokenOracleMatch[1] : '' };
               }
 
               // Draw a card detection (Teferi Hero +1, Kiora -1)
@@ -14092,9 +14230,28 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
               const pwLookToHand = pwLookTopMatch && /into your hand/i.test(abilityText);
               const pwLookFilter = /noncreature, nonland card/i.test(abilityText) ? { type: 'noncreatureNonland' } : null;
               const pwLookCount = pwLookTopMatch ? ({ two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7 }[pwLookTopMatch[1].toLowerCase()] || parseInt(pwLookTopMatch[1]) || 1) : 0;
-              const pwLookToHandN = pwLookToHand ? (/reveal (?:a|one) /i.test(abilityText) ? 1 : ({ two: 2, three: 3 }[(abilityText.match(/up to (\w+)/i) || [])[1]] || 1)) : 0;
+              const pwLookToHandN = pwLookToHand ? (/reveal (?:a|one) |put one of them/i.test(abilityText) ? 1 : ({ two: 2, three: 3 }[(abilityText.match(/up to (\w+)/i) || [])[1]] || 1)) : 0;
+              // "the rest into your graveyard" (Professor Onyx +1) vs default rest-to-bottom
+              const pwLookRestTo = /the rest into your graveyard/i.test(abilityText) ? 'graveyard' : 'bottom';
+              const pwLookUpTo = /you may/i.test(abilityText);
+              // "You lose N life" rider (Professor Onyx +1)
+              const pwSelfLoseMatch = abilityText.match(/you lose (\d+) life/i);
+              // "Each opponent sacrifices a creature with the greatest power" (Professor Onyx -3)
+              const pwOppSacGreatest = /each opponent sacrifices a creature with the greatest power/i.test(abilityText);
+              // "You gain N life" standalone/combined (Ugin EotS +2: "You gain 3 life and draw a card.")
+              const pwGainLifeMatch = abilityText.match(/you gain (\d+) life/i);
+              // "You gain N life, draw N cards, then put up to N permanent cards from your
+              // hand onto the battlefield" (Ugin, the Spirit Dragon -10)
+              const pwBigRestock = abilityText.match(/you gain (\d+) life, draw (\w+) cards?, then put up to (\w+) permanent cards? from your hand onto the battlefield/i);
+              // "Destroy/Exile target permanent that's one or more colors" (Ugin -3s)
+              const pwRemoveTargetMatch = abilityText.match(/(destroy|exile) (?:up to one )?target permanent(?: that'?s one or more colors)?/i);
+              const pwRemoveColoredOnly = /one or more colors/i.test(abilityText);
+              // "Exile the top card of your library face down ... create a 2/2 colorless
+              // Spirit creature token. When that token leaves the battlefield, put the
+              // exiled card into your hand." (Ugin, the Ineffable +1)
+              const pwExileTopLinked = /exile the top card of your library face down/i.test(abilityText) && /create a (\d+)\/(\d+) colorless (\w+) creature token/i.test(abilityText);
 
-              const hasNewPatterns = hasDrawCard || hasExtraLand || addManaMatch || addManaOrMatch || loseLifeMatch || pwBuffMatch || isTuckToLibrary || isFactOrFiction || isGraveyardReturn || isExileTapped || isLibraryExileUltimate || pwDmgTargetMatch || pwCounterTargetMatch || pwBounceMatch || pwFightMatch || pwMillMatch || (pwLookTopMatch && pwLookToHand);
+              const hasNewPatterns = hasDrawCard || hasExtraLand || addManaMatch || addManaOrMatch || loseLifeMatch || pwBuffMatch || isTuckToLibrary || isFactOrFiction || isGraveyardReturn || isExileTapped || isLibraryExileUltimate || pwDmgTargetMatch || pwCounterTargetMatch || pwBounceMatch || pwFightMatch || pwMillMatch || (pwLookTopMatch && pwLookToHand) || pwOppSacGreatest || pwBigRestock || pwRemoveTargetMatch || pwExileTopLinked || (pwGainLifeMatch && !isExileTapped);
 
               if (pwEffects.length > 0 || isEmblem || isUntilNextTurn || pwTokenData || isExileCastOrDamage || isPreventDamage || isSorceryFlash || hasNewPatterns) {
                 return (
@@ -14175,7 +14332,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                         ✦ Execute Effect
                       </button>
                     )}
-                    {pwTokenData && (
+                    {pwTokenData && !pwExileTopLinked && (
                       <button className="btn btn-gold" style={{ padding: '6px 16px', fontSize: 12 }}
                         onClick={() => {
                           const td = pwTokenData;
@@ -14183,7 +14340,10 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                             const token = {
                               name: td.name, power: td.power, toughness: td.toughness,
                               type_line: td.type_line, colors: td.colors, keywords: td.keywords,
-                              isToken: true, oracle_text: td.keywords.length > 0 ? td.keywords.join(', ') : '',
+                              isToken: true,
+                              // Quoted triggered ability (Ashiok NM) takes priority — the
+                              // combat-trigger scanners read the token's oracle text.
+                              oracle_text: td.oracle_text || (td.keywords.length > 0 ? td.keywords.join(', ') : ''),
                             };
                             createToken(pwReminder.pIdx, token, i === 0, true);
                           }
@@ -14278,11 +14438,13 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                       </button>
                     )}
                     {/* Draw a card (Teferi Hero +1, Kiora -1 first part) */}
-                    {hasDrawCard && (
+                    {hasDrawCard && !pwBigRestock && (
                       <button className="btn btn-gold" style={{ padding: '6px 16px', fontSize: 12 }}
                         onClick={() => {
+                          // Gain-life rider first (Ugin EotS +2: "You gain 3 life and draw a card")
+                          if (pwGainLifeMatch) gainLife(pwReminder.pIdx, parseInt(pwGainLifeMatch[1]));
                           drawCard(pwReminder.pIdx);
-                          addGameLog(pwReminder.pIdx, '📖', `${pwReminder.card.name}: Drew a card`);
+                          addGameLog(pwReminder.pIdx, '📖', `${pwReminder.card.name}: ${pwGainLifeMatch ? `Gained ${pwGainLifeMatch[1]} life, drew` : 'Drew'} a card`);
                           // If also has extra land, keep reminder open for land choice
                           if (hasExtraLand) {
                             const playerHand = getState(pwReminder.pIdx).hand;
@@ -14301,7 +14463,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                             setPwReminder(null);
                           }
                         }}>
-                        📖 Draw a Card{hasExtraLand ? ' + Put Land' : ''}
+                        {pwGainLifeMatch ? `💚 Gain ${pwGainLifeMatch[1]} + ` : ''}📖 Draw a Card{hasExtraLand ? ' + Put Land' : ''}
                       </button>
                     )}
                     {/* Add mana CHOICE (Domri +1: "Add {R} or {G}") — two buttons */}
@@ -14389,12 +14551,24 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                         </button>
                       ));
                     })()}
-                    {/* Single-target damage (Chandra, Torch of Defiance -3) */}
+                    {/* Single-target damage (Chandra -3: target creature; Ugin +2: any target incl. players) */}
                     {pwDmgTargetMatch && (() => {
                       const dmg = parseInt(pwDmgTargetMatch[1]);
+                      const anyTarget = /any target/i.test(pwDmgTargetMatch[0]);
                       const targets = [0, 1].flatMap(pi => getState(pi).battlefield.filter(c => isCreature(c)).map(c => ({ c, pi })));
-                      if (targets.length === 0) return <div style={{ fontSize: 11, color: 'rgba(255,100,100,0.8)', fontStyle: 'italic' }}>No creatures to target.</div>;
-                      return targets.map(({ c, pi }) => (
+                      const playerButtons = anyTarget ? [0, 1].map(pi => (
+                        <button key={'pl' + pi} className="btn btn-gold" style={{ padding: '5px 12px', fontSize: 11 }}
+                          onClick={() => {
+                            setState(pi, prev => ({ ...prev, life: prev.life - dmg }));
+                            markDealtDamage(pi); SFX.playerDamage();
+                            addGameLog(pwReminder.pIdx, '🔥', `${pwReminder.card.name}: ${dmg} damage to ${getState(pi).name}`);
+                            setPwReminder(null);
+                          }}>
+                          🔥 Player: {getState(pi).name} ({dmg} dmg)
+                        </button>
+                      )) : [];
+                      if (targets.length === 0 && playerButtons.length === 0) return <div style={{ fontSize: 11, color: 'rgba(255,100,100,0.8)', fontStyle: 'italic' }}>No creatures to target.</div>;
+                      return [...playerButtons, ...targets.map(({ c, pi }) => (
                         <button key={c.id} className="btn btn-gold" style={{ padding: '5px 12px', fontSize: 11, maxWidth: 200 }}
                           onClick={() => {
                             const tough = getEffectiveToughness(c);
@@ -14410,7 +14584,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                           }}>
                           🔥 {c.name} ({dmg} dmg)
                         </button>
-                      ));
+                      ))];
                     })()}
                     {/* +1/+1 counter on target creature (+ first strike) — Wandering Emperor +1 */}
                     {pwCounterTargetMatch && (() => {
@@ -14430,15 +14604,25 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                         </button>
                       ));
                     })()}
-                    {/* Bounce target permanent to owner's hand (Teferi, Time Raveler -3) */}
+                    {/* Bounce target permanent to owner's hand (Teferi TR -3; Ashiok NM -3) */}
                     {pwBounceMatch && (() => {
                       const drawsAfter = /draw a card/i.test(abilityText);
-                      const targets = [0, 1].flatMap(pi => getState(pi).battlefield.filter(c => !isLand(c) && !isPlaneswalker(c)).map(c => ({ c, pi })));
+                      // "nonland permanent" includes planeswalkers (Ashiok NM); Teferi TR's
+                      // "artifact, creature, or enchantment" wording excludes them.
+                      const allowPW = /nonland permanent/i.test(abilityText);
+                      // Ashiok NM rider: "...then that player exiles a card from their hand."
+                      const exilesHandAfter = /then that player exiles a card from (?:their|his or her) hand/i.test(abilityText);
+                      const targets = [0, 1].flatMap(pi => getState(pi).battlefield.filter(c => !isLand(c) && (allowPW || !isPlaneswalker(c))).map(c => ({ c, pi })));
                       const doBounce = (c, pi) => {
                         if (c) {
                           if (c.isToken) { setState(pi, prev => ({ ...prev, battlefield: prev.battlefield.filter(x => x.id !== c.id) })); }
                           else { moveCard(pi, c, 'battlefield', 'hand'); }
                           addGameLog(pwReminder.pIdx, '🤚', `${pwReminder.card.name}: Returned ${c.name} to hand`);
+                          if (exilesHandAfter) {
+                            // The bounced card's controller chooses — synced reminder shows on THEIR client.
+                            setTimeout(() => setEtbReminder({ pIdx: pi, card: pwReminder.card,
+                              effects: [{ icon: '🚫', text: `${pwReminder.card.name}: Exile a card from your hand (right-click a hand card → To Exile)` }] }), 300);
+                          }
                         }
                         if (drawsAfter) drawCard(pwReminder.pIdx);
                         setPwReminder(null);
@@ -14516,17 +14700,119 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                         </button>
                       ));
                     })()}
-                    {/* Look at top N, put up to M into hand, rest on bottom (Narset -2) */}
+                    {/* Look at top N, put M into hand, rest to bottom/graveyard (Narset -2, Onyx +1) */}
                     {pwLookTopMatch && pwLookToHand && (
                       <button className="btn btn-gold" style={{ padding: '6px 16px', fontSize: 12 }}
                         onClick={() => {
+                          // Self life-loss rider first (Professor Onyx +1: "You lose 1 life.")
+                          if (pwSelfLoseMatch) {
+                            const n = parseInt(pwSelfLoseMatch[1]);
+                            setState(pwReminder.pIdx, prev => ({ ...prev, life: prev.life - n }));
+                            markDealtDamage(pwReminder.pIdx);
+                            addGameLog(pwReminder.pIdx, '🩸', `${pwReminder.card.name}: lost ${n} life`);
+                          }
                           const st = getState(pwReminder.pIdx);
                           const top = st.library.slice(0, Math.min(pwLookCount, st.library.length));
                           setLookTopView({ pIdx: pwReminder.pIdx, cards: top, toHand: pwLookToHandN,
-                            selected: new Set(), selectFilter: pwLookFilter, upTo: true });
+                            selected: new Set(), selectFilter: pwLookFilter, upTo: pwLookUpTo, restTo: pwLookRestTo });
                           setPwReminder(null);
                         }}>
-                        🔍 Look at top {pwLookCount} (up to {pwLookToHandN} to hand{pwLookFilter ? ', noncreature/nonland' : ''})
+                        🔍 {pwSelfLoseMatch ? `Lose ${pwSelfLoseMatch[1]} + ` : ''}Look at top {pwLookCount} ({pwLookUpTo ? 'up to ' : ''}{pwLookToHandN} to hand{pwLookFilter ? ', noncreature/nonland' : ''}, rest to {pwLookRestTo})
+                      </button>
+                    )}
+                    {/* Each opponent sacrifices its greatest-power creature (Professor Onyx -3) */}
+                    {pwOppSacGreatest && (() => {
+                      const oppIdx = pwReminder.pIdx === 0 ? 1 : 0;
+                      const oppCreatures = getState(oppIdx).battlefield.filter(c => isCreature(c));
+                      if (oppCreatures.length === 0) return <div style={{ fontSize: 11, color: 'rgba(255,100,100,0.8)', fontStyle: 'italic' }}>Opponent controls no creatures.</div>;
+                      const maxPow = Math.max(...oppCreatures.map(c => getEffectivePower(c) || 0));
+                      const greatest = oppCreatures.filter(c => (getEffectivePower(c) || 0) === maxPow);
+                      return greatest.map(c => (
+                        <button key={c.id} className="btn btn-gold" style={{ padding: '5px 12px', fontSize: 11, maxWidth: 220 }}
+                          onClick={() => {
+                            moveCard(oppIdx, c, 'battlefield', 'graveyard');
+                            addGameLog(pwReminder.pIdx, '💀', `${pwReminder.card.name}: ${getState(oppIdx).name} sacrificed ${getDisplayName(c)} (power ${maxPow})`);
+                            setPwReminder(null);
+                          }}>
+                          💀 Opponent sacrifices {getDisplayName(c)} ({maxPow} power)
+                        </button>
+                      ));
+                    })()}
+                    {/* Gain N, draw N, put up to N permanents from hand (Ugin, Spirit Dragon -10) */}
+                    {pwBigRestock && (
+                      <button className="btn btn-gold" style={{ padding: '6px 16px', fontSize: 12 }}
+                        onClick={() => {
+                          const gainN = parseInt(pwBigRestock[1]);
+                          const wordNum = { two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7 };
+                          const drawN = wordNum[pwBigRestock[2].toLowerCase()] || parseInt(pwBigRestock[2]) || 1;
+                          const putN = wordNum[pwBigRestock[3].toLowerCase()] || parseInt(pwBigRestock[3]) || 1;
+                          gainLife(pwReminder.pIdx, gainN);
+                          for (let i = 0; i < drawN; i++) setTimeout(() => drawCard(pwReminder.pIdx), i * 120);
+                          addGameLog(pwReminder.pIdx, '✨', `${pwReminder.card.name}: gained ${gainN} life, drew ${drawN}`);
+                          setTimeout(() => setPutLandFromHand({ pIdx: pwReminder.pIdx, source: pwReminder.card.name, mode: 'permanent', remaining: putN }), drawN * 120 + 200);
+                          setPwReminder(null);
+                        }}>
+                        ✨ Gain {pwBigRestock[1]}, draw {pwBigRestock[2]}, put up to {pwBigRestock[3]} permanents
+                      </button>
+                    )}
+                    {/* Destroy/exile target (colored) permanent (Ugin, the Ineffable -3 etc.) */}
+                    {pwRemoveTargetMatch && !isEmblem && !isExileTapped && !pwEffects.some(e => e.subtype === 'exile_mv_lte_prompt') && (() => {
+                      const verb = pwRemoveTargetMatch[1].toLowerCase();
+                      const destZone = verb === 'destroy' ? 'graveyard' : 'exile';
+                      const targets = [0, 1].flatMap(pi => getState(pi).battlefield
+                        .filter(c => !isLand(c))
+                        .filter(c => !pwRemoveColoredOnly || (c.colors && c.colors.length > 0))
+                        .map(c => ({ c, pi })));
+                      if (targets.length === 0) return <div style={{ fontSize: 11, color: 'rgba(255,100,100,0.8)', fontStyle: 'italic' }}>No {pwRemoveColoredOnly ? 'colored ' : ''}permanents to target.</div>;
+                      return (
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, justifyContent: 'center', maxHeight: 200, overflowY: 'auto' }}>
+                          {targets.map(({ c, pi }) => (
+                            <button key={c.id} className="btn btn-gold" style={{ padding: '4px 10px', fontSize: 10, maxWidth: 180 }}
+                              onClick={() => {
+                                moveCard(pi, c, 'battlefield', destZone);
+                                addGameLog(pwReminder.pIdx, verb === 'destroy' ? '💀' : '🚫', `${pwReminder.card.name}: ${verb === 'destroy' ? 'Destroyed' : 'Exiled'} ${getDisplayName(c)}`);
+                                setPwReminder(null);
+                              }}>
+                              {verb === 'destroy' ? '💀' : '🚫'} {getDisplayName(c)} ({pi === pwReminder.pIdx ? 'Own' : 'Opp'})
+                            </button>
+                          ))}
+                        </div>
+                      );
+                    })()}
+                    {/* Exile top face down + 2/2 Spirit with linked return (Ugin, the Ineffable +1) */}
+                    {pwExileTopLinked && (
+                      <button className="btn btn-gold" style={{ padding: '6px 16px', fontSize: 12 }}
+                        onClick={() => {
+                          const st = getState(pwReminder.pIdx);
+                          if (st.library.length === 0) {
+                            setCastError({ pIdx: pwReminder.pIdx, message: '⚠️ Library is empty!' });
+                            setTimeout(() => setCastError(null), 2000);
+                            setPwReminder(null);
+                            return;
+                          }
+                          const topCard = { ...st.library[0], faceDownExile: true };
+                          const tm = abilityText.match(/create a (\d+)\/(\d+) colorless (\w+) creature token/i);
+                          const spiritToken = {
+                            id: uid(), name: (tm[3][0].toUpperCase() + tm[3].slice(1)) + ' Token', isToken: true,
+                            type_line: `Token Creature — ${tm[3][0].toUpperCase() + tm[3].slice(1)}`,
+                            power: tm[1], toughness: tm[2], colors: [], keywords: [],
+                            oracle_text: 'When this token leaves the battlefield, put the exiled card into your hand.',
+                            exiledCards: [{ id: topCard.id, name: topCard.name }],
+                            tapped: false, enteredThisTurn: true, counters: {},
+                          };
+                          setState(pwReminder.pIdx, prev => ({
+                            ...prev,
+                            library: prev.library.slice(1),
+                            exile: [...prev.exile, topCard],
+                            battlefield: [...prev.battlefield, spiritToken],
+                          }));
+                          SFX.playCreature();
+                          addGameLog(pwReminder.pIdx, '👻', `${pwReminder.card.name}: Exiled top card face down, created ${tm[1]}/${tm[2]} ${tm[3]} token`);
+                          setCastError({ pIdx: pwReminder.pIdx, message: `👻 Exiled face down: ${topCard.name} (only you can see it). Returns to hand when the token leaves.`, background: '#1a2a3a' });
+                          setTimeout(() => setCastError(null), 4000);
+                          setPwReminder(null);
+                        }}>
+                        👻 Exile top face down + create Spirit token
                       </button>
                     )}
                     {/* Exile target tapped creature + gain life (Wandering Emperor -2) */}
