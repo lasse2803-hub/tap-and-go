@@ -473,30 +473,20 @@ async function testTurnPassAndPhases() {
   const initialActive = gs1.state.activePlayer;
   const nextActive = initialActive === 0 ? 1 : 0;
 
-  // Active player passes the turn
+  // Active player passes the turn via the server-authoritative advanceTurn intent
+  // (turn advancement is no longer carried by stateSync — that path was the source of
+  // the turn-revert desync; see the End-of-turn handoff test).
   const p2Update = waitForEvent(s2, 'stateUpdate');
   const sender = initialActive === 0 ? s1 : s2;
-  const senderState = initialActive === 0 ? gs1 : gs2;
 
-  await emitCb(sender, 'gameAction', {
-    action: {
-      type: 'stateSync',
-      state: {
-        players: senderState.state.players,
-        activePlayer: nextActive,
-        currentPhase: 'upkeep',
-        turnNumber: 2,
-      }
-    }
-  });
+  await emitCb(sender, 'gameAction', { action: { type: 'advanceTurn' } });
 
   const turnUpdate = await p2Update;
   assertEqual(turnUpdate.state.activePlayer, nextActive,
     `Active player should switch to ${nextActive}`);
-  assertEqual(turnUpdate.state.turnNumber, 2, 'Turn number should be 2');
-  assertEqual(turnUpdate.state.currentPhase, 'upkeep', 'Phase should be upkeep');
+  assertEqual(turnUpdate.state.currentPhase, 'main1', 'Phase resets to main1 on the new turn');
 
-  console.log(`  ✓ Turn passed: P${initialActive} → P${nextActive}, turn 1→2, phase→upkeep`);
+  console.log(`  ✓ Turn passed via advanceTurn: P${initialActive} → P${nextActive}, phase→main1`);
 
   s1.disconnect();
   s2.disconnect();
@@ -852,6 +842,12 @@ async function testEndOfTurnHandoff() {
 
   const flush = () => new Promise(r => setTimeout(r, 200));
 
+  // Leave the mulligan phase (as a real game does once both players keep) — turn
+  // advancement is only server-authoritative in play; during mulligan a stateSync may
+  // still set the first player.
+  await emitCb(activeSocket, 'gameAction', { action: { type: 'stateSync', state: { mulliganPhase: false, mulliganVersion: 999 } } });
+  await flush();
+
   // Give the NEW active player (other) a tapped permanent so we can prove the server
   // untaps it during the transition (board cleanup that used to run client-side).
   await emitCb(activeSocket, 'gameAction', { action: { type: 'stateSync', state: {
@@ -885,6 +881,21 @@ async function testEndOfTurnHandoff() {
   const perm = f1.state.players[other].battlefield.find(c => c.id === 'perm1');
   assert(perm && perm.tapped === false, 'new active player permanent untapped by server transition');
   console.log('  ✓ server untapped the new active player board (no client cross-board write)');
+
+  // REGRESSION GUARD for the observed freeze: right after the flip, the NEW active player's
+  // routine stateSync still echoes activePlayer (its briefly-stale view). The server must
+  // NOT let that move activePlayer during play, or the turn reverts and the game desyncs.
+  const newActiveSocket = other === 0 ? s1 : s2;
+  await flush();
+  const echo = Promise.all([waitForEvent(s1, 'stateUpdate'), waitForEvent(s2, 'stateUpdate')]);
+  await emitCb(newActiveSocket, 'gameAction', { action: { type: 'stateSync', state: {
+    activePlayer: active, // stale: the pre-flip active player
+    players: [{}, {}],
+  } } });
+  const [e1, e2] = await echo;
+  assertEqual(e1.state.activePlayer, other, 'P1: stale stateSync did NOT revert the turn');
+  assertEqual(e2.state.activePlayer, other, 'P2: stale stateSync did NOT revert the turn');
+  console.log('  ✓ stale activePlayer echo from the new active player is ignored (no revert)');
 
   s1.disconnect();
   s2.disconnect();

@@ -743,12 +743,15 @@ class GameRoom {
       // activePlayer: accept changes from the current active player,
       // OR from the non-active player during end-of-turn (they click "Proceed")
       if (update.activePlayer !== undefined && update.activePlayer !== this.gameState.activePlayer) {
-        const isActivePlayer = playerIndex === this.gameState.activePlayer;
-        // "Proceed" clears endOfTurnRespond via intent moments BEFORE this stateSync
-        // arrives with the turn flip — honor a short grace window after the clear.
-        const recentlyCleared = this._eotClearedAt && (Date.now() - this._eotClearedAt) < 10000;
-        const isEndOfTurnProceed = (this.gameState.endOfTurnRespond || recentlyCleared) && !isActivePlayer;
-        if (isActivePlayer || isEndOfTurnProceed || this.gameState.mulliganPhase) {
+        // Turn advancement DURING PLAY is server-authoritative via the advanceTurn intent.
+        // A stateSync must NOT move activePlayer while the game is in progress — doing so
+        // caused the game-breaking revert: right after advanceTurn flipped the turn, the
+        // NEW active player's own routine stateSync still echoed its (briefly stale) view
+        // of activePlayer, and because that player was now "active" the old rule accepted
+        // it and flipped the turn straight back (both clients then disagreed / froze).
+        // Only honor a stateSync activePlayer change during the mulligan phase, where the
+        // first-player selection legitimately rides this path (no advanceTurn yet).
+        if (this.gameState.mulliganPhase) {
           this.gameState.activePlayer = update.activePlayer;
           // Reset end-of-turn state when the active player changes (new turn)
           if (this.gameState.endOfTurnRespond) {

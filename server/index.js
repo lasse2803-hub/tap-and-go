@@ -19,8 +19,23 @@ const io = new Server(server, {
 
 app.use(express.json());
 
-// Serve static client files
-app.use(express.static(path.join(__dirname, '..', 'client', 'public')));
+// Serve static client files.
+// IMPORTANT: never cache the app code (index.html + the app's JS modules). The whole
+// client is one big index.html plus rules-core.js / card-effects.js, and they change on
+// every deploy. A stale cached copy is a real desync source: right after a deploy one
+// player can load fresh code while the other runs an old cached bundle, and the two then
+// disagree on game rules/sync (looks exactly like the "sync broke, abandon the game"
+// bug). Images/fonts keep normal caching.
+const NO_CACHE = 'no-store, no-cache, must-revalidate, proxy-revalidate';
+app.use(express.static(path.join(__dirname, '..', 'client', 'public'), {
+  setHeaders: (res, filePath) => {
+    if (/\.(html|js)$/i.test(filePath)) {
+      res.setHeader('Cache-Control', NO_CACHE);
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
+    }
+  },
+}));
 
 // Serve custom card images (Pokemon, Star Wars, etc.)
 app.use('/cards', express.static(path.join(__dirname, '..', 'MTG Billeder')));
@@ -49,6 +64,9 @@ app.get('/api/room/:id', (req, res) => {
 
 // Catch-all: serve index.html for client-side routing (e.g. /game/ABC123)
 app.get('/game/:roomId', (req, res) => {
+  res.setHeader('Cache-Control', NO_CACHE);
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
   res.sendFile(path.join(__dirname, '..', 'client', 'public', 'index.html'));
 });
 

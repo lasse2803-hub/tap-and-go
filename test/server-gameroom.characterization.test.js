@@ -633,17 +633,32 @@ test('setEndOfTurnRespond intent: server owns value + version; stateSync cannot 
   assert.equal(gs.endOfTurnRespondVersion, verAfterIntent, 'version unchanged by stateSync');
 });
 
-test('Proceed grace: non-active flip accepted just after intent clears endOfTurnRespond', () => {
+test('Turn flip is advanceTurn-only in play; a stateSync activePlayer echo is ignored', () => {
   const room = startedRoom({ firstPlayer: 0 });
   const gs = room.gameState;
   // A (active=0) passes: flag goes up via intent.
   room.processAction(0, { type: 'setEndOfTurnRespond', value: true });
-  // B proceeds: clears the flag via intent FIRST...
-  room.processAction(1, { type: 'setEndOfTurnRespond', value: false });
-  assert.equal(gs.endOfTurnRespond, false);
-  // ...then B's stateSync flips activePlayer moments later — must be accepted (grace window).
+  // B proceeds via the advanceTurn intent (the server-authoritative path). Flip to B.
+  const r = room.processAction(1, { type: 'advanceTurn' });
+  assert.ok(r.ok);
+  assert.equal(gs.activePlayer, 1, 'advanceTurn flipped the turn to B');
+  assert.equal(gs.endOfTurnRespond, false, 'advanceTurn cleared the respond flag');
+  // REGRESSION: the new active player (B) then sends a routine stateSync that still echoes
+  // its briefly-stale view (activePlayer=0). During play this MUST be ignored — accepting it
+  // is exactly what reverted the turn and desynced/froze the game.
+  room.processAction(1, { type: 'stateSync', state: { activePlayer: 0 } });
+  assert.equal(gs.activePlayer, 1, 'stale stateSync echo did NOT revert the turn');
+  // Same guard for the other player.
+  room.processAction(0, { type: 'stateSync', state: { activePlayer: 0 } });
+  assert.equal(gs.activePlayer, 1, 'stale stateSync from the other player also ignored');
+});
+
+test('stateSync CAN set activePlayer during mulligan (first-player selection)', () => {
+  const room = startedRoom({ firstPlayer: 0 });
+  const gs = room.gameState;
+  gs.mulliganPhase = true;
   room.processAction(1, { type: 'stateSync', state: { activePlayer: 1 } });
-  assert.equal(gs.activePlayer, 1, 'turn flip from proceeding non-active player accepted');
+  assert.equal(gs.activePlayer, 1, 'mulligan-phase activePlayer change accepted');
 });
 
 // ── exileGraveyard (Ashiok) + graveyard/exile reconciliation ──
