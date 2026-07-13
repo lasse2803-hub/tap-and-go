@@ -286,7 +286,12 @@ io.on('connection', (socket) => {
     if (action.type === 'stateSync') {
       touched[0] = !!(action.state && action.state.players && action.state.players[0]);
       touched[1] = !!(action.state && action.state.players && action.state.players[1]);
-    } else if (['advanceTurn', 'stackPush', 'stackResolveTop', 'stackRemove', 'setEndOfTurnRespond'].includes(action.type)) {
+    } else if (action.type === 'advanceTurn') {
+      // The turn transition cleans up BOTH players' boards on the server's true state
+      // (untap, reset flags, clear buffs, return stolen cards, revert manlands), so both
+      // clients must accept the server's authoritative copy of their own board.
+      touched[0] = true; touched[1] = true;
+    } else if (['stackPush', 'stackResolveTop', 'stackRemove', 'setEndOfTurnRespond'].includes(action.type)) {
       touched[socket.playerIndex] = true; // game-level state only, no zone writes
     } else {
       // Zone-writing intents: sender + explicit target. returnToOwnerZone and any

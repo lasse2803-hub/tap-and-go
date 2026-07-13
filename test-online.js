@@ -821,6 +821,75 @@ async function testTurnAdvanceAuthority() {
   s2.disconnect();
 }
 
+async function testEndOfTurnHandoff() {
+  // Reproduces the game-FREEZING desync: active player opens the end-of-turn respond
+  // window (setEndOfTurnRespond intent), then the NON-active player "Proceeds" via the
+  // advanceTurn intent. The bug was that the flag-clear and the activePlayer flip used
+  // different transports, so the flip could be lost while the flag was already cleared →
+  // both Pass buttons disabled → frozen. Now both happen atomically in advanceTurn.
+  section('End-of-turn handoff is atomic (freeze regression guard)');
+
+  const roomData = await createRoom('Alice');
+  const s1 = createSocket();
+  const s2 = createSocket();
+  await Promise.all([
+    new Promise(r => s1.on('connect', r)),
+    new Promise(r => s2.on('connect', r)),
+  ]);
+  await emitCb(s1, 'joinGame', { roomId: roomData.roomId, nickname: 'Alice' });
+  await emitCb(s2, 'joinGame', { roomId: roomData.roomId, nickname: 'Bob' });
+  const p1Start = waitForEvent(s1, 'gameStart');
+  const p2Start = waitForEvent(s2, 'gameStart');
+  await emitCb(s1, 'submitDeck', { deck: createTestDeck() });
+  await emitCb(s2, 'submitDeck', { deck: createTestDeck() });
+  const gs1 = await p1Start;
+  await p2Start;
+
+  const active = gs1.state.activePlayer;
+  const other = active === 0 ? 1 : 0;
+  const activeSocket = active === 0 ? s1 : s2;
+  const otherSocket = active === 0 ? s2 : s1;
+
+  const flush = () => new Promise(r => setTimeout(r, 200));
+
+  // Give the NEW active player (other) a tapped permanent so we can prove the server
+  // untaps it during the transition (board cleanup that used to run client-side).
+  await emitCb(activeSocket, 'gameAction', { action: { type: 'stateSync', state: {
+    players: active === 0
+      ? [{}, { battlefield: [{ id: 'perm1', tapped: true, name: 'Test Permanent' }] }]
+      : [{ battlefield: [{ id: 'perm1', tapped: true, name: 'Test Permanent' }] }, {}],
+  } } });
+  await flush(); // let the setup broadcast flush so the next waiter catches the right update
+
+  // Active player opens the respond window.
+  const bothSeeRespond = Promise.all([waitForEvent(s1, 'stateUpdate'), waitForEvent(s2, 'stateUpdate')]);
+  await emitCb(activeSocket, 'gameAction', { action: { type: 'setEndOfTurnRespond', value: true } });
+  const [r1, r2] = await bothSeeRespond;
+  assertEqual(r1.state.endOfTurnRespond, true, 'P1 sees respond window open');
+  assertEqual(r2.state.endOfTurnRespond, true, 'P2 sees respond window open');
+  console.log('  ✓ respond window opened for both clients');
+  await flush();
+
+  // Non-active player "Proceeds" → advanceTurn. The flip and the flag-clear must arrive
+  // TOGETHER in the same broadcast (atomic), for BOTH clients.
+  const bothSeeFlip = Promise.all([waitForEvent(s1, 'stateUpdate'), waitForEvent(s2, 'stateUpdate')]);
+  await emitCb(otherSocket, 'gameAction', { action: { type: 'advanceTurn' } });
+  const [f1, f2] = await bothSeeFlip;
+  assertEqual(f1.state.activePlayer, other, 'P1: active flipped');
+  assertEqual(f2.state.activePlayer, other, 'P2: active flipped');
+  assertEqual(f1.state.endOfTurnRespond, false, 'P1: respond flag cleared in the SAME update as the flip');
+  assertEqual(f2.state.endOfTurnRespond, false, 'P2: respond flag cleared in the SAME update as the flip');
+  console.log('  ✓ flip + flag-clear delivered atomically to both clients (no freeze window)');
+
+  // The board cleanup happened on the server: the new active player's permanent is untapped.
+  const perm = f1.state.players[other].battlefield.find(c => c.id === 'perm1');
+  assert(perm && perm.tapped === false, 'new active player permanent untapped by server transition');
+  console.log('  ✓ server untapped the new active player board (no client cross-board write)');
+
+  s1.disconnect();
+  s2.disconnect();
+}
+
 async function testLostLifeAuthority() {
   section('Server-Authoritative lostLifeThisTurn (robust Spectacle fix)');
 
@@ -954,6 +1023,7 @@ async function main() {
     await testMultipleRooms();
     await testStateBasedGameOver();
     await testTurnAdvanceAuthority();
+    await testEndOfTurnHandoff();
     await testLifeChangeAuthority();
     await testLostLifeAuthority();
     await testSpellStackAuthority();

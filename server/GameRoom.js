@@ -341,7 +341,8 @@ class GameRoom {
     if (Array.isArray(this.gameState.spellStack) && this.gameState.spellStack.length > 0) {
       return { error: 'Resolve the stack before passing the turn' };
     }
-    const next = this.gameState.activePlayer === 0 ? 1 : 0;
+    const prev = this.gameState.activePlayer;
+    const next = prev === 0 ? 1 : 0;
     this.gameState.activePlayer = next;
     this.gameState.priorityPlayer = next;
     this.gameState.currentPhase = 'main1';
@@ -353,6 +354,80 @@ class GameRoom {
     this.gameState.endOfTurnRespond = false;
     // New turn → "lost life this turn" resets for both players (Spectacle, etc.).
     for (const p of this.gameState.players) { if (p) p.lostLifeThisTurn = false; }
+
+    // ── Turn-transition BOARD CLEANUP, done on the server's TRUE state ──────────
+    // This used to run in the client's executePassTurn, mutating BOTH players'
+    // boards on the *non-active* player (the one clicking "Proceed") and broadcasting
+    // that player's stale snapshot of the opponent's board — clobbering it. Doing it
+    // here (single source of truth) removes the clobber and makes the transition atomic.
+    const players = this.gameState.players;
+
+    // 1) Return temporarily-controlled cards to their owners (Act of Treason, etc.),
+    //    tapped and stripped of granted haste — mirrors client returnTemporaryControl().
+    for (let pi = 0; pi < 2; pi++) {
+      const st = players[pi];
+      if (!st || !Array.isArray(st.battlefield)) continue;
+      if (!st.battlefield.some(c => c && c.temporaryControl)) continue;
+      const staying = [];
+      for (const c of st.battlefield) {
+        if (c && c.temporaryControl) {
+          const owner = (c.originalOwner !== undefined && c.originalOwner !== null) ? c.originalOwner : (pi === 0 ? 1 : 0);
+          const ret = { ...c, tapped: true };
+          delete ret.temporaryControl; delete ret.originalOwner;
+          if (ret.grantedHaste) {
+            ret.keywords = (ret.keywords || []).filter(k => (k || '').toLowerCase() !== 'haste');
+            delete ret.grantedHaste;
+          }
+          if (players[owner] && Array.isArray(players[owner].battlefield)) players[owner].battlefield.push(ret);
+        } else {
+          staying.push(c);
+        }
+      }
+      st.battlefield = staying;
+    }
+
+    // 2) Revert temporarily-animated lands (manlands) — mirrors client revertCreatureLands().
+    for (let pi = 0; pi < 2; pi++) {
+      const st = players[pi];
+      if (!st || !Array.isArray(st.battlefield)) continue;
+      st.battlefield = st.battlefield.map(c => {
+        if (!c || !c.animatedCreature) return c;
+        const orig = c.animatedData || {};
+        return {
+          ...c, animatedCreature: false, animatedData: null,
+          power: undefined, toughness: undefined,
+          type_line: orig.originalTypeLine || c.type_line,
+          keywords: (c.keywords || []).filter(k => !((orig.keywords || []).includes(k))),
+        };
+      });
+    }
+
+    // 3) Per-board resets: zero manaPool (both); clear until-end-of-turn tempBuffs (both);
+    //    clear damagePrevented that was set for the NEW active player (both); and for the
+    //    NEW active player, untap + clear enteredThisTurn + reset per-turn flags + expire
+    //    "until your next turn" effects.
+    for (let pi = 0; pi < 2; pi++) {
+      const st = players[pi];
+      if (!st) continue;
+      st.manaPool = { W: 0, U: 0, B: 0, R: 0, G: 0, C: 0 };
+      if (Array.isArray(st.battlefield)) {
+        st.battlefield = st.battlefield.map(c => {
+          if (!c) return c;
+          const nc = { ...c };
+          if (nc.tempBuffs) nc.tempBuffs = null;
+          if (nc.damagePrevented === next) nc.damagePrevented = undefined;
+          if (pi === next) { nc.tapped = false; nc.enteredThisTurn = false; }
+          return nc;
+        });
+      }
+    }
+    const na = players[next];
+    if (na) {
+      na.landPlayedThisTurn = false;
+      na.dealtDamageThisTurn = false;
+      na.untilNextTurnEffects = [];
+    }
+
     this.gameState.timestamp = Date.now();
     return { ok: true, activePlayer: next, turnNumber: this.gameState.turnNumber, currentPhase: 'main1' };
   }

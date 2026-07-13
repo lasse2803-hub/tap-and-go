@@ -10434,7 +10434,6 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       }
     }
 
-    setEndOfTurnRespond(false);
     setInstantCasting(null);
     setSpellTargeting(null);
     setAbilityTargeting(null);
@@ -10442,6 +10441,30 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     setStackMinimized(false);
     setPutLandFromHand(null);
     SFX.passTurn();
+
+    // ── SERVER-AUTHORITATIVE turn transition (Etape 3.2b cutover) ──────────────
+    // The entire flip — activePlayer, turnCount, phase, endOfTurnRespond clear, AND
+    // the board cleanup (untap next, reset per-turn flags, clear temp buffs, return
+    // stolen cards, revert manlands) — happens atomically on the server via advanceTurn,
+    // then broadcasts to both clients. We must NOT flip activePlayer or touch either
+    // board locally here, because:
+    //   (1) this runs on the NON-active player ("Proceed"), and the old local flip rode
+    //       an eventually-consistent stateSync that could be dropped/rejected AFTER the
+    //       endOfTurnRespond flag was already cleared → both Pass buttons disabled → FROZEN;
+    //   (2) mutating both boards + broadcasting them clobbered the opponent's board with
+    //       this client's stale snapshot.
+    // We do NOT send a setEndOfTurnRespond(false) intent first — advanceTurn requires the
+    // flag to still be true to authorize the non-active player's "Proceed", and it clears
+    // the flag itself. We optimistically close the overlay locally (raw setter, no intent).
+    if (onlineMode && serverGameAction) {
+      _setEndOfTurnRespond(false);
+      serverGameAction({ type: 'advanceTurn' });
+      // The new active player's own turn-start draw runs client-side in the
+      // activePlayer-change effect (it needs the private library). Upkeep triggers too.
+      return;
+    }
+
+    setEndOfTurnRespond(false);
     revertCreatureLands(0);
     revertCreatureLands(1);
     // Return temporarily controlled cards (Claim the Firstborn, Act of Treason, etc.)

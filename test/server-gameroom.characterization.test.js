@@ -402,6 +402,77 @@ test('advanceTurn resets lostLifeThisTurn for both players', () => {
   assert.equal(room.gameState.players[1].lostLifeThisTurn, false);
 });
 
+// ── advanceTurn: server-authoritative board cleanup (Etape 3.2b) ──────────────
+// These behaviors moved off the (non-active) client into advanceTurn so the turn
+// transition no longer clobbers the opponent's board with a stale client snapshot.
+test('advanceTurn: untaps ONLY the new active player, clears enter/flags/manaPool', () => {
+  const room = startedRoom({ firstPlayer: 0 }); // active = 0, advanceTurn -> 1
+  room.processAction(0, { type: 'stateSync', state: { players: [
+    { battlefield: [{ id: 'a1', tapped: true }] },
+    { battlefield: [{ id: 'b1', tapped: true, enteredThisTurn: true }], landPlayedThisTurn: true, dealtDamageThisTurn: true, manaPool: { W: 0, U: 2, B: 0, R: 0, G: 0, C: 0 } },
+  ] } });
+  room.advanceTurn(0);
+  const p0 = room.gameState.players[0], p1 = room.gameState.players[1];
+  assert.equal(p1.battlefield[0].tapped, false, 'new active untapped');
+  assert.equal(p1.battlefield[0].enteredThisTurn, false, 'enteredThisTurn cleared');
+  assert.equal(p1.landPlayedThisTurn, false);
+  assert.equal(p1.dealtDamageThisTurn, false);
+  assert.deepEqual(p1.manaPool, { W: 0, U: 0, B: 0, R: 0, G: 0, C: 0 });
+  assert.equal(p0.battlefield[0].tapped, true, 'previous player NOT untapped');
+  assert.deepEqual(p0.manaPool, { W: 0, U: 0, B: 0, R: 0, G: 0, C: 0 }, 'prev manaPool also zeroed');
+});
+
+test('advanceTurn: clears tempBuffs on both boards + damagePrevented for the new active player', () => {
+  const room = startedRoom({ firstPlayer: 0 });
+  room.processAction(0, { type: 'stateSync', state: { players: [
+    { battlefield: [{ id: 'a1', tempBuffs: { power: 2 }, damagePrevented: 1 }] },
+    { battlefield: [{ id: 'b1', tempBuffs: { power: 1 }, damagePrevented: 1 }], untilNextTurnEffects: [{ type: 'sorcery_flash' }] },
+  ] } });
+  room.advanceTurn(0); // next = 1
+  const p0 = room.gameState.players[0], p1 = room.gameState.players[1];
+  assert.equal(p0.battlefield[0].tempBuffs, null);
+  assert.equal(p1.battlefield[0].tempBuffs, null);
+  assert.equal(p0.battlefield[0].damagePrevented, undefined, 'damagePrevented set for new active cleared on both');
+  assert.equal(p1.battlefield[0].damagePrevented, undefined);
+  assert.deepEqual(p1.untilNextTurnEffects, [], 'new active until-next-turn effects expire');
+});
+
+test('advanceTurn: returns temporarily-controlled cards to owner (tapped, haste stripped)', () => {
+  const room = startedRoom({ firstPlayer: 0 });
+  room.processAction(0, { type: 'stateSync', state: { players: [
+    { battlefield: [{ id: 'stolen', temporaryControl: true, originalOwner: 1, grantedHaste: true, keywords: ['Haste', 'Flying'], tapped: false }] },
+    { battlefield: [] },
+  ] } });
+  room.advanceTurn(0);
+  const p0 = room.gameState.players[0], p1 = room.gameState.players[1];
+  assert.ok(!p0.battlefield.some(c => c.id === 'stolen'), 'left controller board');
+  const ret = p1.battlefield.find(c => c.id === 'stolen');
+  assert.ok(ret, 'returned to owner');
+  assert.equal(ret.temporaryControl, undefined);
+  assert.equal(ret.originalOwner, undefined);
+  assert.equal(ret.grantedHaste, undefined);
+  assert.ok(!ret.keywords.includes('Haste'), 'granted haste removed');
+  assert.ok(ret.keywords.includes('Flying'), 'intrinsic keyword kept');
+  // Owner (player 1) is the NEW active player, so its untap step untaps the returned card.
+  assert.equal(ret.tapped, false, 'untapped by new active player untap step');
+});
+
+test('advanceTurn: reverts temporarily-animated manlands', () => {
+  const room = startedRoom({ firstPlayer: 1 }); // active = 1, advanceTurn(1) -> 0
+  room.processAction(1, { type: 'stateSync', state: { players: [
+    { battlefield: [{ id: 'ml', animatedCreature: true, animatedData: { originalTypeLine: 'Land', keywords: ['Haste'] }, power: '3', toughness: '3', type_line: 'Creature — Elemental', keywords: ['Haste', 'Vigilance'] }] },
+    { battlefield: [] },
+  ] } });
+  room.advanceTurn(1);
+  const ml = room.gameState.players[0].battlefield.find(c => c.id === 'ml');
+  assert.equal(ml.animatedCreature, false);
+  assert.equal(ml.animatedData, null);
+  assert.equal(ml.power, undefined);
+  assert.equal(ml.type_line, 'Land');
+  assert.ok(!ml.keywords.includes('Haste'), 'animation-granted keyword removed');
+  assert.ok(ml.keywords.includes('Vigilance'), 'other keyword kept');
+});
+
 test('changeLife with a negative delta sets lostLifeThisTurn', () => {
   const room = startedRoom({ firstPlayer: 0 });
   const r = room.changeLife(1, -4);
