@@ -478,7 +478,7 @@ class GameRoom {
    * Get state filtered for a specific player (information hiding)
    * Each player only sees their own hand and library count.
    */
-  getVisibleState(playerIndex) {
+  getVisibleState(playerIndex, opts = {}) {
     if (!this.gameState) return null;
 
     const state = JSON.parse(JSON.stringify(this.gameState)); // deep clone
@@ -498,6 +498,10 @@ class GameRoom {
     state.players[opponentIndex].library = [];
     // For viewer's own library: keep full data but also include count
     state.players[playerIndex].libraryCount = state.players[playerIndex].library.length;
+    // Broadcasts can omit the viewer's own library too (they own it locally and
+    // never read it from a stateUpdate) — it is by far the heaviest zone.
+    // requestState / join / resurrection responses keep it for full recovery.
+    if (opts.omitOwnLibrary) state.players[playerIndex].library = [];
 
     // Add viewer info
     state.viewerIndex = playerIndex;

@@ -277,13 +277,35 @@ io.on('connection', (socket) => {
     // Forward the full result (includes extra data like peeked hand, discarded card name)
     callback?.(result.ok ? result : { ok: true });
 
-    // Send updated filtered state to each player
+    // Which player slots did this action actually WRITE to? Clients use this to
+    // decide whether to accept the server's copy of their OWN zones. Without it,
+    // every opponent action delivered the server's (possibly stale) copy of your
+    // state and clobbered local changes you hadn't synced yet — e.g. a freshly
+    // resolved creature invisible to its own caster while the opponent saw it.
+    const touched = [false, false];
+    if (action.type === 'stateSync') {
+      touched[0] = !!(action.state && action.state.players && action.state.players[0]);
+      touched[1] = !!(action.state && action.state.players && action.state.players[1]);
+    } else if (['advanceTurn', 'stackPush', 'stackResolveTop', 'stackRemove', 'setEndOfTurnRespond'].includes(action.type)) {
+      touched[socket.playerIndex] = true; // game-level state only, no zone writes
+    } else {
+      // Zone-writing intents: sender + explicit target. returnToOwnerZone and any
+      // unknown/future intent conservatively marks both slots — accepting server
+      // state is safe when the server really wrote it.
+      touched[socket.playerIndex] = true;
+      if (typeof action.targetPlayerIndex === 'number') touched[action.targetPlayerIndex] = true;
+      if (action.type === 'returnToOwnerZone') { touched[0] = true; touched[1] = true; }
+    }
+
+    // Send updated filtered state to each player. omitOwnLibrary: your own
+    // library never changes from a broadcast (you own it locally), and at 50+
+    // full card objects it dominated the payload — a major latency source.
     for (const [idx, sid] of room.getSocketIds().entries()) {
       const playerSocket = io.sockets.sockets.get(sid);
       if (playerSocket) {
         playerSocket.emit('stateUpdate', {
-          state: room.getVisibleState(idx),
-          lastAction: { by: socket.playerIndex, type: action.type }
+          state: room.getVisibleState(idx, { omitOwnLibrary: true }),
+          lastAction: { by: socket.playerIndex, type: action.type, touched }
         });
       }
     }

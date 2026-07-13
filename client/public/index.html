@@ -1066,6 +1066,39 @@ const getCardImage = (card, size = 'normal') => {
   return null;
 };
 
+// Strip a raw Scryfall response down to the fields the game actually uses.
+// A full Scryfall card is 3-8KB of JSON (prices, legalities, purchase URIs,
+// platform IDs...) and every card travels in every state sync — trimming at
+// game start cuts network payloads and server clone cost by roughly 80%,
+// which was a major source of online lag.
+const _sanitizeImageUris = (iu) => iu ? {
+  small: iu.small, normal: iu.normal, large: iu.large, art_crop: iu.art_crop,
+} : undefined;
+const sanitizeCard = (raw) => {
+  if (!raw || typeof raw !== 'object') return raw;
+  const c = {
+    id: raw.id, oracle_id: raw.oracle_id, name: raw.name, layout: raw.layout,
+    mana_cost: raw.mana_cost, cmc: raw.cmc, type_line: raw.type_line,
+    oracle_text: raw.oracle_text, power: raw.power, toughness: raw.toughness,
+    loyalty: raw.loyalty, defense: raw.defense,
+    colors: raw.colors, color_identity: raw.color_identity,
+    keywords: raw.keywords, produced_mana: raw.produced_mana,
+    set: raw.set, set_name: raw.set_name, collector_number: raw.collector_number,
+    rarity: raw.rarity, flavor_text: raw.flavor_text, lang: raw.lang,
+    scryfall_uri: raw.scryfall_uri, prints_search_uri: raw.prints_search_uri,
+    image_uris: _sanitizeImageUris(raw.image_uris),
+    card_faces: raw.card_faces ? raw.card_faces.map(f => ({
+      name: f.name, mana_cost: f.mana_cost, type_line: f.type_line,
+      oracle_text: f.oracle_text, power: f.power, toughness: f.toughness,
+      loyalty: f.loyalty, defense: f.defense, colors: f.colors,
+      flavor_text: f.flavor_text, image_uris: _sanitizeImageUris(f.image_uris),
+    })) : undefined,
+  };
+  if (raw._reskin) c._reskin = raw._reskin;
+  Object.keys(c).forEach(k => c[k] === undefined && delete c[k]);
+  return c;
+};
+
 const getCardSmall = (card) => getCardImage(card, 'small');
 const getCardNormal = (card) => getCardImage(card, 'normal');
 
@@ -3669,7 +3702,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     const allCards = [];
     deckEntries.forEach(entry => {
       for (let i = 0; i < entry.qty; i++) {
-        const card = { ...entry.card, id: uid(), tapped: false, counters: {}, enteredThisTurn: false };
+        const card = { ...sanitizeCard(entry.card), id: uid(), tapped: false, counters: {}, enteredThisTurn: false };
         // Preserve reskin data
         if (entry.card._reskin) card._reskin = entry.card._reskin;
         // In Commander, the commander starts in command zone, not library
@@ -3687,7 +3720,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     const shuffled = shuffle(allCards);
     const cmdZone = [];
     if (isCommander && commanderCard) {
-      cmdZone.push({ ...commanderCard, id: uid(), tapped: false, counters: {}, enteredThisTurn: false });
+      cmdZone.push({ ...sanitizeCard(commanderCard), id: uid(), tapped: false, counters: {}, enteredThisTurn: false });
     }
     return {
       name,
@@ -4092,8 +4125,14 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     // Only process when the opponent caused the update (e.g. combat damage,
     // destroying our creatures). Skip our own echoes entirely — local state
     // is already correct and re-applying would cause unnecessary re-renders.
+    // ALSO require that the triggering action actually WROTE to our state
+    // (lastAction.touched from the server): without this, any opponent action
+    // (playing a land, a heartbeat) delivered the server's stale copy of our
+    // zones and clobbered local changes we hadn't synced yet — a freshly cast
+    // creature could vanish for its own controller while the opponent saw it.
+    const touchedMe = !onlineLastAction?.touched || !!onlineLastAction.touched[myIdx];
     const serverMe = onlineState.players?.[myIdx];
-    const opponentCausedUpdate = !isOwnEcho;
+    const opponentCausedUpdate = !isOwnEcho && touchedMe;
     if (serverMe && opponentCausedUpdate) {
       const setMe = myIdx === 0 ? setP1 : setP2;
       setMe(prev => {
@@ -4141,6 +4180,17 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
           next.graveyard = serverMe.graveyard || prev.graveyard;
           next.exile = serverMe.exile || prev.exile;
           next.commandZone = serverMe.commandZone || prev.commandZone;
+          // Server intents (mill, exile-top) move cards OUT of our library, but
+          // broadcasts don't carry our library — drop any local library card whose
+          // id now appears in another of our zones, otherwise our next heartbeat
+          // resurrects it in the server's library while it also sits in the GY.
+          const seenElsewhere = new Set([
+            ...(next.battlefield || []), ...(next.graveyard || []),
+            ...(next.exile || []), ...(next.commandZone || []),
+          ].map(c => c.id));
+          if ((prev.library || []).some(c => seenElsewhere.has(c.id))) {
+            next.library = prev.library.filter(c => !seenElsewhere.has(c.id));
+          }
           // Accept hand updates from server when opponent's action added cards
           // (e.g. bounce spells return our creatures to our hand via server).
           // Merge: add any cards the server has that we don't have locally.
@@ -6177,9 +6227,15 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
 
   const createToken = (pIdx, token, playSound = true, skipLog = false) => {
     if (playSound) SFX.tokenCreate();
+    // Tokens picked from Scryfall search carry the full raw response — trim
+    // them like deck cards. Custom in-game token objects (Relic Robber goblin,
+    // pwReminder tokens...) are passed through untouched: sanitizeCard's
+    // whitelist would drop their game-specific fields.
+    const isRawScryfall = !!(token.prices || token.legalities || token.related_uris || token.purchase_uris);
+    const slim = isRawScryfall ? { ...sanitizeCard(token), isToken: true } : token;
     setState(pIdx, prev => ({
       ...prev,
-      battlefield: [...prev.battlefield, { ...token, id: uid(), tapped: false, counters: {} }]
+      battlefield: [...prev.battlefield, { ...slim, id: uid(), tapped: false, counters: {} }]
     }));
     if (!skipLog) {
       const kw = (token.keywords || []).filter(Boolean);
