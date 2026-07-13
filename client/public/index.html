@@ -11873,15 +11873,15 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         </div>
       </div>
 
-      {/* ===== ACTION DOCK — Arena-style: primary turn actions on the right edge of
-           YOUR half of the board, close to the hand/battlefield where the mouse lives.
-           Same handlers/conditions as before (moved verbatim from the top bar). ===== */}
+      {/* ===== ACTION DOCK — Arena-style: primary turn actions in the BOTTOM-right
+           corner, where the mouse naturally lives (hand + own battlefield). Sits just
+           above the floating chat bubble. Same handlers/conditions as the old top bar. ===== */}
       {!gameOver && (() => {
         const isMyTurn = !onlineMode || activePlayer === onlinePlayerIndex;
         const passDisabled = !!combatState || endOfTurnRespond || (onlineMode && activePlayer !== onlinePlayerIndex);
         return (
           <div style={{
-            position: 'fixed', right: 12, top: '58%', zIndex: 500,
+            position: 'fixed', right: 12, bottom: 64, zIndex: 500,
             display: 'flex', flexDirection: 'column', alignItems: 'stretch', gap: 8, width: 132,
           }}>
             <div style={{
