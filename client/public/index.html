@@ -75,10 +75,12 @@
     border: 1px solid rgba(140,50,50,0.08);
   }
 
-  /* Lands — earthy green/brown, near player */
+  /* Lands — earthy green/brown, near player. Grouped left-of-center like Arena:
+     indented from the edge but not centered, so the middle stays free for combat */
   .bf-lands {
     background: linear-gradient(180deg, rgba(40,100,40,0.06), rgba(50,80,30,0.02));
     border: 1px solid rgba(50,100,50,0.08);
+    justify-content: flex-start; padding-left: 11%; gap: 6px;
   }
 
   /* Planeswalkers — sidebar column with golden tint */
@@ -379,28 +381,77 @@
     filter: blur(6px);
   }
 
-  /* ===== PHASE INDICATOR ===== */
-  .phase-strip {
-    display: flex; flex-direction: column; gap: 1px; padding: 4px 2px;
-    width: 28px; flex-shrink: 0; align-items: center; justify-content: center;
+  /* ===== PHASE INDICATOR — labeled pills in the action dock ===== */
+  .dock-phases { display: flex; gap: 3px; }
+  .dock-phase {
+    flex: 1; text-align: center; font-size: 9px; font-weight: 700; letter-spacing: 0.4px;
+    text-transform: uppercase; padding: 4px 0; border-radius: 6px;
+    color: rgba(255,255,255,0.32); background: rgba(15,13,25,0.85);
+    border: 1px solid rgba(255,255,255,0.08); backdrop-filter: blur(8px);
+    transition: all 0.2s ease; user-select: none;
   }
-  .phase-dot {
-    width: 6px; height: 6px; border-radius: 50%;
-    background: rgba(255,255,255,0.08); transition: all 0.3s ease;
-    cursor: pointer; position: relative;
+  .dock-phase.active {
+    color: rgba(230,190,90,0.95); border-color: rgba(200,170,60,0.45);
+    background: rgba(50,40,18,0.9); box-shadow: 0 0 10px rgba(200,170,60,0.18);
   }
-  .phase-dot:hover { background: rgba(255,255,255,0.2); }
-  .phase-dot.active-phase {
-    background: rgba(200,170,60,0.6);
-    box-shadow: 0 0 8px rgba(200,170,60,0.3);
-    width: 8px; height: 8px;
+  .dock-phase.clickable { cursor: pointer; }
+  .dock-phase.clickable:hover:not(.active) { color: rgba(255,255,255,0.7); border-color: rgba(255,255,255,0.25); }
+
+  /* ===== TURN CHANGE FEEDBACK — banner + edge glow ===== */
+  .turn-glow {
+    position: fixed; inset: 0; pointer-events: none; z-index: 490;
+    box-shadow: inset 0 0 90px rgba(200,170,60,0.12), inset 0 0 16px rgba(200,170,60,0.10);
   }
-  .phase-dot::after {
-    content: attr(data-label); position: absolute; right: 14px; top: 50%; transform: translateY(-50%);
-    font-size: 9px; color: rgba(255,255,255,0.5); white-space: nowrap;
-    opacity: 0; transition: opacity 0.15s; pointer-events: none;
+  .turn-banner {
+    position: fixed; top: 38%; left: 50%;
+    pointer-events: none; z-index: 800; text-align: center;
+    font-size: 32px; font-weight: 800; letter-spacing: 4px; text-transform: uppercase;
+    padding: 14px 46px; border-radius: 12px; white-space: nowrap;
+    animation: turnBanner 1.8s ease forwards;
   }
-  .phase-dot:hover::after { opacity: 1; }
+  .turn-banner.mine {
+    color: #e6be5a; background: rgba(20,16,8,0.82);
+    border: 1px solid rgba(200,170,60,0.4); text-shadow: 0 0 24px rgba(200,170,60,0.55);
+  }
+  .turn-banner.theirs {
+    color: rgba(255,255,255,0.75); background: rgba(12,12,20,0.82);
+    border: 1px solid rgba(255,255,255,0.15);
+  }
+  @keyframes turnBanner {
+    0% { opacity: 0; transform: translate(-50%, -50%) scale(0.85); }
+    12% { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+    80% { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+    100% { opacity: 0; transform: translate(-50%, -50%) scale(1.04); }
+  }
+
+  /* ===== ZONE PILES — library/graveyard/exile as physical piles (Arena-style:
+     own piles bottom-left of own half, opponent's top-right of theirs) ===== */
+  .bf-zones {
+    display: flex; flex-direction: column; gap: 10px; padding: 6px 6px;
+    width: 60px; flex-shrink: 0; align-items: center; justify-content: flex-end;
+  }
+  .player-area.top .bf-zones { justify-content: flex-start; }
+  .zone-pile { position: relative; display: flex; flex-direction: column; align-items: center; }
+  .zone-pile .zp-label {
+    font-size: 8px; font-weight: 700; letter-spacing: 0.6px; text-transform: uppercase;
+    color: rgba(255,255,255,0.32); margin-bottom: 2px; white-space: nowrap;
+  }
+  .zone-pile .zp-count {
+    position: absolute; bottom: -5px; right: -6px; z-index: 3;
+    min-width: 16px; padding: 1px 4px; border-radius: 8px; text-align: center;
+    font-size: 9px; font-weight: 800; color: #fff;
+    background: rgba(20,18,30,0.92); border: 1px solid rgba(255,255,255,0.2);
+  }
+  .zone-pile-clickable { cursor: pointer; }
+  .zone-pile-clickable:hover .zp-label { color: rgba(255,255,255,0.6); }
+  .zone-empty {
+    width: 40px; height: 56px; border-radius: 4px;
+    border: 1px dashed rgba(255,255,255,0.14); background: rgba(255,255,255,0.02);
+  }
+  .zp-stack {
+    border-radius: 4px;
+    box-shadow: 1.5px 1.5px 0 rgba(0,0,0,0.5), 3px 3px 0 rgba(0,0,0,0.35), 0 3px 10px rgba(0,0,0,0.4);
+  }
 
   /* ===== COMBAT MODE ===== */
   .combat-bar {
@@ -3073,10 +3124,15 @@ function ContextMenu({ x, y, card, actions, onClose }) {
 
   return (
     <div className="context-menu" style={menuStyle} ref={ref}>
-      <div style={{ padding: '4px 12px', fontSize: 11, opacity: 0.5 }}>{getDisplayName(card)}{card._reskin ? ` (${card.name})` : ''}</div>
-      <div className="sep" />
-      {actions.map((action, i) =>
+      {card && (
+        <>
+          <div style={{ padding: '4px 12px', fontSize: 11, opacity: 0.5 }}>{getDisplayName(card)}{card._reskin ? ` (${card.name})` : ''}</div>
+          <div className="sep" />
+        </>
+      )}
+      {(actions || []).map((action, i) =>
         action.sep ? <div key={i} className="sep" /> :
+        action.disabled ? <div key={i} style={{ padding: '4px 12px', fontSize: 11, opacity: 0.5 }}>{action.label}</div> :
         <button key={i} onClick={() => { action.fn(); onClose(); }}>{action.label}</button>
       )}
     </div>
@@ -9482,6 +9538,21 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
   const setTurnCount = syncSetter(_setTurnCount);
   const setCurrentPhase = syncSetter(_setCurrentPhase);
 
+  // Turn-change banner — purely local UI feedback, never synced. Fires whenever
+  // activePlayer flips after the game has started (skips the initial mount).
+  const [turnBanner, setTurnBanner] = useState(null); // { text, mine, key }
+  const bannerPrevActiveRef = useRef(null);
+  useEffect(() => {
+    const prev = bannerPrevActiveRef.current;
+    bannerPrevActiveRef.current = activePlayer;
+    if (prev === null || prev === activePlayer || gameOver) return;
+    const mine = !onlineMode || activePlayer === onlinePlayerIndex;
+    const name = getState(activePlayer)?.name;
+    setTurnBanner({ text: mine ? 'Your Turn' : `${name || 'Opponent'}'s Turn`, mine, key: Date.now() });
+    const t = setTimeout(() => setTurnBanner(null), 1900);
+    return () => clearTimeout(t);
+  }, [activePlayer, gameOver]);
+
   // Combat system state — versioned to prevent stale sync overwrites
   const [combatState, __setCombatState] = useState(null); // SYNCED
   const combatStateVersionRef = useRef(0);
@@ -11221,16 +11292,6 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     );
   };
 
-  const phases = [
-    { id: 'untap', label: 'Untap' },
-    { id: 'upkeep', label: 'Upkeep' },
-    { id: 'draw', label: 'Draw' },
-    { id: 'main1', label: 'Main 1' },
-    { id: 'combat', label: 'Combat' },
-    { id: 'main2', label: 'Main 2' },
-    { id: 'end', label: 'End' },
-  ];
-
   const PlayerArea = ({ pIdx, inverted }) => {
     const p = getState(pIdx);
     const isActive = activePlayer === pIdx;
@@ -11370,6 +11431,117 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         {renderPWSidebar()}
       </>
     );
+
+    /* ===== ZONE PILES — library/graveyard/exile as physical card piles.
+       Replaces the GY/Exile/Lib text buttons in the player bar. Own piles sit
+       bottom-LEFT of your half, the opponent's top-RIGHT (mirrored, like Arena).
+       All handlers are carried over 1:1 from the old buttons. ===== */
+    const openLibraryMenu = (e) => {
+      e.preventDefault();
+      // Online mode: disable library context menu for opponent
+      if (onlineMode && pIdx !== onlinePlayerIndex) return;
+      const actions = [];
+      actions.push({ label: `📚 Library (${p.library.length > 0 ? p.library.length : (p.libraryCount ?? 0)} cards)`, disabled: true });
+      actions.push({ sep: true });
+      actions.push({ label: '🔍 Search Library', fn: () => setShowLibrarySearch(pIdx) });
+      actions.push({ label: '👁 Look at Top 1', fn: () => setScryView({ pIdx, count: 1, mode: 'scry' }) });
+      actions.push({ label: '👁 Look at Top 3', fn: () => setScryView({ pIdx, count: 3, mode: 'scry' }) });
+      actions.push({ label: '👁 Look at Top X...', fn: () => {
+        const x = prompt('How many cards to look at?');
+        const n = parseInt(x);
+        if (!isNaN(n) && n > 0) setScryView({ pIdx, count: Math.min(n, p.library.length), mode: 'scry' });
+      }});
+      actions.push({ sep: true });
+      actions.push({ label: '🔥 Impulse Draw 2 (exile top 2, play them)', fn: () => {
+        const lib = p.library;
+        const count = Math.min(2, lib.length);
+        if (count === 0) { setCastError({ pIdx, message: 'Library is empty!' }); setTimeout(() => setCastError(null), 1500); return; }
+        const exiledCards = lib.slice(0, count).map(c => ({ ...c, exilePlayable: true, exilePlayableBy: pIdx, exilePlayableTurn: turnCount + 1 }));
+        setState(pIdx, prev => ({ ...prev, library: prev.library.slice(count), exile: [...prev.exile, ...exiledCards] }));
+        setCastError({ pIdx, message: `🔥 Exiled top ${count} — play from exile until end of next turn!` });
+        setTimeout(() => setCastError(null), 2500);
+      }});
+      actions.push({ label: '🔥 Impulse Draw X...', fn: () => {
+        const x = prompt('How many cards to exile and play?');
+        const n = parseInt(x);
+        if (isNaN(n) || n < 1) return;
+        const lib = p.library;
+        const count = Math.min(n, lib.length);
+        if (count === 0) { setCastError({ pIdx, message: 'Library is empty!' }); setTimeout(() => setCastError(null), 1500); return; }
+        const exiledCards = lib.slice(0, count).map(c => ({ ...c, exilePlayable: true, exilePlayableBy: pIdx, exilePlayableTurn: turnCount + 1 }));
+        setState(pIdx, prev => ({ ...prev, library: prev.library.slice(count), exile: [...prev.exile, ...exiledCards] }));
+        setCastError({ pIdx, message: `🔥 Exiled top ${count} — play from exile until end of next turn!` });
+        setTimeout(() => setCastError(null), 2500);
+      }});
+      actions.push({ sep: true });
+      actions.push({ label: '🤚 Draw 1', fn: () => drawCard(pIdx) });
+      actions.push({ label: '🤚 Draw X...', fn: () => {
+        const x = prompt('How many cards to draw?');
+        const n = parseInt(x);
+        if (!isNaN(n) && n > 0) { for (let di = 0; di < n; di++) drawCard(pIdx); }
+      }});
+      actions.push({ label: '💀 Mill 1', fn: () => millCards(pIdx, 1) });
+      actions.push({ label: '💀 Mill X...', fn: () => {
+        const x = prompt('How many cards to mill?');
+        const n = parseInt(x);
+        if (!isNaN(n) && n > 0) millCards(pIdx, n);
+      }});
+      actions.push({ sep: true });
+      actions.push({ label: '🔀 Shuffle Library', fn: () => {
+        setState(pIdx, prev => {
+          const shuffled = [...prev.library];
+          for (let i = shuffled.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+          }
+          return { ...prev, library: shuffled };
+        });
+        setCastError({ pIdx, message: '🔀 Library shuffled!' });
+        setTimeout(() => setCastError(null), 1500);
+      }});
+      setContextMenu({ x: e.clientX, y: e.clientY, actions });
+    };
+
+    const zonesColumn = (() => {
+      const libCount = p.library.length > 0 ? p.library.length : (p.libraryCount ?? 0);
+      const topGy = p.graveyard.length > 0 ? p.graveyard[p.graveyard.length - 1] : null;
+      const topEx = p.exile.length > 0 ? p.exile[p.exile.length - 1] : null;
+      const adventureInExile = p.exile.some(c => c.adventureCast);
+      const foretoldInExile = p.exile.some(c => c.isForetold);
+      const mineOnline = !(onlineMode && pIdx !== onlinePlayerIndex);
+      return (
+        <div className="bf-zones">
+          {/* Exile — only takes space once it holds cards */}
+          {p.exile.length > 0 && (
+            <div className="zone-pile zone-pile-clickable" title={`${p.name}'s Exile (${p.exile.length})`}
+              onClick={() => setViewingZone({ pIdx, zone: 'exile', title: `${p.name}'s Exile`, cards: p.exile })}>
+              <span className="zp-label">Exile{adventureInExile ? ' ✦' : ''}{foretoldInExile ? ' 🔮' : ''}</span>
+              <img className="zp-stack" alt="" src={getCardSmall(topEx)}
+                style={{ width: 40, height: 56, objectFit: 'cover', filter: 'grayscale(0.55) brightness(0.85)' }} />
+              <span className="zp-count">{p.exile.length}</span>
+            </div>
+          )}
+          {/* Graveyard — top card face up */}
+          <div className="zone-pile zone-pile-clickable" title={`${p.name}'s Graveyard (${p.graveyard.length})`}
+            onClick={() => setViewingZone({ pIdx, zone: 'graveyard', title: `${p.name}'s Graveyard`, cards: p.graveyard })}>
+            <span className="zp-label">GY</span>
+            {topGy
+              ? <img className="zp-stack" alt="" src={getCardSmall(topGy)} style={{ width: 40, height: 56, objectFit: 'cover' }} />
+              : <div className="zone-empty" />}
+            {p.graveyard.length > 0 && <span className="zp-count">{p.graveyard.length}</span>}
+          </div>
+          {/* Library — click = draw (own only), right-click = library menu */}
+          <div className={`zone-pile${mineOnline ? ' zone-pile-clickable' : ''}`}
+            title={`Library (${libCount})${mineOnline ? ' — click to draw' : ''}`}
+            onClick={() => { if (!mineOnline) return; drawCard(pIdx); }}
+            onContextMenu={openLibraryMenu}>
+            <span className="zp-label">Lib</span>
+            {libCount > 0 ? <div className="card-back zp-stack" style={{ width: 40, height: 56 }} /> : <div className="zone-empty" />}
+            <span className="zp-count">{libCount}</span>
+          </div>
+        </div>
+      );
+    })();
 
     const content = (
       <>
@@ -11560,26 +11732,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                 ⚡ Instant
               </button>
             )}
-            <span style={{ width: 1, height: 16, background: 'rgba(255,255,255,0.1)', margin: '0 2px' }} />
-            <button className="btn text-xs" style={p.graveyard.length > 0 ? { borderColor: 'rgba(180,80,180,0.3)', color: '#c080c0' } : {}}
-              onClick={() => setViewingZone({ pIdx, zone: 'graveyard', title: `${p.name}'s Graveyard`, cards: p.graveyard })}>
-              GY ({p.graveyard.length})
-            </button>
-            {(() => {
-              const adventureInExile = p.exile.some(c => c.adventureCast);
-              const foretoldInExile = p.exile.some(c => c.isForetold);
-              const hasCards = p.exile.length > 0;
-              return (
-                <button className="btn text-xs" style={adventureInExile
-                  ? { borderColor: 'rgba(60,160,220,0.5)', color: '#60b8e0', background: 'rgba(60,160,220,0.1)', boxShadow: '0 0 8px rgba(60,160,220,0.15)' }
-                  : foretoldInExile
-                  ? { borderColor: 'rgba(130,80,220,0.5)', color: '#b090e0', background: 'rgba(130,80,220,0.1)', boxShadow: '0 0 8px rgba(130,80,220,0.15)' }
-                  : hasCards ? { borderColor: 'rgba(180,180,60,0.3)', color: '#c0c060' } : {}}
-                  onClick={() => setViewingZone({ pIdx, zone: 'exile', title: `${p.name}'s Exile`, cards: p.exile })}>
-                  Exile ({p.exile.length}){adventureInExile ? ' ✦' : ''}{foretoldInExile ? ' 🔮' : ''}
-                </button>
-              );
-            })()}
+            {/* GY / Exile / Lib buttons replaced by the zone piles (bf-zones) on the battlefield */}
             {(p.emblems || []).length > 0 && (
               <button className="btn text-xs" style={{ borderColor: 'rgba(255,200,60,0.5)', color: '#f0d040', background: 'rgba(255,200,60,0.1)', boxShadow: '0 0 8px rgba(255,200,60,0.15)' }}
                 onClick={() => setViewingZone({ pIdx, zone: 'emblems', title: `${p.name}'s Emblems`, cards: (p.emblems || []).map(e => ({ id: e.id, name: e.name, oracle_text: e.text, type_line: 'Emblem', isEmblem: true, sourceImage: e.sourceImage })) })}>
@@ -11608,75 +11761,6 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                 Surveil
               </button>
             )}
-            <button className="btn text-xs" style={(!isActive || (onlineMode && pIdx !== onlinePlayerIndex)) ? { opacity: 0.5 } : {}}
-              onClick={() => { if (onlineMode && pIdx !== onlinePlayerIndex) return; drawCard(pIdx); }}
-              onContextMenu={(e) => {
-                e.preventDefault();
-                // Online mode: disable library context menu for opponent
-                if (onlineMode && pIdx !== onlinePlayerIndex) return;
-                const actions = [];
-                actions.push({ label: `📚 Library (${p.library.length > 0 ? p.library.length : (p.libraryCount ?? 0)} cards)`, disabled: true });
-                actions.push({ sep: true });
-                actions.push({ label: '🔍 Search Library', fn: () => setShowLibrarySearch(pIdx) });
-                actions.push({ label: '👁 Look at Top 1', fn: () => setScryView({ pIdx, count: 1, mode: 'scry' }) });
-                actions.push({ label: '👁 Look at Top 3', fn: () => setScryView({ pIdx, count: 3, mode: 'scry' }) });
-                actions.push({ label: '👁 Look at Top X...', fn: () => {
-                  const x = prompt('How many cards to look at?');
-                  const n = parseInt(x);
-                  if (!isNaN(n) && n > 0) setScryView({ pIdx, count: Math.min(n, p.library.length), mode: 'scry' });
-                }});
-                actions.push({ sep: true });
-                actions.push({ label: '🔥 Impulse Draw 2 (exile top 2, play them)', fn: () => {
-                  const lib = p.library;
-                  const count = Math.min(2, lib.length);
-                  if (count === 0) { setCastError({ pIdx, message: 'Library is empty!' }); setTimeout(() => setCastError(null), 1500); return; }
-                  const exiledCards = lib.slice(0, count).map(c => ({ ...c, exilePlayable: true, exilePlayableBy: pIdx, exilePlayableTurn: turnCount + 1 }));
-                  setState(pIdx, prev => ({ ...prev, library: prev.library.slice(count), exile: [...prev.exile, ...exiledCards] }));
-                  setCastError({ pIdx, message: `🔥 Exiled top ${count} — play from exile until end of next turn!` });
-                  setTimeout(() => setCastError(null), 2500);
-                }});
-                actions.push({ label: '🔥 Impulse Draw X...', fn: () => {
-                  const x = prompt('How many cards to exile and play?');
-                  const n = parseInt(x);
-                  if (isNaN(n) || n < 1) return;
-                  const lib = p.library;
-                  const count = Math.min(n, lib.length);
-                  if (count === 0) { setCastError({ pIdx, message: 'Library is empty!' }); setTimeout(() => setCastError(null), 1500); return; }
-                  const exiledCards = lib.slice(0, count).map(c => ({ ...c, exilePlayable: true, exilePlayableBy: pIdx, exilePlayableTurn: turnCount + 1 }));
-                  setState(pIdx, prev => ({ ...prev, library: prev.library.slice(count), exile: [...prev.exile, ...exiledCards] }));
-                  setCastError({ pIdx, message: `🔥 Exiled top ${count} — play from exile until end of next turn!` });
-                  setTimeout(() => setCastError(null), 2500);
-                }});
-                actions.push({ sep: true });
-                actions.push({ label: '🤚 Draw 1', fn: () => drawCard(pIdx) });
-                actions.push({ label: '🤚 Draw X...', fn: () => {
-                  const x = prompt('How many cards to draw?');
-                  const n = parseInt(x);
-                  if (!isNaN(n) && n > 0) { for (let di = 0; di < n; di++) drawCard(pIdx); }
-                }});
-                actions.push({ label: '💀 Mill 1', fn: () => millCards(pIdx, 1) });
-                actions.push({ label: '💀 Mill X...', fn: () => {
-                  const x = prompt('How many cards to mill?');
-                  const n = parseInt(x);
-                  if (!isNaN(n) && n > 0) millCards(pIdx, n);
-                }});
-                actions.push({ sep: true });
-                actions.push({ label: '🔀 Shuffle Library', fn: () => {
-                  setState(pIdx, prev => {
-                    const shuffled = [...prev.library];
-                    for (let i = shuffled.length - 1; i > 0; i--) {
-                      const j = Math.floor(Math.random() * (i + 1));
-                      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
-                    }
-                    return { ...prev, library: shuffled };
-                  });
-                  setCastError({ pIdx, message: '🔀 Library shuffled!' });
-                  setTimeout(() => setCastError(null), 1500);
-                }});
-                setContextMenu({ x: e.clientX, y: e.clientY, items: actions });
-              }}>
-              Lib ({p.library.length > 0 ? p.library.length : (p.libraryCount ?? 0)})
-            </button>
           </div>
         </div>
 
@@ -11704,7 +11788,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         })()}
 
         <div className="battlefield" style={{ flex: 1, minHeight: 0 }}>
-          {battlefieldRows}
+          {inverted ? <>{battlefieldRows}{zonesColumn}</> : <>{zonesColumn}{battlefieldRows}</>}
         </div>
 
         <div className="hand-zone">
@@ -11873,6 +11957,14 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         </div>
       </div>
 
+      {/* Turn-change banner (transient) + subtle golden edge glow while it's your turn */}
+      {turnBanner && !gameOver && (
+        <div key={turnBanner.key} className={`turn-banner ${turnBanner.mine ? 'mine' : 'theirs'}`}>
+          {turnBanner.text}
+        </div>
+      )}
+      {onlineMode && !gameOver && activePlayer === onlinePlayerIndex && <div className="turn-glow" />}
+
       {/* ===== ACTION DOCK — Arena-style: primary turn actions in the BOTTOM-right
            corner, where the mouse naturally lives (hand + own battlefield). Sits just
            above the floating chat bubble. Same handlers/conditions as the old top bar. ===== */}
@@ -11892,6 +11984,37 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
             }}>
               Turn {turnCount}{onlineMode ? <><br />{isMyTurn ? 'Your turn' : "Opponent's turn"}</> : null}
             </div>
+            {(() => {
+              /* Phase pills — replaces the old near-invisible dot strip on the right
+                 edge. Active phase lights up for BOTH players; clicking jumps phase
+                 (or enters combat) and is only enabled on your own turn. */
+              const dockPhases = [
+                { id: 'main1', label: 'M1', full: 'Main 1' },
+                { id: 'combat', label: '⚔', full: 'Combat' },
+                { id: 'main2', label: 'M2', full: 'Main 2' },
+                { id: 'end', label: 'End', full: 'End step' },
+              ];
+              const effPhase = combatState ? 'combat'
+                : (currentPhase === 'untap' || currentPhase === 'upkeep' || currentPhase === 'draw') ? 'main1'
+                : currentPhase;
+              const canClick = isMyTurn && !combatState && !endOfTurnRespond;
+              return (
+                <div className="dock-phases">
+                  {dockPhases.map(ph => (
+                    <div key={ph.id} title={ph.full}
+                      className={`dock-phase${effPhase === ph.id ? ' active' : ''}${canClick ? ' clickable' : ''}`}
+                      onClick={() => {
+                        if (!canClick) return;
+                        if (ph.id === 'combat') {
+                          if (currentPhase === 'main1' || currentPhase === 'combat') enterCombat();
+                        } else {
+                          setCurrentPhase(ph.id);
+                        }
+                      }}>{ph.label}</div>
+                  ))}
+                </div>
+              );
+            })()}
             {!combatState && (currentPhase === 'main1' || currentPhase === 'main2') && isMyTurn && (
               <button className="btn" style={{
                 padding: '9px 10px', fontSize: 13, fontWeight: 700,
@@ -12152,23 +12275,6 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
           )}
 
           <PlayerArea pIdx={bottomPlayerIdx} />
-        </div>
-
-        {/* Phase indicator — Arena-style vertical strip */}
-        <div className="phase-strip">
-          {phases.map(phase => (
-            <div key={phase.id}
-              className={`phase-dot ${currentPhase === phase.id ? 'active-phase' : ''}`}
-              data-label={phase.label}
-              onClick={() => {
-                if (phase.id === 'combat' && !combatState && (currentPhase === 'main1' || currentPhase === 'combat')) {
-                  enterCombat();
-                } else if (!combatState) {
-                  setCurrentPhase(phase.id);
-                }
-              }}
-            />
-          ))}
         </div>
       </div>
 
