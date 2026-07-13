@@ -402,28 +402,6 @@
     position: fixed; inset: 0; pointer-events: none; z-index: 490;
     box-shadow: inset 0 0 90px rgba(200,170,60,0.12), inset 0 0 16px rgba(200,170,60,0.10);
   }
-  .turn-banner {
-    position: fixed; top: 38%; left: 50%;
-    pointer-events: none; z-index: 800; text-align: center;
-    font-size: 32px; font-weight: 800; letter-spacing: 4px; text-transform: uppercase;
-    padding: 14px 46px; border-radius: 12px; white-space: nowrap;
-    animation: turnBanner 1.8s ease forwards;
-  }
-  .turn-banner.mine {
-    color: #e6be5a; background: rgba(20,16,8,0.82);
-    border: 1px solid rgba(200,170,60,0.4); text-shadow: 0 0 24px rgba(200,170,60,0.55);
-  }
-  .turn-banner.theirs {
-    color: rgba(255,255,255,0.75); background: rgba(12,12,20,0.82);
-    border: 1px solid rgba(255,255,255,0.15);
-  }
-  @keyframes turnBanner {
-    0% { opacity: 0; transform: translate(-50%, -50%) scale(0.85); }
-    12% { opacity: 1; transform: translate(-50%, -50%) scale(1); }
-    80% { opacity: 1; transform: translate(-50%, -50%) scale(1); }
-    100% { opacity: 0; transform: translate(-50%, -50%) scale(1.04); }
-  }
-
   /* ===== ZONE PILES — library/graveyard/exile as physical piles (Arena-style:
      own piles bottom-left of own half, opponent's top-right of theirs).
      GY sits above the library; exile appears to the LEFT of the library. ===== */
@@ -9596,20 +9574,6 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
   const setTurnCount = syncSetter(_setTurnCount);
   const setCurrentPhase = syncSetter(_setCurrentPhase);
 
-  // Turn-change banner — purely local UI feedback, never synced. Fires whenever
-  // activePlayer flips after the game has started (skips the initial mount).
-  const [turnBanner, setTurnBanner] = useState(null); // { text, mine, key }
-  const bannerPrevActiveRef = useRef(null);
-  useEffect(() => {
-    const prev = bannerPrevActiveRef.current;
-    bannerPrevActiveRef.current = activePlayer;
-    if (prev === null || prev === activePlayer || gameOver) return;
-    const mine = !onlineMode || activePlayer === onlinePlayerIndex;
-    const name = getState(activePlayer)?.name;
-    setTurnBanner({ text: mine ? 'Your Turn' : `${name || 'Opponent'}'s Turn`, mine, key: Date.now() });
-    const t = setTimeout(() => setTurnBanner(null), 1900);
-    return () => clearTimeout(t);
-  }, [activePlayer, gameOver]);
 
   // Combat system state — versioned to prevent stale sync overwrites
   const [combatState, __setCombatState] = useState(null); // SYNCED
@@ -12017,12 +11981,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         </div>
       </div>
 
-      {/* Turn-change banner (transient) + subtle golden edge glow while it's your turn */}
-      {turnBanner && !gameOver && (
-        <div key={turnBanner.key} className={`turn-banner ${turnBanner.mine ? 'mine' : 'theirs'}`}>
-          {turnBanner.text}
-        </div>
-      )}
+      {/* Subtle golden edge glow while it's your turn */}
       {onlineMode && !gameOver && activePlayer === onlinePlayerIndex && <div className="turn-glow" />}
 
       {/* ===== ACTION DOCK — Arena-style: primary turn actions in the BOTTOM-right
