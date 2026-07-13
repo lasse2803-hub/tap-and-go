@@ -51,34 +51,8 @@
     box-shadow: 0 4px 16px rgba(0,0,0,0.6), 0 0 8px rgba(200,170,60,0.15);
   }
 
-  /* ===== CARD MOTION (GPU-only: transform/opacity — no layout, no filters) =====
-     Smooth tap/untap rotation + hover lift + combat-glow fade, and a one-shot
-     entry animation when a card first mounts (draw → hand, play/token → board).
-     Entry is scoped to the play areas so it never touches the hover-preview clone
-     or the zone piles. Respects reduced-motion. */
-  .card-img, .token-card {
-    transition: transform 0.18s ease, box-shadow 0.2s ease, outline-color 0.2s ease;
-  }
-  @keyframes cardEnter {
-    from { opacity: 0; transform: translateY(10px) scale(0.9); }
-    to   { opacity: 1; transform: none; }
-  }
-  .hand-zone .card-wrapper,
-  .bf-row .card-wrapper,
-  .bf-planeswalkers .card-wrapper {
-    animation: cardEnter 0.22s ease-out both;
-  }
-  @keyframes lifePop {
-    0%   { transform: scale(1); }
-    30%  { transform: scale(1.32); }
-    100% { transform: scale(1); }
-  }
-  .life-value { display: inline-block; animation: lifePop 0.34s ease-out; }
-  @media (prefers-reduced-motion: reduce) {
-    .card-img, .token-card { transition: none; }
-    .hand-zone .card-wrapper, .bf-row .card-wrapper, .bf-planeswalkers .card-wrapper { animation: none; }
-    .life-value { animation: none; }
-  }
+  /* Card motion reverted: the mount-entry animation replayed on the frequent
+     stateSync re-renders and made cards visibly hop around. Removed. */
 
   /* ===== ZONES ===== */
   .zone { min-height: 80px; border-radius: 6px; padding: 6px; display: flex; flex-wrap: wrap; gap: 4px; align-items: flex-start; overflow-y: auto; }
@@ -2971,7 +2945,7 @@ function CardDisplay({ card, size = 60, onClick, onContext, showPreview, slowPre
       {counterEntries.length > 0 && (
         <div className="card-counters">
           {counterEntries.filter(([type]) => type !== 'loyalty').map(([type, count]) => (
-            <span key={type} className="counter-badge">{type === 'lore' ? `Ch.${count}` : (count > 1 ? count : '') + (type === '+1/+1' ? '+1' : type === '-1/-1' ? '-1' : type.charAt(0).toUpperCase())}</span>
+            <span key={type} className="counter-badge">{type === 'lore' ? `Ch.${count}` : type === '+1/+1' ? `+${count}/+${count}` : type === '-1/-1' ? `-${count}/-${count}` : (count > 1 ? count + ' ' : '') + type.charAt(0).toUpperCase()}</span>
           ))}
         </div>
       )}
@@ -11663,7 +11637,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                 markDealtDamage(pIdx);
                 if (pIdx !== activePlayer) { setCastError({ pIdx: activePlayer, message: `−1 life to ${p.name}` }); setTimeout(() => setCastError(null), 1200); }
               }}>−</button>
-              <span key={p.life} className="life-value">{p.life}</span>
+              <span className="life-value">{p.life}</span>
               <button onClick={() => {
                 SFX.lifeGain();
                 updatePlayer(pIdx, { life: p.life + 1 });
