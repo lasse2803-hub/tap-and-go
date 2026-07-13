@@ -9691,10 +9691,19 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
   // ═══════════════════════════════════════════════════════════════
   // §7. COMBAT SYSTEM
   // ═══════════════════════════════════════════════════════════════
+  // "Beginning of combat" triggers (Luminarch Aspirant etc.) must fire AT MOST ONCE per
+  // turn. enterCombat can run multiple times in a turn (Combat → Cancel → Combat, or the
+  // phase pill), and it used to re-apply the +1/+1 counter each time — so a freshly-cast
+  // 1/1 could reach 3/3 on the turn it entered. Gate on turn+player.
+  const beginCombatFiredRef = useRef(null);
   const enterCombat = () => {
     setCurrentPhase('combat');
     setCombatState({ phase: 'attackers', attackers: [], attackTargets: {}, blocks: {}, selectedBlocker: null });
-    checkBeginCombatTriggers(activePlayer);
+    const combatKey = `${turnCount}-${activePlayer}`;
+    if (beginCombatFiredRef.current !== combatKey) {
+      beginCombatFiredRef.current = combatKey;
+      checkBeginCombatTriggers(activePlayer);
+    }
   };
 
   // "At the beginning of combat on your turn" triggers (Luminarch Aspirant, etc.).
