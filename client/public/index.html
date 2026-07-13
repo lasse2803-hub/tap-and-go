@@ -425,12 +425,14 @@
   }
 
   /* ===== ZONE PILES — library/graveyard/exile as physical piles (Arena-style:
-     own piles bottom-left of own half, opponent's top-right of theirs) ===== */
+     own piles bottom-left of own half, opponent's top-right of theirs).
+     GY sits above the library; exile appears to the LEFT of the library. ===== */
   .bf-zones {
     display: flex; flex-direction: column; gap: 10px; padding: 6px 6px;
-    width: 60px; flex-shrink: 0; align-items: center; justify-content: flex-end;
+    min-width: 60px; flex-shrink: 0; align-items: center; justify-content: flex-end;
   }
   .player-area.top .bf-zones { justify-content: flex-start; }
+  .bf-zones .zp-row { display: flex; flex-direction: row; gap: 10px; align-items: flex-end; }
   .zone-pile { position: relative; display: flex; flex-direction: column; align-items: center; }
   .zone-pile .zp-label {
     font-size: 8px; font-weight: 700; letter-spacing: 0.6px; text-transform: uppercase;
@@ -11567,17 +11569,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       const mineOnline = !(onlineMode && pIdx !== onlinePlayerIndex);
       return (
         <div className="bf-zones">
-          {/* Exile — only takes space once it holds cards */}
-          {p.exile.length > 0 && (
-            <div className="zone-pile zone-pile-clickable" title={`${p.name}'s Exile (${p.exile.length})`}
-              onClick={() => setViewingZone({ pIdx, zone: 'exile', title: `${p.name}'s Exile`, cards: p.exile })}>
-              <span className="zp-label">Exile{adventureInExile ? ' ✦' : ''}{foretoldInExile ? ' 🔮' : ''}</span>
-              <img className="zp-stack" alt="" src={getCardSmall(topEx)}
-                style={{ width: 40, height: 56, objectFit: 'cover', filter: 'grayscale(0.55) brightness(0.85)' }} />
-              <span className="zp-count">{p.exile.length}</span>
-            </div>
-          )}
-          {/* Graveyard — top card face up */}
+          {/* Graveyard — above the library, top card face up */}
           <div className="zone-pile zone-pile-clickable" title={`${p.name}'s Graveyard (${p.graveyard.length})`}
             onClick={() => setViewingZone({ pIdx, zone: 'graveyard', title: `${p.name}'s Graveyard`, cards: p.graveyard })}>
             <span className="zp-label">GY</span>
@@ -11586,14 +11578,26 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
               : <div className="zone-empty" />}
             {p.graveyard.length > 0 && <span className="zp-count">{p.graveyard.length}</span>}
           </div>
-          {/* Library — click = draw (own only), right-click = library menu */}
-          <div className={`zone-pile${mineOnline ? ' zone-pile-clickable' : ''}`}
-            title={`Library (${libCount})${mineOnline ? ' — click to draw' : ''}`}
-            onClick={() => { if (!mineOnline) return; drawCard(pIdx); }}
-            onContextMenu={openLibraryMenu}>
-            <span className="zp-label">Lib</span>
-            {libCount > 0 ? <div className="card-back zp-stack" style={{ width: 40, height: 56 }} /> : <div className="zone-empty" />}
-            <span className="zp-count">{libCount}</span>
+          <div className="zp-row">
+            {/* Exile — to the LEFT of the library, only takes space once it holds cards */}
+            {p.exile.length > 0 && (
+              <div className="zone-pile zone-pile-clickable" title={`${p.name}'s Exile (${p.exile.length})`}
+                onClick={() => setViewingZone({ pIdx, zone: 'exile', title: `${p.name}'s Exile`, cards: p.exile })}>
+                <span className="zp-label">Exile{adventureInExile ? ' ✦' : ''}{foretoldInExile ? ' 🔮' : ''}</span>
+                <img className="zp-stack" alt="" src={getCardSmall(topEx)}
+                  style={{ width: 40, height: 56, objectFit: 'cover', filter: 'grayscale(0.55) brightness(0.85)' }} />
+                <span className="zp-count">{p.exile.length}</span>
+              </div>
+            )}
+            {/* Library — click = draw (own only), right-click = library menu */}
+            <div className={`zone-pile${mineOnline ? ' zone-pile-clickable' : ''}`}
+              title={`Library (${libCount})${mineOnline ? ' — click to draw' : ''}`}
+              onClick={() => { if (!mineOnline) return; drawCard(pIdx); }}
+              onContextMenu={openLibraryMenu}>
+              <span className="zp-label">Lib</span>
+              {libCount > 0 ? <div className="card-back zp-stack" style={{ width: 40, height: 56 }} /> : <div className="zone-empty" />}
+              <span className="zp-count">{libCount}</span>
+            </div>
           </div>
         </div>
       );
