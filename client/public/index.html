@@ -11869,32 +11869,64 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         <div className="flex items-center gap-2">
           <span className="turn-badge">Turn {turnCount}{onlineMode ? ` — ${activePlayer === onlinePlayerIndex ? 'Your turn' : "Opponent's turn"}` : ''}</span>
           <span style={{ fontSize: 9, opacity: 0.25, cursor: 'default' }} title="Press Enter to open chat">💬</span>
-          {!combatState && (currentPhase === 'main1' || currentPhase === 'main2') && !(onlineMode && activePlayer !== onlinePlayerIndex) && (
-            <button className="btn text-xs" style={{ borderColor: 'rgba(220,60,40,0.3)', color: '#dc5040', ...((onlineMode && activePlayer !== onlinePlayerIndex) ? { opacity: 0.3, cursor: 'not-allowed' } : {}) }} disabled={onlineMode && activePlayer !== onlinePlayerIndex} onClick={() => { if (onlineMode && activePlayer !== onlinePlayerIndex) return; enterCombat(); }}>⚔ Combat</button>
-          )}
-          <button className="btn text-xs btn-gold" disabled={!!combatState || endOfTurnRespond || (onlineMode && activePlayer !== onlinePlayerIndex)} style={(combatState || endOfTurnRespond || (onlineMode && activePlayer !== onlinePlayerIndex)) ? { opacity: 0.3, cursor: 'not-allowed' } : {}} onClick={() => {
-            if (combatState || endOfTurnRespond) return;
-            if (onlineMode && activePlayer !== onlinePlayerIndex) return;
-            // Cleanup step: the active player must discard to hand size BEFORE
-            // handing priority to the opponent. The opponent runs executePassTurn
-            // (via "Proceed"), where the discard check can't fire for us — so it
-            // must happen here, on the active player's own client. After discard,
-            // continue to the respond window (then: 'respondWindow').
-            if (getState(activePlayer).hand.length > MAX_HAND_SIZE && !discardChoice) {
-              setDiscardChoice({ pIdx: activePlayer, selected: [], then: 'respondWindow' });
-              return;
-            }
-            // Show end-of-turn priority window so opponent can respond with instants
-            // Safety: clear any lingering overlay state that would block the end-of-turn overlay
-            setSpellTargeting(null);
-            setModalChoice(null);
-            setInstantCasting(null);
-            setEndOfTurnRespond(true);
-            setCurrentPhase('end');
-          }}>Pass Turn</button>
           <button className="btn btn-danger text-xs" onClick={onExit}>Exit</button>
         </div>
       </div>
+
+      {/* ===== ACTION DOCK — Arena-style: primary turn actions on the right edge of
+           YOUR half of the board, close to the hand/battlefield where the mouse lives.
+           Same handlers/conditions as before (moved verbatim from the top bar). ===== */}
+      {!gameOver && (() => {
+        const isMyTurn = !onlineMode || activePlayer === onlinePlayerIndex;
+        const passDisabled = !!combatState || endOfTurnRespond || (onlineMode && activePlayer !== onlinePlayerIndex);
+        return (
+          <div style={{
+            position: 'fixed', right: 12, top: '58%', zIndex: 500,
+            display: 'flex', flexDirection: 'column', alignItems: 'stretch', gap: 8, width: 132,
+          }}>
+            <div style={{
+              textAlign: 'center', fontSize: 10, fontWeight: 700, letterSpacing: 1.2, textTransform: 'uppercase',
+              color: isMyTurn ? 'rgba(230,190,90,0.95)' : 'rgba(255,255,255,0.35)',
+              background: 'rgba(15,13,25,0.85)', border: `1px solid ${isMyTurn ? 'rgba(200,170,60,0.35)' : 'rgba(255,255,255,0.08)'}`,
+              borderRadius: 8, padding: '5px 8px', backdropFilter: 'blur(8px)',
+            }}>
+              Turn {turnCount}{onlineMode ? <><br />{isMyTurn ? 'Your turn' : "Opponent's turn"}</> : null}
+            </div>
+            {!combatState && (currentPhase === 'main1' || currentPhase === 'main2') && isMyTurn && (
+              <button className="btn" style={{
+                padding: '9px 10px', fontSize: 13, fontWeight: 700,
+                borderColor: 'rgba(220,60,40,0.4)', color: '#dc5040',
+                background: 'rgba(30,14,12,0.9)', backdropFilter: 'blur(8px)',
+              }} onClick={() => { if (onlineMode && activePlayer !== onlinePlayerIndex) return; enterCombat(); }}>⚔ Combat</button>
+            )}
+            <button className="btn btn-gold" disabled={passDisabled} style={{
+              padding: '13px 10px', fontSize: 14, fontWeight: 800, letterSpacing: 0.5,
+              background: passDisabled ? 'rgba(25,22,35,0.85)' : undefined,
+              backdropFilter: 'blur(8px)',
+              ...(passDisabled ? { opacity: 0.35, cursor: 'not-allowed' } : { boxShadow: '0 4px 18px rgba(200,170,60,0.25)' }),
+            }} onClick={() => {
+              if (combatState || endOfTurnRespond) return;
+              if (onlineMode && activePlayer !== onlinePlayerIndex) return;
+              // Cleanup step: the active player must discard to hand size BEFORE
+              // handing priority to the opponent. The opponent runs executePassTurn
+              // (via "Proceed"), where the discard check can't fire for us — so it
+              // must happen here, on the active player's own client. After discard,
+              // continue to the respond window (then: 'respondWindow').
+              if (getState(activePlayer).hand.length > MAX_HAND_SIZE && !discardChoice) {
+                setDiscardChoice({ pIdx: activePlayer, selected: [], then: 'respondWindow' });
+                return;
+              }
+              // Show end-of-turn priority window so opponent can respond with instants
+              // Safety: clear any lingering overlay state that would block the end-of-turn overlay
+              setSpellTargeting(null);
+              setModalChoice(null);
+              setInstantCasting(null);
+              setEndOfTurnRespond(true);
+              setCurrentPhase('end');
+            }}>Pass Turn</button>
+          </div>
+        );
+      })()}
 
       <div style={{ display: 'flex', flex: 1, minHeight: 0, marginBottom: instantCasting ? 190 : 0, transition: 'margin 0.15s ease' }}>
         <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'auto' }}>
