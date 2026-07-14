@@ -632,6 +632,20 @@ class GameRoom {
     if (!this.exileKeepalive) this.exileKeepalive = [{}, {}];
     if (cardId != null) this.exileKeepalive[playerIndex][cardId] = Date.now() + ms;
   }
+  // Hand is OWNER-authoritative, so a server-driven removal from a player's hand
+  // (discard: Thoughtseize/Duress) is undone by that player's own heartbeat re-sending
+  // its hand. A hand tombstone strips the discarded card from the owner's incoming hand;
+  // the paired graveyard keepalive stops their stale sync from dropping the card the
+  // server just put in their graveyard. (Bug: "Thoughtseize took Kari Zev but it stayed
+  // in hand" — the card bounced back and duplicated in the graveyard.)
+  _handTombstone(playerIndex, cardId, ms = 12000) {
+    if (!this.handTombstones) this.handTombstones = [{}, {}];
+    if (cardId != null) this.handTombstones[playerIndex][cardId] = Date.now() + ms;
+  }
+  _gyKeepalive(playerIndex, cardId, ms = 12000) {
+    if (!this.gyKeepalive) this.gyKeepalive = [{}, {}];
+    if (cardId != null) this.gyKeepalive[playerIndex][cardId] = Date.now() + ms;
+  }
 
   // ── Sync observability (Trin 1) ─────────────────────────────
   // A ground-truth event log of every processed action: the turn-spine scalars
@@ -795,7 +809,15 @@ class GameRoom {
           if (u.graveyard) {
             const now = Date.now();
             const gyTomb = (this.gyTombstones && this.gyTombstones[i]) || {};
-            s.graveyard = u.graveyard.filter(c => !(gyTomb[c.id] && gyTomb[c.id] > now));
+            const gyKeep = (this.gyKeepalive && this.gyKeepalive[i]) || {};
+            let gy = u.graveyard.filter(c => !(gyTomb[c.id] && gyTomb[c.id] > now));
+            for (const id in gyKeep) { // re-add server-discarded cards the owner's stale sync dropped
+              if (gyKeep[id] > now && !gy.some(c => c.id === id)) {
+                const existing = (s.graveyard || []).find(c => c.id === id);
+                if (existing) gy = [...gy, existing];
+              }
+            }
+            s.graveyard = gy;
           }
           if (u.exile) {
             const now = Date.now();
@@ -823,7 +845,13 @@ class GameRoom {
           // so accepting their sync would wipe the real library data.
           if (i === playerIndex) {
             if (u.library) s.library = u.library;
-            if (u.hand) s.hand = u.hand;
+            if (u.hand) {
+              // Strip cards the server just discarded from this hand (owner-authoritative),
+              // so a stale heartbeat can't re-add them until the owner's client reconciles.
+              const now = Date.now();
+              const handTomb = (this.handTombstones && this.handTombstones[i]) || {};
+              s.hand = u.hand.filter(c => !(handTomb[c.id] && handTomb[c.id] > now));
+            }
             if (u.landPlayedThisTurn !== undefined) s.landPlayedThisTurn = u.landPlayedThisTurn;
             if (u.commanderCastCount !== undefined) s.commanderCastCount = u.commanderCastCount;
           }
@@ -1043,6 +1071,10 @@ class GameRoom {
       if (cardIndex < 0 || cardIndex >= target.hand.length) return { error: 'Invalid card index' };
       const card = target.hand.splice(cardIndex, 1)[0];
       target.graveyard.push(card);
+      // Hand is owner-authoritative: without these, the target's own heartbeat re-adds
+      // the card to hand and drops it from the graveyard (the discarded card "comes back").
+      this._handTombstone(targetPlayerIndex, card.id);
+      this._gyKeepalive(targetPlayerIndex, card.id);
       this.gameState.timestamp = Date.now();
       return { ok: true, discardedCard: { name: card.name, id: card.id } };
     }

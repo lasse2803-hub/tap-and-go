@@ -795,5 +795,28 @@ test('sync ordering: full snapshots are marked _full, deltas are not', () => {
   assert.equal(room.getVisibleState(0, { omitOwnLibrary: true })._full, false, 'broadcast delta is not full');
 });
 
+// ── Discard survives the target's own heartbeat (Thoughtseize/Kari Zev bug) ───
+// Hand is owner-authoritative, so a server discard was undone by the target's own
+// heartbeat re-sending its hand (card "came back") and dropping the GY copy.
+test('discardFromHand: card stays discarded through the target own-hand/graveyard heartbeat', () => {
+  const room = startedRoom({ firstPlayer: 0 });
+  // P1's hand: a known card to discard + a filler.
+  room.processAction(1, { type: 'stateSync', state: { players: [null, { hand: [
+    { id: 'k1', name: 'Kari Zev, Skyship Raider' }, { id: 'f1', name: 'Forest' },
+  ] }] } });
+  // P0 (caster) discards P1's Kari Zev (index 0).
+  const r = room.processAction(0, { type: 'discardFromHand', targetPlayerIndex: 1, cardIndex: 0 });
+  assert.equal(r.ok, true);
+  assert.ok(!room.gameState.players[1].hand.some(c => c.id === 'k1'), 'removed from hand');
+  assert.ok(room.gameState.players[1].graveyard.some(c => c.id === 'k1'), 'moved to graveyard');
+  // P1's STALE heartbeat re-sends its pre-discard hand AND a graveyard without k1.
+  room.processAction(1, { type: 'stateSync', state: { players: [null, {
+    hand: [{ id: 'k1', name: 'Kari Zev, Skyship Raider' }, { id: 'f1', name: 'Forest' }],
+    graveyard: [],
+  }] } });
+  assert.ok(!room.gameState.players[1].hand.some(c => c.id === 'k1'), 'stale heartbeat did NOT re-add to hand');
+  assert.ok(room.gameState.players[1].graveyard.some(c => c.id === 'k1'), 'stale heartbeat did NOT drop from graveyard');
+});
+
 // Restore console after the suite (best-effort; node:test runs files in isolation).
 test.after?.(() => { console.log = origLog; console.warn = origWarn; });
