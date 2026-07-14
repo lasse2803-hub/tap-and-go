@@ -681,6 +681,34 @@ test('exileGraveyard: moves GY to exile; owner\'s stale sync cannot revert it', 
   assert.equal(gs.players[1].exile.filter(c => c.id === 'g1' || c.id === 'g2').length, 2, 'exile keepalives preserve the exiled cards');
 });
 
+test('exilePermanent: exiles an opponent permanent; owner stale sync cannot re-add it', () => {
+  const room = startedRoom({ firstPlayer: 0 });
+  const gs = room.gameState;
+  gs.players[0].battlefield = [{ id: 'troll', name: 'Old-Growth Troll', type_line: 'Creature — Troll' }];
+  // Player 1 (Skyclave controller) exiles player 0's Troll.
+  const r = room.processAction(1, { type: 'exilePermanent', targetPlayerIndex: 0, cardId: 'troll', exiledBy: { id: 'sky', name: 'Skyclave Apparition' } });
+  assert.ok(r.ok);
+  assert.ok(!gs.players[0].battlefield.some(c => c.id === 'troll'), 'left owner battlefield');
+  assert.ok(gs.players[0].exile.some(c => c.id === 'troll' && c.exiledBy), 'in owner exile, tagged');
+  // Owner's stale heartbeat re-asserts the Troll on their battlefield — must be rejected.
+  room.processAction(0, { type: 'stateSync', state: { players: [{ battlefield: [{ id: 'troll', name: 'Old-Growth Troll' }] }, null] } });
+  assert.ok(!gs.players[0].battlefield.some(c => c.id === 'troll'), 'bf tombstone rejects the stale re-add');
+});
+
+test('combatState: version-gated — a stale null does not clear an active combat', () => {
+  const room = startedRoom({ firstPlayer: 0 });
+  const gs = room.gameState;
+  // Active player enters combat (version 5).
+  room.processAction(0, { type: 'stateSync', state: { combatState: { phase: 'attackers', _v: 5 }, combatStateVersion: 5 } });
+  assert.ok(gs.combatState && gs.combatState.phase === 'attackers');
+  // Opponent's stale heartbeat carries combatState=null at an OLDER version — must be ignored.
+  room.processAction(1, { type: 'stateSync', state: { combatState: null, combatStateVersion: 3 } });
+  assert.ok(gs.combatState && gs.combatState.phase === 'attackers', 'stale null rejected — combat stays');
+  // A newer null (real "combat ended") is accepted.
+  room.processAction(0, { type: 'stateSync', state: { combatState: null, combatStateVersion: 6 } });
+  assert.equal(gs.combatState, null, 'newer null accepted');
+});
+
 // ── Room resurrection after server restart ────────────────────
 test('resurrect: room rebuilt from snapshot; opponent adopted; private zones restored via sync', () => {
   const RoomManager = require('../server/RoomManager.js');

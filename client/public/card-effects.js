@@ -97,7 +97,7 @@
   // ── Creature/permanent ETB triggers (reminder schema: {icon,text,actionType?}) ──
   // Seeded verbatim from parseETBEffects for preset permanents (zero behavior change).
   const ETB_EFFECTS = {
-    "Skyclave Apparition": [{"icon":"✦","text":"Create token(s)"}],
+    "Skyclave Apparition": [{"icon":"🚫","text":"Exile up to one target nonland, nontoken permanent an opponent controls with mana value 1+ (right-click it → Exile linked). Its owner gets an Illusion token only when Skyclave leaves."}],
     "Extraction Specialist": [{"icon":"⚡","text":"when this creature enters, return target creature card with mana value 2 or less"}],
     "Portable Hole": [{"icon":"🚫","text":"Exile target permanent"}],
     "Geralf's Messenger": [{"icon":"💀","text":"Target opponent loses 2 life"},{"icon":"⬆","text":"Put +1/+1 counter(s)"}],

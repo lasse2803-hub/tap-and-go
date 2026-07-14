@@ -760,14 +760,30 @@ class GameRoom {
           }
         }
       }
-      if (update.currentPhase) this.gameState.currentPhase = update.currentPhase;
+      // currentPhase: only the ACTIVE player advances the phase in play. Accepting it from
+      // the non-active player let their stale echo revert the phase (e.g. combat → main1).
+      // Still honored during mulligan, where the game-level phase isn't player-owned yet.
+      if (update.currentPhase && (playerIndex === this.gameState.activePlayer || this.gameState.mulliganPhase)) {
+        this.gameState.currentPhase = update.currentPhase;
+      }
       if (update.currentStep) this.gameState.currentStep = update.currentStep;
       // turnNumber: only accept if >= current (can only increase, prevents stale regression)
       if (update.turnNumber && update.turnNumber >= (this.gameState.turnNumber || 1)) {
         this.gameState.turnNumber = update.turnNumber;
       }
       if (update.stack) this.gameState.stack = update.stack;
-      if (update.combatState !== undefined) this.gameState.combatState = update.combatState;
+      if (update.combatState !== undefined) {
+        // Version-gate combat like the spell stack. Without this, a stale stateSync from
+        // the non-active player (combatState=null, sent before they received the active
+        // player's combat-entry) would clobber the server's combat and bounce both clients
+        // out of the combat step. null is gated too (its version rides top-level).
+        const inV = (update.combatState && update.combatState._v) || update.combatStateVersion || 0;
+        const curV = this.gameState.combatStateVersion || 0;
+        if (inV >= curV) {
+          this.gameState.combatState = update.combatState;
+          this.gameState.combatStateVersion = inV;
+        }
+      }
       if (update.priorityPlayer !== undefined) this.gameState.priorityPlayer = update.priorityPlayer;
 
       // Mulligan state — version-gated (like spellStack) so a stale sync from the
@@ -992,6 +1008,30 @@ class GameRoom {
       this.gameState.timestamp = Date.now();
       this.actionLog.push({ playerIndex, action: { type: 'exileGraveyard', targetPlayerIndex }, timestamp: Date.now() });
       return { ok: true, exiledCount: moved.length };
+    }
+
+    if (action.type === 'exilePermanent') {
+      // Move a battlefield permanent to its controller's exile (Skyclave Apparition,
+      // Portable Hole, any "exile target permanent"). Cross-player when you exile an
+      // OPPONENT's permanent — the owner is authoritative for their own board, so without
+      // a server write + tombstone their heartbeat re-adds the card (the "opponent still
+      // sees it on board after exile" bug). exiledBy links it for later return.
+      const { targetPlayerIndex, cardId, exiledBy } = action;
+      const target = this.gameState.players[targetPlayerIndex];
+      if (!target) return { error: 'Invalid target player' };
+      const idx = target.battlefield.findIndex(c => c.id === cardId);
+      if (idx === -1) return { error: 'Card not on battlefield' };
+      const card = { ...target.battlefield[idx], tapped: false, counters: {} };
+      delete card.tempBuffs; delete card.damagePrevented; delete card.temporaryControl;
+      delete card.originalOwner; delete card.grantedHaste;
+      if (card.animatedCreature) { delete card.animatedCreature; delete card.power; delete card.toughness; delete card.keywords; }
+      if (exiledBy) card.exiledBy = exiledBy;
+      target.battlefield.splice(idx, 1);
+      target.exile = [...(target.exile || []), card];
+      this._bfTombstone(targetPlayerIndex, cardId);
+      this._exileKeepalive(targetPlayerIndex, cardId);
+      this.gameState.timestamp = Date.now();
+      return { ok: true, cardName: card.name };
     }
 
     if (action.type === 'createBattlefieldToken') {

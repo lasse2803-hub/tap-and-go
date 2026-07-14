@@ -3957,6 +3957,7 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       currentPhase,
       turnNumber: turnCount,
       combatState: combatState,
+      combatStateVersion: combatStateVersionRef.current,
       mulliganPhase,
       mulliganPlayer,
       mulliganVersion: mulliganVersionRef.current,
@@ -4207,17 +4208,16 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
     if (onlineState.currentPhase) _setCurrentPhase(onlineState.currentPhase);
     if (onlineState.turnNumber) _setTurnCount(onlineState.turnNumber);
     if (onlineState.combatState !== undefined) {
-      // null means "combat ended" — always accept it.
-      // For non-null, only accept if incoming version is newer (prevents stale overwrites).
-      if (onlineState.combatState === null) {
-        _setCombatState(null);
-      } else {
-        const incomingVer = onlineState.combatState._v || 0;
-        const currentVer = combatStateVersionRef.current;
-        if (incomingVer >= currentVer) {
-          combatStateVersionRef.current = incomingVer;
-          _setCombatState(onlineState.combatState);
-        }
+      // Version-gate BOTH null and non-null. Previously null ("combat ended") was
+      // ALWAYS accepted — so the opponent's stale stateSync/heartbeat (combatState=null,
+      // sent before they'd received our combat-entry) wiped the active player's freshly
+      // entered combat a few seconds later, forcing a second Combat click. Now a stale
+      // null with an older version is rejected, just like a stale non-null.
+      const incomingVer = (onlineState.combatState && onlineState.combatState._v) || onlineState.combatStateVersion || 0;
+      const currentVer = combatStateVersionRef.current;
+      if (incomingVer >= currentVer) {
+        combatStateVersionRef.current = incomingVer;
+        _setCombatState(onlineState.combatState);
       }
     }
 
@@ -4581,6 +4581,19 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         // Ask server to return card to owner's zone
         serverGameAction({ type: 'returnToOwnerZone', controllerIndex: pIdx, cardId: card.id, destinationZone: to });
         addGameLog(card.originalOwner, '↩️', `${card.name} returned to owner`);
+        return;
+      }
+
+      // EXILE an OPPONENT's permanent (Skyclave/Portable Hole "no link", removal, etc.).
+      // Server-authoritative + tombstone so the owner's heartbeat can't re-add it. Raw
+      // setter for the optimistic removal (avoid marking the opponent dirty — same reason
+      // as bounce above).
+      if (isOpponent && from === 'battlefield' && to === 'exile') {
+        const rawSet = pIdx === 0 ? setP1 : setP2;
+        rawSet(prev => ({ ...prev, battlefield: (prev.battlefield || []).filter(c => c.id !== card.id) }));
+        serverGameAction({ type: 'exilePermanent', targetPlayerIndex: pIdx, cardId: card.id });
+        addGameLog(pIdx, '🚫', `${card.name} exiled`);
+        SFX.toExile();
         return;
       }
     }
@@ -6132,10 +6145,17 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
   const exileLinkedTo = (targetPIdx, cardToExile, sourcePIdx, sourcePermanent) => {
     // Move the card to exile with exiledBy tag
     SFX.toExile();
+    const exiledBy = { id: sourcePermanent.id, name: sourcePermanent.name };
+    // Exiling an OPPONENT's permanent (Skyclave Apparition, Portable Hole) is a cross-player
+    // board removal — route it through the server so the owner's heartbeat can't re-add it
+    // (previously the opponent kept seeing the card on their board after exile).
+    if (onlineMode && targetPIdx !== onlinePlayerIndex && serverGameAction) {
+      serverGameAction({ type: 'exilePermanent', targetPlayerIndex: targetPIdx, cardId: cardToExile.id, exiledBy });
+    }
     setState(targetPIdx, prev => ({
       ...prev,
       battlefield: prev.battlefield.filter(c => c.id !== cardToExile.id),
-      exile: [...prev.exile, { ...cardToExile, tapped: false, counters: {}, exiledBy: { id: sourcePermanent.id, name: sourcePermanent.name } }]
+      exile: [...prev.exile, { ...cardToExile, tapped: false, counters: {}, exiledBy }]
     }));
     // Tag the source permanent with what it exiled
     setState(sourcePIdx, prev => ({
@@ -6220,6 +6240,29 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       ...prev,
       battlefield: [...prev.battlefield, { ...slim, id: uid(), tapped: false, counters: {} }]
     }));
+    // If the token has no art, fetch it from Scryfall by name and patch it in, so generic
+    // tokens (e.g. a 1/1 Human) show a real card image instead of the plain text box.
+    if (slim.name && !slim.tokenImageSmall && !slim.image_uris && !(slim._reskin && slim._reskin.customTokenImage)) {
+      const tName = slim.name;
+      (async () => {
+        try {
+          const res = await fetch('https://api.scryfall.com/cards/search?q=' + encodeURIComponent('t:token ' + tName.toLowerCase()) + '&unique=art&order=released&dir=desc');
+          if (!res.ok) return;
+          const data = await res.json();
+          const match = (data.data || []).find(c => c.image_uris && (c.name || '').toLowerCase().includes(tName.toLowerCase()));
+          if (match && match.image_uris) {
+            setState(pIdx, prev => ({
+              ...prev,
+              battlefield: prev.battlefield.map(c =>
+                c.isToken && c.name === tName && !c.tokenImageSmall
+                  ? { ...c, image_uris: match.image_uris, tokenImageSmall: match.image_uris.small, tokenImageNormal: match.image_uris.normal }
+                  : c
+              )
+            }));
+          }
+        } catch(e) {}
+      })();
+    }
     if (!skipLog) {
       const kw = (token.keywords || []).filter(Boolean);
       addGameLog(pIdx, '✦', `${getState(pIdx).name} created ${token.power || '?'}/${token.toughness || '?'} ${token.name || 'Token'}${kw.length > 0 ? ' with ' + kw.join(', ') : ''}`);
@@ -10634,8 +10677,14 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
       setCombatState(prev => ({ ...prev, selectedBlocker: null }));
     };
 
-    // Unblockable: "can't be blocked"
-    if (attackerOracle.includes("can't be blocked") && !attackerOracle.includes("can't be blocked except")) {
+    // Fully unblockable: an UNCONDITIONAL "can't be blocked". Must NOT catch the
+    // conditional forms — "can't be blocked by <X>" (e.g. Steel Leaf Champion: "can't be
+    // blocked by creatures with power 2 or less") or "can't be blocked except by <X>" —
+    // those are handled by their specific checks below. Previously this blanket match made
+    // Steel Leaf Champion fully unblockable, so a legal blocker (power ≥ 3) was rejected.
+    if (attackerOracle.includes("can't be blocked")
+        && !attackerOracle.includes("can't be blocked except")
+        && !attackerOracle.includes("can't be blocked by")) {
       rejectBlock('unblockable'); return;
     }
 
