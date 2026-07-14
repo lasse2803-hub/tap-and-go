@@ -16079,6 +16079,8 @@ function useGameSocket() {
   const [playerId, setPlayerId] = useState(null);
   const joinCredsRef = useRef(null); // { roomId, nickname, playerId, playerIndex } — for re-joining on reconnect
   const lastGameStateRef = useRef(null); // last server state received — snapshot for room resurrection after a server restart
+  const recoverRoomRef = useRef(null); // recoverRoom(socket) — re-bind + resync after a drop; called on reconnect AND on a "Room not found" action error
+  const recoveringRef = useRef(false); // guard: don't fire overlapping recoveries when many queued actions fail at once
   const [error, setError] = useState(null);
   const [gameState, setGameState] = useState(null);
   const [lastAction, setLastAction] = useState(null);
@@ -16096,51 +16098,60 @@ function useGameSocket() {
     const serverUrl = window.location.origin;
     const s = io(serverUrl, { transports: ['websocket', 'polling'] });
 
+    // Re-bind this socket to its room and pull fresh state. Called after a socket
+    // reconnect AND after any gameAction fails with "Room not found" — a dropped tab
+    // (e.g. a backgrounded tab whose socket timed out) reconnects but the NEW server
+    // socket lost its room binding, so actions fail and the tab stays frozen/stale
+    // until it re-joins. Re-join first (server rebinds the seat by playerId), THEN
+    // pull state; if the room is gone entirely (server restart), resurrect it.
+    const recoverRoom = (sock) => {
+      const creds = joinCredsRef.current;
+      if (!creds || !creds.roomId || !creds.playerId) return;
+      if (recoveringRef.current) return; // already recovering — don't stack attempts
+      recoveringRef.current = true;
+      const done = () => { recoveringRef.current = false; };
+      const pullState = () => sock.emit('requestState', (res) => {
+        if (res?.ok && res.state) { lastGameStateRef.current = res.state; setGameState(res.state); }
+        done();
+      });
+      sock.emit('joinGame', { roomId: creds.roomId, nickname: creds.nickname, playerId: creds.playerId }, (res) => {
+        if (res?.ok) {
+          setPlayerIndex(res.playerIndex);
+          if (res.roomInfo) setRoomInfo(res.roomInfo);
+          setError(null);
+          pullState();
+          return;
+        }
+        // Room gone — the server restarted (deploy / idle spin-down) and lost its
+        // in-memory rooms. Resurrect it from our last received state snapshot; the
+        // opponent's private zones repopulate from their own sync when they rejoin.
+        const snap = lastGameStateRef.current;
+        if (snap) {
+          sock.emit('resurrectRoom', {
+            roomId: creds.roomId, nickname: creds.nickname, playerId: creds.playerId,
+            playerIndex: creds.playerIndex, snapshot: snap,
+          }, (rr) => {
+            if (rr?.ok) {
+              setPlayerIndex(rr.playerIndex);
+              if (rr.roomInfo) setRoomInfo(rr.roomInfo);
+              if (rr.state) { lastGameStateRef.current = rr.state; setGameState(rr.state); }
+              joinCredsRef.current = { ...creds, playerId: rr.playerId, playerIndex: rr.playerIndex };
+              setError(null);
+            } else {
+              setError(rr?.error || res?.error || 'Reconnect failed');
+            }
+            done();
+          });
+        } else { done(); }
+      });
+    };
+    recoverRoomRef.current = recoverRoom;
+
     s.on('connect', () => {
       setConnected(true);
       setError(null);
-      // On reconnect, the server-side socket is NEW and lost its room binding, so
-      // requestState alone fails ("Room not found"). Re-join first (the server rebinds
-      // the existing player slot by playerId), THEN pull fresh state.
-      if (s._reconnecting) {
-        const creds = joinCredsRef.current;
-        const pullState = () => s.emit('requestState', (res) => { if (res?.ok && res.state) { lastGameStateRef.current = res.state; setGameState(res.state); } });
-        if (creds && creds.roomId && creds.playerId) {
-          s.emit('joinGame', { roomId: creds.roomId, nickname: creds.nickname, playerId: creds.playerId }, (res) => {
-            if (res?.ok) {
-              setPlayerIndex(res.playerIndex);
-              if (res.roomInfo) setRoomInfo(res.roomInfo);
-              setError(null);
-              pullState();
-              return;
-            }
-            // Room gone — the server restarted (deploy / idle spin-down) and lost its
-            // in-memory rooms. Resurrect it from our last received state snapshot; the
-            // opponent's private zones repopulate from their own sync when they rejoin.
-            const snap = lastGameStateRef.current;
-            if (snap) {
-              s.emit('resurrectRoom', {
-                roomId: creds.roomId, nickname: creds.nickname, playerId: creds.playerId,
-                playerIndex: creds.playerIndex, snapshot: snap,
-              }, (rr) => {
-                if (rr?.ok) {
-                  setPlayerIndex(rr.playerIndex);
-                  if (rr.roomInfo) setRoomInfo(rr.roomInfo);
-                  if (rr.state) { lastGameStateRef.current = rr.state; setGameState(rr.state); }
-                  joinCredsRef.current = { ...creds, playerId: rr.playerId, playerIndex: rr.playerIndex };
-                  setError(null);
-                } else {
-                  setError(rr?.error || res?.error || 'Reconnect failed');
-                }
-              });
-            } else {
-              pullState();
-            }
-          });
-        } else {
-          pullState();
-        }
-      }
+      // On reconnect, re-bind to the room and resync before doing anything else.
+      if (s._reconnecting) recoverRoom(s);
       s._reconnecting = true; // After first connect, all future connects are reconnects
     });
     s.on('disconnect', () => setConnected(false));
@@ -16259,7 +16270,12 @@ function useGameSocket() {
   const sendAction = useCallback((action) => {
     if (!socket) return;
     socket.emit('gameAction', { action }, (res) => {
-      if (res?.error) console.warn('Action error:', res.error);
+      if (res?.error) {
+        console.warn('Action error:', res.error);
+        // A dropped/rebounced socket loses its room binding → every action fails with
+        // "Room not found" and the tab silently goes stale. Re-bind + resync instead.
+        if (res.error === 'Room not found') recoverRoomRef.current?.(socket);
+      }
     });
   }, [socket]);
 
@@ -16317,7 +16333,11 @@ function useGameSocket() {
     if (!socket) return Promise.resolve(null);
     return new Promise((resolve) => {
       socket.emit('gameAction', { action }, (res) => {
-        if (res?.error) { setError(res.error); resolve(null); return; }
+        if (res?.error) {
+          // Lost room binding after a drop → re-bind + resync so the tab isn't frozen.
+          if (res.error === 'Room not found') recoverRoomRef.current?.(socket);
+          setError(res.error); resolve(null); return;
+        }
         resolve(res);
       });
     });

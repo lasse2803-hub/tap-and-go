@@ -13,7 +13,11 @@ const RoomManager = require('./RoomManager');
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
-  pingTimeout: 60000,
+  // A backgrounded/throttled browser tab stops answering pings; at 60s it was
+  // being dropped mid-game (socket loses its room binding → actions fail with
+  // "Room not found" → tab freezes stale). Give throttled tabs much more slack;
+  // the client also re-binds + resyncs on reconnect and on a "Room not found".
+  pingTimeout: 180000,
   pingInterval: 25000
 });
 
