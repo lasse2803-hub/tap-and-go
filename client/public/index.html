@@ -4680,18 +4680,21 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
           }, 600);
         }
 
-        // Old-Growth Troll: when dies, exile as Aura on a Forest
-        const cardOracle = getOracleText(card);
-        if (/when.*dies.*exile.*enchant/i.test(cardOracle) && /old.growth troll/i.test(card.name || '')) {
+        // Old-Growth Troll: "When it dies, return it to the battlefield as an Aura enchanting
+        // a Forest you control; the Forest gains '{T}: Add {G}{G}' and '{1},{T}, Sacrifice this
+        // land: create a tapped 4/4 Troll Warrior with trample'." Name-gated — the previous
+        // oracle regex required the word "exile", which the card doesn't contain, so the
+        // trigger never fired.
+        if (/old-?growth troll/i.test(card.name || '')) {
           setTimeout(() => {
             const st = getState(pIdx);
-            const forests = st.battlefield.filter(c => (c.type_line || '').toLowerCase().includes('forest'));
+            const forests = st.battlefield.filter(c => (c.type_line || '').toLowerCase().includes('forest') && !c.trollAura);
             if (forests.length > 0) {
               const targetForest = forests.find(f => !f.tapped) || forests[0];
               const auraToken = {
                 id: uid(), name: getDisplayName(card) + ' (Aura)', isToken: true,
                 type_line: 'Enchantment — Aura',
-                oracle_text: 'Enchanted Forest has "Tap: Add {G}{G}{G}" and "Sacrifice: Create a 4/4 Troll Warrior with trample."',
+                oracle_text: 'Enchant Forest you control. Enchanted Forest has "{T}: Add {G}{G}" and "{1}, {T}, Sacrifice this land: Create a tapped 4/4 green Troll Warrior creature token with trample."',
                 power: null, toughness: null, colors: ['G'], keywords: [],
                 tapped: false, enteredThisTurn: true, counters: {},
                 attachedTo: targetForest.id, trollAura: true,
@@ -4703,9 +4706,11 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
                 exile: [...prev.exile, { ...card, trollExiled: true }],
                 battlefield: [...prev.battlefield, auraToken],
               }));
-              addGameLog(pIdx, '\u{1f333}', getDisplayName(card) + ' died: Exiled as Aura on ' + getDisplayName(targetForest));
-              setCastError({ pIdx, message: '\u{1f333} ' + getDisplayName(card) + ' \u2192 Aura on ' + getDisplayName(targetForest) });
+              addGameLog(pIdx, '\u{1f333}', getDisplayName(card) + ' died: returned as an Aura on ' + getDisplayName(targetForest));
+              setCastError({ pIdx, message: '\u{1f333} ' + getDisplayName(card) + ' \u2192 Aura enchanting ' + getDisplayName(targetForest) });
               setTimeout(() => setCastError(null), 5000);
+            } else {
+              addGameLog(pIdx, '\u{1f333}', getDisplayName(card) + ' died: no Forest to enchant \u2014 the Aura is put into the graveyard');
             }
           }, 800);
         }
@@ -5213,13 +5218,12 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
         // Multiple colors: player must choose — pass pain land flag
         setManaChoice({ pIdx, colors, cardId, isPainLand });
       }
-      // Troll Aura bonus: if this land has a trollAura attached, also add {G}{G}{G}
+      // Old-Growth Troll Aura: the enchanted Forest gains "{T}: Add {G}{G}". The basic
+      // Forest {G} was already added above, so the Aura adds ONE more → {G}{G} total.
       const trollAura = p.battlefield.find(c => c.trollAura && c.attachedTo === cardId);
       if (trollAura) {
         addManaToPool(pIdx, 'G');
-        addManaToPool(pIdx, 'G');
-        addManaToPool(pIdx, 'G');
-        addGameLog(pIdx, '\u{1f333}', getDisplayName(card) + ' (Troll Aura): Added {G}{G}{G}');
+        addGameLog(pIdx, '\u{1f333}', getDisplayName(card) + ' (Troll Aura): Forest taps for {G}{G}');
       }
       // Nissa, Who Shakes the World: "Whenever you tap a Forest for mana, add an
       // additional {G}." Matches the Forest SUBTYPE (incl. duals like Breeding Pool).
@@ -6686,25 +6690,27 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
             });
           }
         }
-        // Troll Aura sacrifice -> 4/4 Troll Warrior token
+        // Old-Growth Troll Aura: "{1}, {T}, Sacrifice this land: Create a tapped 4/4 green
+        // Troll Warrior with trample." Sacrifices the enchanted Forest (Aura falls off with
+        // it) and makes a TAPPED token. Manual model \u2014 pay the {1} yourself.
         if (card.trollAura) {
           actions.push({ sep: true });
           actions.push({
-            label: '\u{1f333} Sacrifice Aura \u2192 Create 4/4 Troll with Trample',
+            label: '\u{1f333} {1},{T},Sac Forest \u2192 tapped 4/4 Troll Warrior (trample)',
             fn: () => {
               const token = {
                 id: uid(), name: 'Troll Warrior Token', isToken: true,
                 type_line: 'Creature — Troll Warrior',
                 power: '4', toughness: '4',
                 colors: ['G'], keywords: ['trample'],
-                oracle_text: 'Trample', tapped: false, enteredThisTurn: true, counters: {},
+                oracle_text: 'Trample', tapped: true, enteredThisTurn: true, counters: {},
               };
               setState(pIdx, prev => ({
                 ...prev,
-                battlefield: prev.battlefield.filter(c => c.id !== card.id).concat([token]),
+                battlefield: prev.battlefield.filter(c => c.id !== card.id && c.id !== card.attachedTo).concat([token]),
               }));
-              addGameLog(pIdx, '\u{1f333}', 'Sacrificed Troll Aura: Created 4/4 Troll Warrior with trample');
-              setCastError({ pIdx, message: '\u{1f333} Created 4/4 Troll Warrior token with trample!' });
+              addGameLog(pIdx, '\u{1f333}', 'Sacrificed the enchanted Forest: created a tapped 4/4 Troll Warrior with trample');
+              setCastError({ pIdx, message: '\u{1f333} Tapped 4/4 Troll Warrior (trample) — pay {1}' });
               setTimeout(() => setCastError(null), 3000);
               SFX.playCreature();
             }
