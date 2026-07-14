@@ -656,8 +656,12 @@ class GameRoom {
   _snap() {
     const gs = this.gameState;
     if (!gs) return null;
+    const zc = (p) => p ? { h: (p.hand || []).length, l: (p.library || []).length, g: (p.graveyard || []).length, x: (p.exile || []).length, b: (p.battlefield || []).length } : null;
     return {
       ts: gs.timestamp,
+      // Zone counts per player — so the debug log shows zone deltas (e.g. exile +2,
+      // library -2 when Light Up the Stage resolves) instead of being blind to zones.
+      z: [zc(gs.players && gs.players[0]), zc(gs.players && gs.players[1])],
       active: gs.activePlayer,
       prio: gs.priorityPlayer,
       phase: gs.currentPhase,
