@@ -62,6 +62,21 @@ app.get('/api/room/:id', (req, res) => {
   res.json(room.getPublicInfo());
 });
 
+// Sync observability (Trin 1): dump a room's ground-truth event log — every
+// processed action with the turn-spine scalars before/after and the merge
+// accept/reject decisions. Diagnostic only; harmless to leave enabled.
+app.get('/api/room/:id/debug', (req, res) => {
+  const room = roomManager.getRoom(req.params.id);
+  if (!room) return res.status(404).json({ error: 'Room not found' });
+  res.setHeader('Cache-Control', NO_CACHE);
+  res.json({
+    roomId: room.id,
+    status: room.status,
+    now: room.gameState ? room.gameState.timestamp : null,
+    events: room.getEventLog(),
+  });
+});
+
 // Catch-all: serve index.html for client-side routing (e.g. /game/ABC123)
 app.get('/game/:roomId', (req, res) => {
   res.setHeader('Cache-Control', NO_CACHE);

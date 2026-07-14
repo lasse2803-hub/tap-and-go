@@ -4016,11 +4016,31 @@ function GameBoard({ players, decks, avatars, onExit, gameFormat, commanders: in
   // Online mode: receive state updates from server (opponent's actions)
   // IMPORTANT: Use raw _set* functions here to avoid triggering a broadcast loop!
   const onlineStateTimestampRef = useRef(0);
+  const onlineSeqRef = useRef(0);
   useEffect(() => {
     if (!onlineMode || !onlineState || !onlineState.timestamp) return;
-    // Skip if we've already processed this timestamp
-    if (onlineState.timestamp <= onlineStateTimestampRef.current) return;
-    onlineStateTimestampRef.current = onlineState.timestamp;
+    // Ordering / dedupe gate. Prefer the server's unique monotonic _seq: every
+    // broadcast gets a strictly-greater key, so two DISTINCT updates can never share
+    // a key and get silently dropped. (The old gate used Date.now() at millisecond
+    // resolution — two actions in the same ms collided, and the second was dropped;
+    // when that second update carried endOfTurnRespond:true the opponent never got
+    // the Proceed button and the turn froze. Reproduced + fixed here.)
+    if (onlineState._seq !== undefined) {
+      if (onlineState._full) {
+        // Full authoritative snapshot (game start / reconnect / post-restart
+        // resurrection) — always apply and re-baseline the ordering key.
+        onlineSeqRef.current = onlineState._seq;
+      } else if (onlineState._seq <= onlineSeqRef.current) {
+        return; // already processed this (or a newer) delta
+      } else {
+        onlineSeqRef.current = onlineState._seq;
+      }
+      onlineStateTimestampRef.current = onlineState.timestamp;
+    } else {
+      // Legacy fallback: server without _seq — keep the old timestamp gate.
+      if (onlineState.timestamp <= onlineStateTimestampRef.current) return;
+      onlineStateTimestampRef.current = onlineState.timestamp;
+    }
 
     const oppIdx = onlinePlayerIndex === 0 ? 1 : 0;
     const myIdx = onlinePlayerIndex;

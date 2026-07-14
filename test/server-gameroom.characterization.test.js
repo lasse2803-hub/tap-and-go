@@ -746,5 +746,54 @@ test('resurrect: room rebuilt from snapshot; opponent adopted; private zones res
   assert.equal(again, room2);
 });
 
+// ── Sync ordering key: the end-of-turn freeze root cause + fix ───────────────
+// The freeze: the client used the server's millisecond timestamp as a unique
+// ordering/dedupe key (`if (state.timestamp <= last) return`). Two actions in the
+// SAME millisecond got the SAME timestamp, so the client dropped the second one.
+// When that dropped update carried endOfTurnRespond:true, the opponent never got
+// the "Proceed" button and the turn froze. Fix: a strictly-increasing, unique
+// per-room _seq stamped on every visible-state build.
+
+test('sync ordering: two builds in the SAME millisecond get equal timestamp but DISTINCT _seq', () => {
+  const room = startedRoom();
+  // Two synchronous builds — same event-loop tick → identical Date.now() timestamp.
+  const a = room.getVisibleState(0, { omitOwnLibrary: true });
+  const b = room.getVisibleState(1, { omitOwnLibrary: true });
+  // Precondition of the old freeze: timestamps CAN be equal within one millisecond.
+  // (Not asserted equal — clock may tick — but the KEY must be safe either way.)
+  assert.equal(typeof a._seq, 'number');
+  assert.equal(typeof b._seq, 'number');
+  assert.ok(b._seq > a._seq, '_seq is strictly increasing across builds (never collides)');
+});
+
+test('sync ordering: _seq strictly increases across many builds, never repeats', () => {
+  const room = startedRoom();
+  const seqs = [];
+  for (let i = 0; i < 50; i++) seqs.push(room.getVisibleState(i % 2, { omitOwnLibrary: true })._seq);
+  for (let i = 1; i < seqs.length; i++) {
+    assert.ok(seqs[i] > seqs[i - 1], `build ${i} _seq (${seqs[i]}) > previous (${seqs[i - 1]})`);
+  }
+  assert.equal(new Set(seqs).size, seqs.length, 'all _seq values are unique');
+});
+
+test('sync ordering: two actions in the same tick both get delivered with distinct keys (freeze repro)', () => {
+  const room = startedRoom({ firstPlayer: 0 });
+  room.gameState.mulliganPhase = false;
+  // Simulate the live collision: B heartbeat stateSync, then A opens the respond
+  // window — processed back-to-back in the same tick (same ms).
+  room.processAction(1, { type: 'stateSync', state: { players: [null, { life: 20 }] } });
+  const beat = room.getVisibleState(1, { omitOwnLibrary: true }); // what B would receive first
+  room.processAction(0, { type: 'setEndOfTurnRespond', value: true });
+  const open = room.getVisibleState(1, { omitOwnLibrary: true }); // the eot=true broadcast
+  assert.equal(open.endOfTurnRespond, true, 'server holds the respond flag');
+  assert.ok(open._seq > beat._seq, 'the eot=true update has a strictly greater key → client cannot drop it');
+});
+
+test('sync ordering: full snapshots are marked _full, deltas are not', () => {
+  const room = startedRoom();
+  assert.equal(room.getVisibleState(0)._full, true, 'game-start / reconnect snapshot is full');
+  assert.equal(room.getVisibleState(0, { omitOwnLibrary: true })._full, false, 'broadcast delta is not full');
+});
+
 // Restore console after the suite (best-effort; node:test runs files in isolation).
 test.after?.(() => { console.log = origLog; console.warn = origWarn; });

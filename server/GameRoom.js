@@ -31,6 +31,13 @@ class GameRoom {
     this.actionLog = [];
     this.cleanupTimer = null;
 
+    // Monotonic broadcast sequence (sync ordering key). Every visible-state build
+    // stamps a strictly-increasing, globally-unique _seq. Clients order incoming
+    // updates by _seq with a strict '>' — unlike the old millisecond timestamp,
+    // two updates can NEVER share a key, so a distinct update is never silently
+    // dropped (the end-of-turn "Proceed" freeze root cause).
+    this.broadcastSeq = 0;
+
     // Match state (Best of 3)
     this.matchType = 'single'; // 'single' | 'bo3'
     this.matchScore = [0, 0];
@@ -336,11 +343,14 @@ class GameRoom {
     const isActive = playerIndex === this.gameState.activePlayer;
     const isEndOfTurnProceed = !!this.gameState.endOfTurnRespond && !isActive;
     if (!isActive && !isEndOfTurnProceed && !this.gameState.mulliganPhase) {
+      this._dec(`advanceTurn REJECT: P${playerIndex} not active (active=${this.gameState.activePlayer}), eot=${!!this.gameState.endOfTurnRespond}`);
       return { error: 'Not your turn' };
     }
     if (Array.isArray(this.gameState.spellStack) && this.gameState.spellStack.length > 0) {
+      this._dec(`advanceTurn REJECT: stack not empty (${this.gameState.spellStack.length})`);
       return { error: 'Resolve the stack before passing the turn' };
     }
+    this._dec(`advanceTurn OK: via ${isActive ? 'active' : isEndOfTurnProceed ? 'eot-proceed' : 'mulligan'}`);
     const prev = this.gameState.activePlayer;
     const next = prev === 0 ? 1 : 0;
     this.gameState.activePlayer = next;
@@ -581,6 +591,16 @@ class GameRoom {
     // Add viewer info
     state.viewerIndex = playerIndex;
 
+    // Unique, strictly-increasing ordering key for the client merge (see constructor).
+    // Incremented per build, so each client's received stream is strictly increasing
+    // and no two broadcasts ever collide — the fix for the dropped-update freeze.
+    state._seq = ++this.broadcastSeq;
+    // Mark FULL authoritative snapshots (game start / reconnect requestState /
+    // resurrection). Deltas set omitOwnLibrary. On a full snapshot the client
+    // re-baselines its _seq ref — which also recovers from a server restart, where
+    // broadcastSeq resets to a low value the client would otherwise reject as stale.
+    state._full = !opts.omitOwnLibrary;
+
     return state;
   }
 
@@ -613,7 +633,77 @@ class GameRoom {
     if (cardId != null) this.exileKeepalive[playerIndex][cardId] = Date.now() + ms;
   }
 
+  // ── Sync observability (Trin 1) ─────────────────────────────
+  // A ground-truth event log of every processed action: the turn-spine scalars
+  // before/after, plus the accept/reject decisions taken in the stateSync merge.
+  // This exists to DIAGNOSE the recurring end-of-turn/handoff freeze from captured
+  // data instead of screenshots. Read via getEventLog() / the /api/room/:id/debug
+  // endpoint; also mirrored to the server console when SYNC_DEBUG is set.
+  _snap() {
+    const gs = this.gameState;
+    if (!gs) return null;
+    return {
+      ts: gs.timestamp,
+      active: gs.activePlayer,
+      prio: gs.priorityPlayer,
+      phase: gs.currentPhase,
+      step: gs.currentStep,
+      turn: gs.turnNumber,
+      eot: !!gs.endOfTurnRespond,
+      eotV: gs.endOfTurnRespondVersion || 0,
+      stackLen: Array.isArray(gs.spellStack) ? gs.spellStack.length : 0,
+      stackV: gs.spellStackVersion || 0,
+      combat: gs.combatState ? (gs.combatState.step || gs.combatState.phase || 'active') : null,
+      combatV: gs.combatStateVersion || 0,
+      mull: !!gs.mulliganPhase,
+    };
+  }
+  _dec(msg) { if (Array.isArray(this._decisions)) this._decisions.push(msg); }
+  _logEvent(by, action, before, after, result) {
+    if (!this.eventLog) this.eventLog = [];
+    this._eventSeq = (this._eventSeq || 0) + 1;
+    const decisions = (this._decisions && this._decisions.length) ? this._decisions.slice() : undefined;
+    // For stateSync, record which top-level keys the client tried to push — the
+    // merge decisions above explain which were accepted vs. rejected and why.
+    const keys = (action && action.type === 'stateSync' && action.state)
+      ? Object.keys(action.state).filter(k => k !== 'players') : undefined;
+    const entry = {
+      seq: this._eventSeq,
+      t: Date.now() - this.createdAt,
+      by,
+      type: action && action.type,
+      before, after,
+      err: result && result.error ? result.error : undefined,
+      syncKeys: keys,
+      decisions,
+    };
+    this.eventLog.push(entry);
+    if (this.eventLog.length > 400) this.eventLog.shift();
+    if (process.env.SYNC_DEBUG) {
+      const b = before || {}, a = after || {};
+      const d = decisions ? ' | ' + decisions.join('; ') : '';
+      console.log(
+        `[SYNC ${this.id}] #${entry.seq} +${entry.t}ms P${by} ${entry.type} ` +
+        `active:${b.active}→${a.active} phase:${b.phase}→${a.phase} ` +
+        `eot:${b.eot}/v${b.eotV}→${a.eot}/v${a.eotV} ` +
+        `stack:${b.stackLen}/v${b.stackV}→${a.stackLen}/v${a.stackV} ` +
+        `combat:${b.combat}/v${b.combatV}→${a.combat}/v${a.combatV}` +
+        `${entry.err ? ' ERR:' + entry.err : ''}${d}`
+      );
+    }
+  }
+  getEventLog() { return this.eventLog || []; }
+
   processAction(playerIndex, action) {
+    if (!this.gameState) return { error: 'Game not started' };
+    const _before = this._snap();
+    this._decisions = [];
+    const _result = this._processActionInner(playerIndex, action);
+    this._logEvent(playerIndex, action, _before, this._snap(), _result);
+    return _result;
+  }
+
+  _processActionInner(playerIndex, action) {
     if (!this.gameState) return { error: 'Game not started' };
     this.lastActivity = Date.now();
 
@@ -654,6 +744,7 @@ class GameRoom {
       // version counter kills the cross-client drift that hid "Pass Turn" from the opponent.
       this.gameState.endOfTurnRespond = !!action.value;
       this.gameState.endOfTurnRespondVersion = (this.gameState.endOfTurnRespondVersion || 0) + 1;
+      this._dec(`setEndOfTurnRespond=${!!action.value} → v${this.gameState.endOfTurnRespondVersion}`);
       // When the non-active player clears the flag ("Proceed"), their activePlayer flip
       // arrives in a stateSync moments later — allow it via a short grace window.
       if (!action.value) this._eotClearedAt = Date.now();
@@ -753,18 +844,26 @@ class GameRoom {
         // first-player selection legitimately rides this path (no advanceTurn yet).
         if (this.gameState.mulliganPhase) {
           this.gameState.activePlayer = update.activePlayer;
+          this._dec(`stateSync activePlayer ${update.activePlayer} ACCEPTED (mulligan)`);
           // Reset end-of-turn state when the active player changes (new turn)
           if (this.gameState.endOfTurnRespond) {
             this.gameState.endOfTurnRespond = false;
             this.gameState.endOfTurnRespondVersion = (this.gameState.endOfTurnRespondVersion || 0) + 1;
           }
+        } else {
+          this._dec(`stateSync activePlayer ${update.activePlayer} IGNORED (in play; server-authoritative; cur=${this.gameState.activePlayer})`);
         }
       }
       // currentPhase: only the ACTIVE player advances the phase in play. Accepting it from
       // the non-active player let their stale echo revert the phase (e.g. combat → main1).
       // Still honored during mulligan, where the game-level phase isn't player-owned yet.
-      if (update.currentPhase && (playerIndex === this.gameState.activePlayer || this.gameState.mulliganPhase)) {
-        this.gameState.currentPhase = update.currentPhase;
+      if (update.currentPhase !== undefined && update.currentPhase !== this.gameState.currentPhase) {
+        if (playerIndex === this.gameState.activePlayer || this.gameState.mulliganPhase) {
+          this.gameState.currentPhase = update.currentPhase;
+          this._dec(`stateSync currentPhase ${update.currentPhase} ACCEPTED`);
+        } else {
+          this._dec(`stateSync currentPhase ${update.currentPhase} IGNORED (P${playerIndex} not active; cur=${this.gameState.currentPhase})`);
+        }
       }
       if (update.currentStep) this.gameState.currentStep = update.currentStep;
       // turnNumber: only accept if >= current (can only increase, prevents stale regression)
@@ -782,6 +881,9 @@ class GameRoom {
         if (inV >= curV) {
           this.gameState.combatState = update.combatState;
           this.gameState.combatStateVersion = inV;
+          this._dec(`stateSync combatState=${update.combatState ? 'set' : 'null'} ACCEPTED (v${inV}>=${curV})`);
+        } else {
+          this._dec(`stateSync combatState=${update.combatState ? 'set' : 'null'} REJECTED (v${inV}<${curV})`);
         }
       }
       if (update.priorityPlayer !== undefined) this.gameState.priorityPlayer = update.priorityPlayer;
