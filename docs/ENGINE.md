@@ -29,6 +29,19 @@ code, and whole games playable — and testable — without a browser.
 | `rng.js` | Seeded PRNG stored in the game state → every game replays exactly from its seed. |
 | `data/` | `cards.json` + `decks.json` (generated), `level3-decks.js` (source). |
 
+## Card legality rule
+
+**A card is allowed unless it is banned in the Historic format.** This is the owner's
+decision (2026-11-11) and the only legality criterion:
+
+- "Banned in Historic" → not allowed. Enforced by `npm run build:cards` (fails) and by
+  `test/engine.test.js`.
+- "Not legal in Historic" (the card was never released on MTG Arena) → **allowed**.
+- Other formats (Modern, Pioneer, …) are not consulted.
+
+Source: Scryfall's `legalities` per card, which tracks Wizards' official banned lists.
+Rebuild the card data after a Historic banned-list update to pick up changes.
+
 ## Model
 
 - **State** is plain JSON. `s.pending = { player, kind }` is the one decision the game

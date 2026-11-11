@@ -10,8 +10,11 @@
  *   server/engine/data/cards.json, trimmed to the fields the engine uses. The engine
  *   reads Scryfall's STRUCTURED fields (keywords, produced_mana, loyalty, ...) — it
  *   never guesses rules from oracle text.
- * - Legality: every card is checked against Modern (the project's bar: legal and not
- *   banned); offenders are reported and the script exits non-zero.
+ * - Legality (project rule, decided by the owner 2026-11-11): a card is allowed unless it
+ *   is BANNED in the Historic format. Nothing else counts — a card that is merely
+ *   "not legal" in Historic (never released on MTG Arena) is allowed, and other formats
+ *   (Modern, Pioneer, …) are not consulted. Banned cards are reported and the script
+ *   exits non-zero.
  *
  * Outputs are committed so tests and the simulator run offline and deterministically.
  */
@@ -118,7 +121,9 @@ async function fetchCollection(names) {
   const cards = {};
   for (const n of names) cards[n] = trimCard(found[n]);
 
-  const illegal = names.filter(n => cards[n].legalities.modern !== 'legal');
+  // Project legality rule: only "banned in Historic" disqualifies a card (see header).
+  const banned = names.filter(n => cards[n].legalities.historic === 'banned');
+  const notOnArena = names.filter(n => cards[n].legalities.historic === 'not_legal');
   const badCount = decks.filter(d => d.cards.reduce((s, c) => s + c.qty, 0) !== 60);
 
   fs.writeFileSync(path.join(OUT_DIR, 'cards.json'), JSON.stringify(cards, null, 1));
@@ -126,9 +131,10 @@ async function fetchCollection(names) {
   console.log(`Wrote cards.json (${names.length} cards) and decks.json (${decks.length} decks).`);
 
   if (badCount.length) console.error('Decks not 60 cards:', badCount.map(d => d.name));
-  if (illegal.length) {
-    console.error('NOT MODERN-LEGAL:', illegal.map(n => `${n} (${cards[n].legalities.modern})`));
+  if (notOnArena.length) console.log(`Info (allowed): ${notOnArena.length} card(s) not on Arena / not in Historic's pool: ${notOnArena.join(', ')}`);
+  if (banned.length) {
+    console.error('BANNED IN HISTORIC:', banned);
     process.exit(2);
   }
-  console.log('Legality: all cards Modern-legal and unbanned.');
+  console.log('Legality: no card is banned in Historic.');
 })().catch(e => { console.error(e); process.exit(1); });

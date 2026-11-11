@@ -16,14 +16,16 @@ const K = require('../server/engine/testkit');
 const life = (s, p) => s.players[p].life;
 
 // ─── Card data ───────────────────────────────────────────────────────────────
-test('card db: all decks are 60 cards, every card known and Modern-legal', () => {
+// Project legality rule (owner's decision): a card is allowed unless it is BANNED in
+// Historic. "Not legal" in Historic (not on Arena) is fine; other formats don't count.
+test('card db: all decks are 60 cards, every card known and not banned in Historic', () => {
   assert.ok(db.DECKS.length >= 15);
   for (const d of db.DECKS) {
     assert.equal(d.cards.reduce((n, c) => n + c.qty, 0), 60, d.name);
     for (const c of d.cards) {
       const def = db.CARDS[c.name];
       assert.ok(def, `${c.name} in cards.json`);
-      assert.equal(def.legalities.modern, 'legal', `${c.name} must be Modern-legal`);
+      assert.notEqual(def.legalities.historic, 'banned', `${c.name} is banned in Historic`);
     }
   }
 });

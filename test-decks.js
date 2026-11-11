@@ -103,7 +103,7 @@ const PRESET_DECKS = [
 2 Primal Might
 4 Collected Company (SPG) 72
 2 Garruk, Unleashed (M21) 284
-1 Fog
+1 Tangle
 21 Forest (THB) 254
 4 Lair of the Hydra`,
   },
@@ -360,7 +360,7 @@ function generateMockDecks() {
       const isLand = landNames.some(l => entry.name.includes(l));
       const isCreature = creatureKeywords.some(k => entry.name.includes(k));
       const isInstant = ['Bolt', 'Push', 'Fire', 'Strike', 'Absence', 'Hope',
-        'Counterspell', 'Disappear', 'Impulse', 'Fog', 'Might'].some(k => entry.name.includes(k));
+        'Counterspell', 'Disappear', 'Impulse', 'Tangle', 'Might'].some(k => entry.name.includes(k));
 
       for (let i = 0; i < entry.qty; i++) {
         expandedDeck.push({

@@ -3,7 +3,11 @@
  * they live here so the engine simulator covers them. Same list format as the
  * client presets. Final versions: Izzet without The Royal Scions (+4 Reckless
  * Charge), Mono-Green with Fanatic of Rhonas (not Karametra's Acolyte), Golgari
- * without Pernicious Deed (not Modern/Historic legal).
+ * without Pernicious Deed.
+ * Note: Karametra's Acolyte and Pernicious Deed were removed in July under an earlier
+ * legality reading. Under the current rule (only cards BANNED in Historic are excluded)
+ * both would be allowed — they are "not legal" in Historic, not banned. Restoring them
+ * is the owner's call.
  */
 module.exports = [
   {

@@ -1280,23 +1280,6 @@
    "pioneer": "legal"
   }
  },
- "Fog": {
-  "name": "Fog",
-  "layout": "normal",
-  "mana_cost": "{G}",
-  "cmc": 1,
-  "type_line": "Instant",
-  "oracle_text": "Prevent all combat damage that would be dealt this turn.",
-  "colors": [
-   "G"
-  ],
-  "keywords": [],
-  "legalities": {
-   "modern": "legal",
-   "historic": "legal",
-   "pioneer": "legal"
-  }
- },
  "Forest": {
   "name": "Forest",
   "layout": "normal",
@@ -3354,6 +3337,23 @@
    "modern": "legal",
    "historic": "legal",
    "pioneer": "legal"
+  }
+ },
+ "Tangle": {
+  "name": "Tangle",
+  "layout": "normal",
+  "mana_cost": "{1}{G}",
+  "cmc": 2,
+  "type_line": "Instant",
+  "oracle_text": "Prevent all combat damage that would be dealt this turn.\nEach attacking creature doesn't untap during its controller's next untap step.",
+  "colors": [
+   "G"
+  ],
+  "keywords": [],
+  "legalities": {
+   "modern": "not_legal",
+   "historic": "legal",
+   "pioneer": "not_legal"
   }
  },
  "Teferi, Hero of Dominaria": {
