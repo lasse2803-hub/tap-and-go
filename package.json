@@ -7,7 +7,9 @@
     "start": "node server/index.js",
     "dev": "node server/index.js",
     "test": "node --test \"test/**/*.test.js\"",
-    "test:integration": "node test-online.js && node test-decks.js"
+    "test:integration": "node test-online.js && node test-decks.js",
+    "sim": "node server/engine/sim.js",
+    "build:cards": "node scripts/build-card-db.js"
   },
   "dependencies": {
     "express": "^4.18.2",

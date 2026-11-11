@@ -1,0 +1,1079 @@
+[
+ {
+  "name": "White Knight",
+  "level": 1,
+  "description": "Aggressive white creatures with powerful removal",
+  "cards": [
+   {
+    "qty": 4,
+    "name": "Hopeful Initiate"
+   },
+   {
+    "qty": 4,
+    "name": "Thalia, Guardian of Thraben"
+   },
+   {
+    "qty": 4,
+    "name": "Luminarch Aspirant"
+   },
+   {
+    "qty": 3,
+    "name": "Adeline, Resplendent Cathar"
+   },
+   {
+    "qty": 3,
+    "name": "Accorder Paladin"
+   },
+   {
+    "qty": 3,
+    "name": "Skyclave Apparition"
+   },
+   {
+    "qty": 4,
+    "name": "Extraction Specialist"
+   },
+   {
+    "qty": 3,
+    "name": "Portable Hole"
+   },
+   {
+    "qty": 3,
+    "name": "Fateful Absence"
+   },
+   {
+    "qty": 2,
+    "name": "The Wandering Emperor"
+   },
+   {
+    "qty": 3,
+    "name": "Heliod, Sun-Crowned"
+   },
+   {
+    "qty": 20,
+    "name": "Plains"
+   },
+   {
+    "qty": 4,
+    "name": "Mutavault"
+   }
+  ]
+ },
+ {
+  "name": "Black Devotion",
+  "level": 1,
+  "description": "Drain life, removal, and devotion payoffs",
+  "cards": [
+   {
+    "qty": 4,
+    "name": "Tymaret, Chosen from Death"
+   },
+   {
+    "qty": 4,
+    "name": "Gifted Aetherborn"
+   },
+   {
+    "qty": 4,
+    "name": "Geralf's Messenger"
+   },
+   {
+    "qty": 1,
+    "name": "Phyrexian Obliterator"
+   },
+   {
+    "qty": 2,
+    "name": "Tenacious Underdog"
+   },
+   {
+    "qty": 4,
+    "name": "Gray Merchant of Asphodel"
+   },
+   {
+    "qty": 4,
+    "name": "Thoughtseize"
+   },
+   {
+    "qty": 4,
+    "name": "Fatal Push"
+   },
+   {
+    "qty": 2,
+    "name": "Vraska's Contempt"
+   },
+   {
+    "qty": 2,
+    "name": "Hero's Downfall"
+   },
+   {
+    "qty": 3,
+    "name": "Vampire Nighthawk"
+   },
+   {
+    "qty": 1,
+    "name": "Liliana, the Necromancer"
+   },
+   {
+    "qty": 21,
+    "name": "Swamp"
+   },
+   {
+    "qty": 4,
+    "name": "Castle Locthwain"
+   }
+  ]
+ },
+ {
+  "name": "Green Power",
+  "level": 1,
+  "description": "Ramp into massive creatures and overrun the opponent",
+  "cards": [
+   {
+    "qty": 4,
+    "name": "Llanowar Elves"
+   },
+   {
+    "qty": 4,
+    "name": "Elvish Mystic"
+   },
+   {
+    "qty": 4,
+    "name": "Steel Leaf Champion"
+   },
+   {
+    "qty": 4,
+    "name": "Old-Growth Troll"
+   },
+   {
+    "qty": 4,
+    "name": "Lovestruck Beast"
+   },
+   {
+    "qty": 4,
+    "name": "Werewolf Pack Leader"
+   },
+   {
+    "qty": 2,
+    "name": "Rhonas the Indomitable"
+   },
+   {
+    "qty": 2,
+    "name": "Primal Might"
+   },
+   {
+    "qty": 4,
+    "name": "Collected Company"
+   },
+   {
+    "qty": 2,
+    "name": "Garruk, Unleashed"
+   },
+   {
+    "qty": 1,
+    "name": "Fog"
+   },
+   {
+    "qty": 21,
+    "name": "Forest"
+   },
+   {
+    "qty": 4,
+    "name": "Lair of the Hydra"
+   }
+  ]
+ },
+ {
+  "name": "Red Aggro",
+  "level": 1,
+  "description": "Fast burn and hasty creatures — end the game quickly",
+  "cards": [
+   {
+    "qty": 4,
+    "name": "Monastery Swiftspear"
+   },
+   {
+    "qty": 4,
+    "name": "Soul-Scar Mage"
+   },
+   {
+    "qty": 2,
+    "name": "Kari Zev, Skyship Raider"
+   },
+   {
+    "qty": 2,
+    "name": "Viashino Pyromancer"
+   },
+   {
+    "qty": 4,
+    "name": "Bonecrusher Giant"
+   },
+   {
+    "qty": 4,
+    "name": "Phoenix Chick"
+   },
+   {
+    "qty": 4,
+    "name": "Play with Fire"
+   },
+   {
+    "qty": 4,
+    "name": "Lightning Strike"
+   },
+   {
+    "qty": 4,
+    "name": "Skewer the Critics"
+   },
+   {
+    "qty": 4,
+    "name": "Light Up the Stage"
+   },
+   {
+    "qty": 20,
+    "name": "Mountain"
+   },
+   {
+    "qty": 4,
+    "name": "Den of the Bugbear"
+   }
+  ]
+ },
+ {
+  "name": "Blue Control",
+  "level": 1,
+  "description": "Counter everything, draw cards, and finish with big threats",
+  "cards": [
+   {
+    "qty": 3,
+    "name": "Jace, Architect of Thought"
+   },
+   {
+    "qty": 4,
+    "name": "Consider"
+   },
+   {
+    "qty": 4,
+    "name": "Make Disappear"
+   },
+   {
+    "qty": 4,
+    "name": "Counterspell"
+   },
+   {
+    "qty": 3,
+    "name": "Memory Deluge"
+   },
+   {
+    "qty": 3,
+    "name": "Fading Hope"
+   },
+   {
+    "qty": 4,
+    "name": "Impulse"
+   },
+   {
+    "qty": 3,
+    "name": "Shark Typhoon"
+   },
+   {
+    "qty": 2,
+    "name": "Brazen Borrower"
+   },
+   {
+    "qty": 2,
+    "name": "Hullbreaker Horror"
+   },
+   {
+    "qty": 2,
+    "name": "Hall of Storm Giants"
+   },
+   {
+    "qty": 26,
+    "name": "Island"
+   }
+  ]
+ },
+ {
+  "name": "Azorius Control",
+  "level": 2,
+  "description": "White-blue control — counter, wipe the board, and win with planeswalkers",
+  "cards": [
+   {
+    "qty": 3,
+    "name": "Teferi, Hero of Dominaria"
+   },
+   {
+    "qty": 3,
+    "name": "Teferi, Time Raveler"
+   },
+   {
+    "qty": 2,
+    "name": "The Wandering Emperor"
+   },
+   {
+    "qty": 1,
+    "name": "Elspeth, Sun's Champion"
+   },
+   {
+    "qty": 4,
+    "name": "Shark Typhoon"
+   },
+   {
+    "qty": 2,
+    "name": "Absorb"
+   },
+   {
+    "qty": 4,
+    "name": "Dovin's Veto"
+   },
+   {
+    "qty": 4,
+    "name": "Supreme Verdict"
+   },
+   {
+    "qty": 1,
+    "name": "Farewell"
+   },
+   {
+    "qty": 2,
+    "name": "Memory Deluge"
+   },
+   {
+    "qty": 4,
+    "name": "Omen of the Sea"
+   },
+   {
+    "qty": 4,
+    "name": "Get Lost"
+   },
+   {
+    "qty": 1,
+    "name": "Elixir of Immortality"
+   },
+   {
+    "qty": 4,
+    "name": "Hallowed Fountain"
+   },
+   {
+    "qty": 3,
+    "name": "Glacial Fortress"
+   },
+   {
+    "qty": 2,
+    "name": "Deserted Beach"
+   },
+   {
+    "qty": 1,
+    "name": "Celestial Colonnade"
+   },
+   {
+    "qty": 2,
+    "name": "Adarkar Wastes"
+   },
+   {
+    "qty": 7,
+    "name": "Island"
+   },
+   {
+    "qty": 6,
+    "name": "Plains"
+   }
+  ]
+ },
+ {
+  "name": "Boros Burn",
+  "level": 2,
+  "description": "Red-white aggro — relentless burn spells, spectacle synergy, and Roiling Vortex pressure",
+  "cards": [
+   {
+    "qty": 4,
+    "name": "Relic Robber"
+   },
+   {
+    "qty": 4,
+    "name": "Bonecrusher Giant"
+   },
+   {
+    "qty": 4,
+    "name": "Lightning Helix"
+   },
+   {
+    "qty": 4,
+    "name": "Skewer the Critics"
+   },
+   {
+    "qty": 4,
+    "name": "Play with Fire"
+   },
+   {
+    "qty": 4,
+    "name": "Boros Charm"
+   },
+   {
+    "qty": 4,
+    "name": "Light Up the Stage"
+   },
+   {
+    "qty": 4,
+    "name": "Lava Spike"
+   },
+   {
+    "qty": 3,
+    "name": "Chandra, Torch of Defiance"
+   },
+   {
+    "qty": 3,
+    "name": "Roiling Vortex"
+   },
+   {
+    "qty": 4,
+    "name": "Sacred Foundry"
+   },
+   {
+    "qty": 4,
+    "name": "Inspiring Vantage"
+   },
+   {
+    "qty": 2,
+    "name": "Battlefield Forge"
+   },
+   {
+    "qty": 2,
+    "name": "Den of the Bugbear"
+   },
+   {
+    "qty": 7,
+    "name": "Mountain"
+   },
+   {
+    "qty": 3,
+    "name": "Plains"
+   }
+  ]
+ },
+ {
+  "name": "Simic Control (Pokemon)",
+  "level": 2,
+  "description": "Green-blue control — ramp into huge threats, fog, counters, and Kiora damage prevention",
+  "cards": [
+   {
+    "qty": 2,
+    "name": "Koma, Cosmos Serpent"
+   },
+   {
+    "qty": 4,
+    "name": "Elder Gargaroth"
+   },
+   {
+    "qty": 2,
+    "name": "Impulse"
+   },
+   {
+    "qty": 3,
+    "name": "Kiora, the Crashing Wave"
+   },
+   {
+    "qty": 4,
+    "name": "Growth Spiral"
+   },
+   {
+    "qty": 4,
+    "name": "Counterspell"
+   },
+   {
+    "qty": 4,
+    "name": "Decisive Denial"
+   },
+   {
+    "qty": 4,
+    "name": "Simic Charm"
+   },
+   {
+    "qty": 2,
+    "name": "Fog"
+   },
+   {
+    "qty": 2,
+    "name": "Cultivate"
+   },
+   {
+    "qty": 2,
+    "name": "Cyclonic Rift"
+   },
+   {
+    "qty": 1,
+    "name": "Elixir of Immortality"
+   },
+   {
+    "qty": 4,
+    "name": "Breeding Pool"
+   },
+   {
+    "qty": 4,
+    "name": "Hinterland Harbor"
+   },
+   {
+    "qty": 2,
+    "name": "Yavimaya Coast"
+   },
+   {
+    "qty": 9,
+    "name": "Forest"
+   },
+   {
+    "qty": 7,
+    "name": "Island"
+   }
+  ]
+ },
+ {
+  "name": "Selesnya Midrange (Star Wars)",
+  "level": 2,
+  "description": "Green-white creatures — efficient threats, instant-speed plays, and board wipe protection",
+  "cards": [
+   {
+    "qty": 4,
+    "name": "Birds of Paradise"
+   },
+   {
+    "qty": 4,
+    "name": "Voice of Resurgence"
+   },
+   {
+    "qty": 4,
+    "name": "Fleecemane Lion"
+   },
+   {
+    "qty": 4,
+    "name": "Loxodon Smiter"
+   },
+   {
+    "qty": 3,
+    "name": "Burrowguard Mentor"
+   },
+   {
+    "qty": 2,
+    "name": "Selfless Spirit"
+   },
+   {
+    "qty": 4,
+    "name": "Collected Company"
+   },
+   {
+    "qty": 3,
+    "name": "Advent of the Wurm"
+   },
+   {
+    "qty": 4,
+    "name": "Selesnya Charm"
+   },
+   {
+    "qty": 2,
+    "name": "Heroic Intervention"
+   },
+   {
+    "qty": 2,
+    "name": "Anthem of Champions"
+   },
+   {
+    "qty": 2,
+    "name": "Ajani, Adversary of Tyrants"
+   },
+   {
+    "qty": 4,
+    "name": "Temple Garden"
+   },
+   {
+    "qty": 4,
+    "name": "Sunpetal Grove"
+   },
+   {
+    "qty": 2,
+    "name": "Razorverge Thicket"
+   },
+   {
+    "qty": 2,
+    "name": "Gavony Township"
+   },
+   {
+    "qty": 5,
+    "name": "Forest"
+   },
+   {
+    "qty": 5,
+    "name": "Plains"
+   }
+  ]
+ },
+ {
+  "name": "Dimir Rogues",
+  "level": 2,
+  "description": "Blue-black tempo — flash rogues, mill synergy, and hand disruption",
+  "cards": [
+   {
+    "qty": 4,
+    "name": "Thieves' Guild Enforcer"
+   },
+   {
+    "qty": 4,
+    "name": "Soaring Thought-Thief"
+   },
+   {
+    "qty": 4,
+    "name": "Merfolk Windrobber"
+   },
+   {
+    "qty": 4,
+    "name": "Ruin Crab"
+   },
+   {
+    "qty": 2,
+    "name": "Rankle, Master of Pranks"
+   },
+   {
+    "qty": 2,
+    "name": "Brazen Borrower"
+   },
+   {
+    "qty": 4,
+    "name": "Thoughtseize"
+   },
+   {
+    "qty": 4,
+    "name": "Drown in the Loch"
+   },
+   {
+    "qty": 4,
+    "name": "Fatal Push"
+   },
+   {
+    "qty": 4,
+    "name": "Into the Story"
+   },
+   {
+    "qty": 2,
+    "name": "Heartless Act"
+   },
+   {
+    "qty": 4,
+    "name": "Watery Grave"
+   },
+   {
+    "qty": 4,
+    "name": "Drowned Catacomb"
+   },
+   {
+    "qty": 2,
+    "name": "Darkslick Shores"
+   },
+   {
+    "qty": 6,
+    "name": "Island"
+   },
+   {
+    "qty": 6,
+    "name": "Swamp"
+   }
+  ]
+ },
+ {
+  "name": "Rakdos Midrange (Pokemon)",
+  "level": 2,
+  "description": "Black-red value — efficient removal, discard, delirium synergy, and recursive threats",
+  "cards": [
+   {
+    "qty": 4,
+    "name": "Dragon's Rage Channeler"
+   },
+   {
+    "qty": 4,
+    "name": "Bloodtithe Harvester"
+   },
+   {
+    "qty": 3,
+    "name": "Bonecrusher Giant"
+   },
+   {
+    "qty": 4,
+    "name": "Seasoned Pyromancer"
+   },
+   {
+    "qty": 3,
+    "name": "Kroxa, Titan of Death's Hunger"
+   },
+   {
+    "qty": 4,
+    "name": "Fable of the Mirror-Breaker"
+   },
+   {
+    "qty": 4,
+    "name": "Thoughtseize"
+   },
+   {
+    "qty": 4,
+    "name": "Fatal Push"
+   },
+   {
+    "qty": 4,
+    "name": "Unholy Heat"
+   },
+   {
+    "qty": 2,
+    "name": "Kolaghan's Command"
+   },
+   {
+    "qty": 1,
+    "name": "The Meathook Massacre"
+   },
+   {
+    "qty": 4,
+    "name": "Blood Crypt"
+   },
+   {
+    "qty": 4,
+    "name": "Blightstep Pathway"
+   },
+   {
+    "qty": 4,
+    "name": "Haunted Ridge"
+   },
+   {
+    "qty": 2,
+    "name": "Den of the Bugbear"
+   },
+   {
+    "qty": 2,
+    "name": "Hive of the Eye Tyrant"
+   },
+   {
+    "qty": 1,
+    "name": "Takenuma, Abandoned Mire"
+   },
+   {
+    "qty": 1,
+    "name": "Sokenzan, Crucible of Defiance"
+   },
+   {
+    "qty": 1,
+    "name": "Castle Locthwain"
+   },
+   {
+    "qty": 3,
+    "name": "Swamp"
+   },
+   {
+    "qty": 1,
+    "name": "Mountain"
+   }
+  ]
+ },
+ {
+  "name": "Gruul Dinosaurs",
+  "level": 2,
+  "description": "Red-green ramp — tribal dinosaurs, fight removal, and massive hasty threats",
+  "cards": [
+   {
+    "qty": 4,
+    "name": "Llanowar Elves"
+   },
+   {
+    "qty": 4,
+    "name": "Otepec Huntmaster"
+   },
+   {
+    "qty": 4,
+    "name": "Rampaging Ferocidon"
+   },
+   {
+    "qty": 4,
+    "name": "Commune with Dinosaurs"
+   },
+   {
+    "qty": 2,
+    "name": "Thunderherd Migration"
+   },
+   {
+    "qty": 4,
+    "name": "Ripjaw Raptor"
+   },
+   {
+    "qty": 4,
+    "name": "Regisaur Alpha"
+   },
+   {
+    "qty": 3,
+    "name": "Carnage Tyrant"
+   },
+   {
+    "qty": 2,
+    "name": "Ghalta, Primal Hunger"
+   },
+   {
+    "qty": 2,
+    "name": "Shifting Ceratops"
+   },
+   {
+    "qty": 3,
+    "name": "Domri, Anarch of Bolas"
+   },
+   {
+    "qty": 4,
+    "name": "Stomping Ground"
+   },
+   {
+    "qty": 4,
+    "name": "Rootbound Crag"
+   },
+   {
+    "qty": 4,
+    "name": "Cragcrown Pathway"
+   },
+   {
+    "qty": 7,
+    "name": "Forest"
+   },
+   {
+    "qty": 5,
+    "name": "Mountain"
+   }
+  ]
+ },
+ {
+  "name": "Izzet Wizards",
+  "level": 3,
+  "description": "Dreadhorde Arcanist + Reckless Charge, burn and card flow",
+  "cards": [
+   {
+    "qty": 4,
+    "name": "Soul-Scar Mage"
+   },
+   {
+    "qty": 4,
+    "name": "Ledger Shredder"
+   },
+   {
+    "qty": 4,
+    "name": "Dreadhorde Arcanist"
+   },
+   {
+    "qty": 3,
+    "name": "Adeliz, the Cinder Wind"
+   },
+   {
+    "qty": 3,
+    "name": "Balmor, Battlemage Captain"
+   },
+   {
+    "qty": 4,
+    "name": "Wizard's Lightning"
+   },
+   {
+    "qty": 4,
+    "name": "Reckless Charge"
+   },
+   {
+    "qty": 4,
+    "name": "Consider"
+   },
+   {
+    "qty": 4,
+    "name": "Expressive Iteration"
+   },
+   {
+    "qty": 3,
+    "name": "Play with Fire"
+   },
+   {
+    "qty": 2,
+    "name": "Counterspell"
+   },
+   {
+    "qty": 4,
+    "name": "Steam Vents"
+   },
+   {
+    "qty": 4,
+    "name": "Spirebluff Canal"
+   },
+   {
+    "qty": 3,
+    "name": "Riverglide Pathway"
+   },
+   {
+    "qty": 1,
+    "name": "Otawara, Soaring City"
+   },
+   {
+    "qty": 5,
+    "name": "Island"
+   },
+   {
+    "qty": 4,
+    "name": "Mountain"
+   }
+  ]
+ },
+ {
+  "name": "Mono-Green Nissa",
+  "level": 3,
+  "description": "Devotion ramp into Nissa planeswalkers and Polukranos",
+  "cards": [
+   {
+    "qty": 4,
+    "name": "Llanowar Elves"
+   },
+   {
+    "qty": 4,
+    "name": "Elvish Mystic"
+   },
+   {
+    "qty": 3,
+    "name": "Fanatic of Rhonas"
+   },
+   {
+    "qty": 4,
+    "name": "Old-Growth Troll"
+   },
+   {
+    "qty": 3,
+    "name": "Polukranos Reborn"
+   },
+   {
+    "qty": 3,
+    "name": "Cavalier of Thorns"
+   },
+   {
+    "qty": 3,
+    "name": "Voracious Hydra"
+   },
+   {
+    "qty": 3,
+    "name": "Nissa, Who Shakes the World"
+   },
+   {
+    "qty": 2,
+    "name": "Nissa, Ascended Animist"
+   },
+   {
+    "qty": 1,
+    "name": "Nissa of Shadowed Boughs"
+   },
+   {
+    "qty": 1,
+    "name": "Ugin, the Ineffable"
+   },
+   {
+    "qty": 1,
+    "name": "Ugin, the Spirit Dragon"
+   },
+   {
+    "qty": 4,
+    "name": "Cultivate"
+   },
+   {
+    "qty": 4,
+    "name": "Nykthos, Shrine to Nyx"
+   },
+   {
+    "qty": 20,
+    "name": "Forest"
+   }
+  ]
+ },
+ {
+  "name": "Golgari Nissa Control",
+  "level": 3,
+  "description": "Ramp, removal and board wipes into Nissa and big finishers",
+  "cards": [
+   {
+    "qty": 4,
+    "name": "Llanowar Elves"
+   },
+   {
+    "qty": 4,
+    "name": "Elvish Mystic"
+   },
+   {
+    "qty": 3,
+    "name": "Binding the Old Gods"
+   },
+   {
+    "qty": 3,
+    "name": "Glissa Sunslayer"
+   },
+   {
+    "qty": 2,
+    "name": "Grist, the Hunger Tide"
+   },
+   {
+    "qty": 3,
+    "name": "Nissa, Who Shakes the World"
+   },
+   {
+    "qty": 2,
+    "name": "Nissa of Shadowed Boughs"
+   },
+   {
+    "qty": 1,
+    "name": "Nissa, Ascended Animist"
+   },
+   {
+    "qty": 2,
+    "name": "Grave Titan"
+   },
+   {
+    "qty": 1,
+    "name": "Massacre Wurm"
+   },
+   {
+    "qty": 2,
+    "name": "Night's Whisper"
+   },
+   {
+    "qty": 3,
+    "name": "Assassin's Trophy"
+   },
+   {
+    "qty": 2,
+    "name": "Infernal Grasp"
+   },
+   {
+    "qty": 2,
+    "name": "Damnation"
+   },
+   {
+    "qty": 2,
+    "name": "Extinction Event"
+   },
+   {
+    "qty": 4,
+    "name": "Overgrown Tomb"
+   },
+   {
+    "qty": 4,
+    "name": "Woodland Cemetery"
+   },
+   {
+    "qty": 3,
+    "name": "Darkbore Pathway"
+   },
+   {
+    "qty": 2,
+    "name": "Deathcap Glade"
+   },
+   {
+    "qty": 2,
+    "name": "Blooming Marsh"
+   },
+   {
+    "qty": 1,
+    "name": "Llanowar Wastes"
+   },
+   {
+    "qty": 4,
+    "name": "Forest"
+   },
+   {
+    "qty": 4,
+    "name": "Swamp"
+   }
+  ]
+ }
+]
