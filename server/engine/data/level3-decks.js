@@ -6,8 +6,7 @@
  * without Pernicious Deed.
  * Note: Karametra's Acolyte and Pernicious Deed were removed in July under an earlier
  * legality reading. Under the current rule (only cards BANNED in Historic are excluded)
- * both would be allowed — they are "not legal" in Historic, not banned. Restoring them
- * is the owner's call.
+ * both would be allowed, but the owner chose (2026-11-12) to keep these lists as they are.
  */
 module.exports = [
   {
