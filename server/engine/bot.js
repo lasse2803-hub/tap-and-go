@@ -80,7 +80,7 @@ function sensible(s, actions, rng) {
       return { type: first.type, player: p, cardIds: order.slice(0, first.count).map(c => c.id) };
     }
     case 'declareAttackers': {
-      const blockers = s.battlefield.filter(c => c.controller === opp && G.isType(c, 'Creature') && !c.tapped);
+      const blockers = s.battlefield.filter(c => c.controller === opp && G.isType(c, 'Creature', s) && !c.tapped);
       const attackers = first.eligible.filter(id => {
         const A = G.find(s, id);
         const pow = G.powerOf(s, A);
@@ -104,13 +104,14 @@ function sensible(s, actions, rng) {
       };
     }
     case 'chooseTargets': {
-      const good = actions.filter(a => goodTargets(s, a.targets, opp));
+      const beneficial = !!G.lookup(s.pending.key).beneficial;
+      const good = actions.filter(a => goodTargets(s, a.targets, opp, beneficial) && a.targets.some(Boolean));
       return R.pick(rng, good.length ? good : actions);
     }
     case 'choose':
       return actions.find(a => a.option === 'pay') || first;
     case 'scry': {
-      const landsOut = s.battlefield.filter(c => c.controller === p && G.isType(c, 'Land')).length;
+      const landsOut = s.battlefield.filter(c => c.controller === p && G.isType(c, 'Land', s)).length;
       const keep = (id) => {
         const c = cardIn(s, id);
         const ch = db.char(c.name);
@@ -138,14 +139,31 @@ function sensible(s, actions, rng) {
     // Instant-speed play outside own main phase, now and then (exercises the stack).
     if (R.rand(rng) < 0.25) return R.pick(rng, sane);
   }
-  // Activated abilities (e.g. animate a creature land before combat), once per permanent.
-  const acts = actions.filter(a => a.type === 'activate' && !(G.find(s, a.cardId).mods || []).length);
-  if (acts.length && s.active === p && s.step === 'beginCombat' && R.rand(rng) < 0.6) return R.pick(rng, acts);
+  // Activated abilities, with targets that make sense for the ability.
+  const abilityOf = (a) => G.lookup(`${prefixOf(G.find(s, a.cardId))}#${a.ability}`);
+  const acts = actions.filter(a => a.type === 'activate' && goodTargets(s, a.targets, opp, !!abilityOf(a).beneficial));
+  // Planeswalkers: use a loyalty ability every turn in the main phase.
+  const loyalty = acts.filter(a => abilityOf(a).loyalty !== undefined);
+  if (loyalty.length && myMain && R.rand(rng) < 0.9) return R.pick(rng, loyalty);
+  // Others (animate a land, crack a Clue, grant lifelink …): once per permanent per turn.
+  const other = acts.filter(a => abilityOf(a).loyalty === undefined && !(G.find(s, a.cardId).mods || []).length);
+  if (other.length && s.active === p && s.step === 'beginCombat' && R.rand(rng) < 0.6) return R.pick(rng, other);
+  if (other.length && s.active !== p && s.step === 'end' && R.rand(rng) < 0.3) return R.pick(rng, other);
   return actions.find(a => a.type === 'pass');
 }
 
-function goodTargets(s, targets, opp) {
-  return targets.every(t => (t.kind === 'player' ? t.player === opp : (G.find(s, t.id) || {}).controller === opp));
+const prefixOf = (c) => (c.token ? c.token.impl : c.name);
+
+/** Harmful effects should hit the opponent's things; beneficial ones our own. null = no target. */
+function goodTargets(s, targets, opp, beneficial = false) {
+  const me = 1 - opp;
+  const want = beneficial ? me : opp;
+  return targets.every(t => {
+    if (!t) return true;
+    if (t.kind === 'player') return t.player === want;
+    if (t.kind === 'card') return true; // cards in graveyards (e.g. reanimation targets)
+    return (G.find(s, t.id) || {}).controller === want;
+  });
 }
 
 function makeBot(policy, seed) {

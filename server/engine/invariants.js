@@ -31,7 +31,7 @@ function checkInvariants(s) {
 
   // 2. Zone contents are sane.
   for (const c of s.battlefield) {
-    if (!G.baseChar(c).isPermanent && !G.isType(c, 'Creature')) v.push(`non-permanent ${c.name} on the battlefield`);
+    if (!G.baseChar(c).isPermanent && !G.isType(c, 'Creature', s)) v.push(`non-permanent ${c.name} on the battlefield`);
     if (!isInt(c.damage) || c.damage < 0) v.push(`${c.name} has invalid damage ${c.damage}`);
     for (const [k, n] of Object.entries(c.counters)) if (!isInt(n)) v.push(`${c.name} counter ${k}=${n}`);
     if (c.controller !== 0 && c.controller !== 1) v.push(`${c.name} has controller ${c.controller}`);
@@ -74,11 +74,11 @@ function checkInvariants(s) {
     if (pend && pend.kind === 'priority') {
       for (const p of [0, 1]) if (s.players[p].life <= 0) v.push(`P${p} at ${s.players[p].life} life but game continues`);
       for (const c of s.battlefield) {
-        if (G.isType(c, 'Creature')) {
+        if (G.isType(c, 'Creature', s)) {
           const t = G.toughOf(s, c);
           if (t <= 0 || (c.damage >= t && !G.hasKw(c, 'indestructible'))) v.push(`${c.name} should have died (damage ${c.damage}, toughness ${t})`);
         }
-        if (G.isType(c, 'Planeswalker') && (c.counters.loyalty || 0) <= 0) v.push(`${c.name} at 0 loyalty still on battlefield`);
+        if (G.isType(c, 'Planeswalker', s) && (c.counters.loyalty || 0) <= 0) v.push(`${c.name} at 0 loyalty still on battlefield`);
       }
     }
     // 5. Hand size is enforced at end of turn.

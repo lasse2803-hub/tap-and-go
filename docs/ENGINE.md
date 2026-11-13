@@ -87,7 +87,8 @@ the entry shape.
 | Deck | Status |
 |---|---|
 | Red Aggro | ✅ 12/12 cards — `test/engine.redaggro.test.js` |
-| other 14 decks | backlog (see `npm run sim`) |
+| White Knight | ✅ 13/13 cards — `test/engine.whiteknight.test.js` |
+| other 13 decks | backlog (see `npm run sim`) |
 
 Engine machinery added for Red Aggro (reused by every later deck):
 triggered abilities on the stack (APNAP order, targets chosen when put on the stack,
@@ -99,6 +100,16 @@ effects, enters-tapped conditions, "can't block", alternative costs (spectacle) 
 "lost life this turn" tracking, adventure (cast the adventure, then the creature from
 exile), "exile and you may play" until the end of your next turn, and decisions
 during resolution (scry, "you may pay").
+
+Added for White Knight: planeswalker loyalty abilities (once per turn, sorcery speed,
+with per-card exceptions), devotion, state-dependent characteristics (types and P/T
+that depend on the game — `isType(c, t, s)` / `powerOf(s, c)` throw if the state is
+missing for such a card), spell cost increases, life-gain triggers (simultaneous
+lifelink is one event), leaves-the-battlefield triggers with linked information,
+"exile until this leaves the battlefield", targets in graveyards, "up to one" targets,
+sacrifice and remove-counters costs, Clue tokens (token abilities), "for as long as"
+restrictions (can't attack/block), training, battle cry, "at the beginning of combat",
+and object identity (a permanent that leaves and returns is a new object).
 
 ### Known simplifications
 

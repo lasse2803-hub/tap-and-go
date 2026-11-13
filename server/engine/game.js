@@ -16,6 +16,10 @@
  *
  * Card rules come ONLY from explicit implementations in ./cards. Engine-level pieces
  * (keywords, triggers, stack, costs, tokens, continuous effects) live here.
+ *
+ * Characteristics can depend on the game state (Heliod's devotion, Adeline's power), so
+ * isType(c, t, s) / powerOf(s, c) take the state; calling them without it for such a
+ * card throws instead of silently computing a wrong answer.
  */
 const db = require('./cardDb');
 const { parseCost, solvePayment } = require('./mana');
@@ -26,7 +30,9 @@ const STEPS = ['untap', 'upkeep', 'draw', 'main1', 'beginCombat', 'declareAttack
   'firstStrikeDamage', 'combatDamage', 'endCombat', 'main2', 'end', 'cleanup'];
 const MAX_HAND = 7;
 const IMPLEMENTED_KEYWORDS = new Set(['flying', 'reach', 'trample', 'haste', 'vigilance', 'deathtouch', 'lifelink',
-  'first strike', 'double strike', 'menace', 'indestructible', 'flash', 'hexproof', 'defender', 'prowess']);
+  'first strike', 'double strike', 'menace', 'indestructible', 'flash', 'hexproof', 'defender', 'prowess',
+  'training', 'battle cry']);
+const CLUE = { name: 'Clue', types: ['Artifact'], subtypes: ['Clue'], impl: 'token:Clue' };
 
 // ─── Characteristics (base + continuous effects + counters) ──────────────────
 const tokenChars = new Map();
@@ -38,34 +44,94 @@ function baseChar(c) {
   return ch;
 }
 const modsOf = (c) => c.mods || [];
-function typesOf(c) {
+const implOf = (c) => (c.token ? (c.token.impl ? IMPLS[c.token.impl] : null) : IMPLS[c.name]) || null;
+const staticOf = (c) => (implOf(c) && implOf(c).static) || {};
+const prefixOf = (c) => (c.token ? c.token.impl : c.name);
+
+function needState(s, c, what) {
+  if (!s) throw new Error(`${what} of ${c.name} depends on the game state — pass the state`);
+}
+
+/** Helpers handed to card implementations (bound to one state). */
+function helpers(s) {
+  return {
+    isType: (c, t) => isType(c, t, s),
+    isCardType: (c, t) => baseChar(c).is(t),
+    find: (id) => find(s, id),
+    devotion: (p, color) => devotion(s, p, color),
+    mv: (c) => (c.token ? 0 : baseChar(c).cmc),
+    powerOf: (c) => powerOf(s, c),
+  };
+}
+
+function typesOf(c, s) {
   const t = new Set(baseChar(c).types);
   for (const m of modsOf(c)) for (const x of m.types || []) t.add(x);
-  return [...t];
+  let types = [...t];
+  const st = staticOf(c);
+  if (st.types) { // type-changing static ability (e.g. Heliod), only on the battlefield
+    needState(s, c, 'types');
+    if (s.battlefield.includes(c)) types = st.types(s, c, types, helpers(s));
+  }
+  return types;
 }
-const isType = (c, t) => typesOf(c).includes(t);
+const isType = (c, t, s) => typesOf(c, s).includes(t);
 const hasKw = (c, kw) => baseChar(c).keywords.includes(kw) || modsOf(c).some(m => (m.keywords || []).includes(kw));
-function ptOf(c, i) {
+
+function ptOf(s, c, i) {
   const ch = baseChar(c);
   let v = db.num(i === 0 ? ch.power : ch.toughness);
-  for (const m of modsOf(c)) if (m.setPT) v = m.setPT[i];          // characteristic-setting first
-  for (const m of modsOf(c)) v += (i === 0 ? m.power : m.toughness) || 0; // then modifications
+  const cda = i === 0 ? staticOf(c).power : staticOf(c).toughness; // characteristic-defining
+  if (cda) { needState(s, c, 'P/T'); v = cda(s, c, helpers(s)); }
+  for (const m of modsOf(c)) if (m.setPT) v = m.setPT[i];          // characteristic-setting
+  for (const m of modsOf(c)) v += (i === 0 ? m.power : m.toughness) || 0; // modifications
   return v + ((c.counters && c.counters['+1/+1']) || 0) - ((c.counters && c.counters['-1/-1']) || 0);
 }
-const powerOf = (s, c) => ptOf(c, 0);
-const toughOf = (s, c) => ptOf(c, 1);
+const powerOf = (s, c) => ptOf(s, c, 0);
+const toughOf = (s, c) => ptOf(s, c, 1);
 const find = (s, id) => s.battlefield.find(c => c.id === id);
-const implOf = (c) => (c.token ? null : IMPLS[c.name]) || null;
-const staticOf = (c) => (implOf(c) && implOf(c).static) || {};
+
+/** Devotion to a color: mana symbols of that color among mana costs of p's permanents. */
+function devotion(s, p, color) {
+  let n = 0;
+  for (const c of s.battlefield) {
+    if (c.controller !== p || c.token) continue;
+    for (const sym of (baseChar(c).manaCost || '').match(/\{[^}]+\}/g) || []) if (sym.slice(1, -1).split('/').includes(color)) n++;
+  }
+  return n;
+}
+
+/** Mods with a "for as long as" duration are active only while their condition holds. */
+function modActive(s, c, m) {
+  if (m.until !== 'whileSource') return true;
+  const src = s.battlefield.find(x => x.oid === m.sourceOid);
+  return !!src && src.controller === c.controller;
+}
+const restricted = (s, c, flag) => modsOf(c).some(m => m[flag] && modActive(s, c, m));
 
 // ─── Abilities: lookup by stable string key (keeps state serializable) ───────
 // '#prowess' → engine keyword; 'Card Name#spell' / '#adventure' → spell faces;
-// 'Card Name#abilityKey' → IMPLS[name].abilities[abilityKey].
+// 'Card Name#abilityKey' → IMPLS[name].abilities[abilityKey]; tokens use 'token:Name#…'.
 const BUILTIN = {
   prowess: {
     kind: 'trigger', on: 'cast',
     match: (s, ev, c) => ev.player === c.controller && ev.noncreature,
     resolve: (fx, ctx) => fx.pump(ctx.sourceId, 1, 1),
+  },
+  // "Whenever this creature attacks with another creature with greater power, put a +1/+1 counter on it."
+  training: {
+    kind: 'trigger', on: 'attacks',
+    match: (s, ev, c) => ev.attackerId === c.id && s.combat.attackers.some(a => {
+      const o = find(s, a.id);
+      return a.id !== c.id && o && powerOf(s, o) > powerOf(s, c);
+    }),
+    resolve: (fx, ctx) => fx.addCounter(ctx.sourceId, '+1/+1', 1),
+  },
+  // "Whenever this creature attacks, each other attacking creature gets +1/+0 until end of turn."
+  battleCry: {
+    kind: 'trigger', on: 'attacks',
+    match: (s, ev, c) => ev.attackerId === c.id,
+    resolve: (fx, ctx) => { for (const a of fx.attackers()) if (a.id !== ctx.sourceId) fx.pump(a.id, 1, 0); },
   },
 };
 
@@ -80,14 +146,16 @@ function lookup(key) {
   return out;
 }
 
-/** Ability keys a permanent currently has on the battlefield. */
+/** Triggered-ability keys a permanent currently has on the battlefield. */
 function abilitiesOf(c) {
   const keys = [];
   if (hasKw(c, 'prowess')) keys.push('#prowess');
+  if (hasKw(c, 'training')) keys.push('#training');
+  if (hasKw(c, 'battle cry')) keys.push('#battleCry');
   const impl = implOf(c);
   if (impl && impl.abilities) {
     for (const [k, a] of Object.entries(impl.abilities)) {
-      if (!a.granted && a.kind !== 'delayed' && (a.zone || 'battlefield') === 'battlefield') keys.push(`${c.name}#${k}`);
+      if (a.kind === 'trigger' && !a.granted && (a.zone || 'battlefield') === 'battlefield') keys.push(`${prefixOf(c)}#${k}`);
     }
   }
   for (const m of modsOf(c)) for (const g of m.grant || []) keys.push(g);
@@ -147,7 +215,8 @@ function createGame({ decks, seed = 1, names } = {}) {
 // ─── Zones ───────────────────────────────────────────────────────────────────
 function resetCard(c) {
   c.controller = c.owner; c.tapped = false; c.sick = false; c.damage = 0; c.deathtouched = false; c.counters = {}; c.mods = [];
-  delete c.playable; delete c.onAdventure;
+  delete c.playable; delete c.onAdventure; delete c.linked; delete c.exiledUntilLeaves;
+  delete c.oid; delete c.enteredTurn; delete c.loyaltyUsedTurn;
 }
 
 function drawCards(s, p, n) {
@@ -158,16 +227,27 @@ function drawCards(s, p, n) {
   }
 }
 
-/** opts: { tapped, attacking: attack target ('player' | pwId), counters: {name: n} } */
+function findAnywhere(s, id) {
+  for (const p of [0, 1]) for (const z of ['graveyard', 'exile', 'hand', 'library']) {
+    const c = s.players[p][z].find(x => x.id === id);
+    if (c) return { card: c, zone: z, player: p };
+  }
+  return null;
+}
+
+/** opts: { tapped, attacking: target ('player' | pwId), counters: {name: n}, mods: [...] } */
 function enterBattlefield(s, card, controller, opts = {}) {
   resetCard(card);
   card.controller = controller;
   card.sick = true;
-  if (isType(card, 'Planeswalker')) card.counters.loyalty = db.num(baseChar(card).loyalty);
+  card.oid = s.nextId++;      // a new object (rule 400.7): links to the old one end
+  card.enteredTurn = s.turn;
+  if (isType(card, 'Planeswalker', s)) card.counters.loyalty = db.num(baseChar(card).loyalty);
   const st = staticOf(card);
-  if (st.etbTapped && st.etbTapped(s, card, controller, { isType })) card.tapped = true;
+  if (st.etbTapped && st.etbTapped(s, card, controller, helpers(s))) card.tapped = true;
   if (opts.tapped) card.tapped = true;
   for (const [k, n] of Object.entries(opts.counters || {})) card.counters[k] = (card.counters[k] || 0) + n;
+  for (const m of opts.mods || []) card.mods.push({ ...m });
   s.battlefield.push(card);
   if (opts.attacking && s.combat) s.combat.attackers.push({ id: card.id, target: opts.attacking });
   if (!card.token && unimplementedText(card.name)) s.stats.enteredWithoutImpl[card.name] = (s.stats.enteredWithoutImpl[card.name] || 0) + 1;
@@ -182,9 +262,25 @@ function leaveBattlefield(s, id, zone) {
     s.combat.attackers = s.combat.attackers.filter(a => a.id !== id);
     s.combat.blocks = s.combat.blocks.filter(b => b.blocker !== id && b.attacker !== id);
   }
-  if (card.token) return card; // tokens cease to exist outside the battlefield
-  resetCard(card);
-  s.players[card.owner][zone].push(card);
+  // Its own leaves-the-battlefield triggers look back at it as it last existed.
+  const impl = implOf(card);
+  if (impl && impl.abilities) {
+    for (const [k, a] of Object.entries(impl.abilities)) {
+      if (a.kind !== 'trigger' || a.on !== 'ltb') continue;
+      s.triggerQueue.push({ key: `${prefixOf(card)}#${k}`, sourceId: card.id, sourceOid: card.oid, sourceName: card.name, controller: card.controller,
+        ev: { type: 'ltb', cardId: card.id, linked: card.linked ? JSON.parse(JSON.stringify(card.linked)) : null } });
+    }
+  }
+  const returning = card.exiledUntilLeaves || [];
+  if (!card.token) { resetCard(card); s.players[card.owner][zone].push(card); } // tokens cease to exist
+  // "Exile … until this leaves the battlefield" ends now: those cards return (Portable Hole).
+  for (const rid of returning) {
+    const f = findAnywhere(s, rid);
+    if (f && f.zone === 'exile') {
+      s.players[f.player].exile.splice(s.players[f.player].exile.indexOf(f.card), 1);
+      enterBattlefield(s, f.card, f.card.owner);
+    }
+  }
   return card;
 }
 
@@ -194,15 +290,22 @@ function loseLife(s, p, n) {
   s.players[p].life -= n;
   s.players[p].lostLifeThisTurn = true;
 }
-function gainLife(s, p, n) { if (n > 0) s.players[p].life += n; }
+function gainLife(s, p, n) {
+  if (!(n > 0)) return;
+  s.players[p].life += n;
+  emit(s, { type: 'gainLife', player: p, amount: n });
+}
 
-/** Deal damage, applying replacement effects. Returns { dealt } (damage actually dealt). */
+/**
+ * Deal damage, applying replacement effects. Returns { dealt }. opts.combat marks combat
+ * damage; opts.gains collects lifelink so simultaneous combat damage is ONE life-gain event.
+ */
 function applyDamage(s, source, target, n, opts = {}) {
   if (!(n > 0)) return { dealt: 0 };
   let ev = { source, sourceController: source ? source.controller : null, target, n, combat: !!opts.combat, asCounters: false };
   for (const perm of s.battlefield) {
     const st = staticOf(perm);
-    if (st.replaceDamage) ev = st.replaceDamage(s, perm, ev, { isType, find: (id) => find(s, id) });
+    if (st.replaceDamage) ev = st.replaceDamage(s, perm, ev, helpers(s));
   }
   if (ev.target.kind === 'player') {
     loseLife(s, ev.target.player, ev.n);
@@ -210,10 +313,12 @@ function applyDamage(s, source, target, n, opts = {}) {
     const t = find(s, ev.target.id);
     if (!t) return { dealt: 0 };
     if (ev.asCounters) { t.counters['-1/-1'] = (t.counters['-1/-1'] || 0) + ev.n; return { dealt: 0 }; }
-    if (isType(t, 'Creature')) { t.damage += ev.n; if (source && hasKw(source, 'deathtouch')) t.deathtouched = true; }
-    if (isType(t, 'Planeswalker')) t.counters.loyalty = (t.counters.loyalty || 0) - ev.n;
+    if (isType(t, 'Creature', s)) { t.damage += ev.n; if (source && hasKw(source, 'deathtouch')) t.deathtouched = true; }
+    if (isType(t, 'Planeswalker', s)) t.counters.loyalty = (t.counters.loyalty || 0) - ev.n;
   }
-  if (source && hasKw(source, 'lifelink')) gainLife(s, source.controller, ev.n);
+  if (source && hasKw(source, 'lifelink')) {
+    if (opts.gains) opts.gains[source.controller] += ev.n; else gainLife(s, source.controller, ev.n);
+  }
   return { dealt: ev.n };
 }
 
@@ -225,7 +330,7 @@ function emit(s, ev) {
       const ab = lookup(key);
       if (ab.kind !== 'trigger' || ab.on !== ev.type) continue;
       if (ab.match && !ab.match(s, ev, c)) continue;
-      s.triggerQueue.push({ key, sourceId: c.id, sourceName: c.name, controller: c.controller, ev: { ...ev } });
+      s.triggerQueue.push({ key, sourceId: c.id, sourceOid: c.oid, sourceName: c.name, controller: c.controller, ev: { ...ev } });
     }
   }
   for (const p of [0, 1]) {
@@ -235,21 +340,11 @@ function emit(s, ev) {
       for (const [k, ab] of Object.entries(impl.abilities)) {
         if (ab.kind !== 'trigger' || ab.zone !== 'graveyard' || ab.on !== ev.type) continue;
         if (ab.match && !ab.match(s, ev, c)) continue;
-        s.triggerQueue.push({ key: `${c.name}#${k}`, sourceId: c.id, sourceName: c.name, controller: c.owner, ev: { ...ev } });
+        s.triggerQueue.push({ key: `${c.name}#${k}`, sourceId: c.id, sourceOid: null, sourceName: c.name, controller: c.owner, ev: { ...ev } });
       }
     }
   }
 }
-
-function targetCombos(s, controller, spec) {
-  let combos = [[]];
-  for (const kind of spec || []) {
-    const ts = legalTargets(s, controller, kind);
-    combos = combos.flatMap(prev => ts.filter(t => !prev.some(x => sameTarget(x, t))).map(t => [...prev, t]));
-  }
-  return combos;
-}
-const sameTarget = (a, b) => a.kind === b.kind && (a.kind === 'player' ? a.player === b.player : a.id === b.id);
 
 /** Put queued triggers on the stack (APNAP). Returns false if a target choice is needed. */
 function placeTriggers(s) {
@@ -257,71 +352,151 @@ function placeTriggers(s) {
   s.triggerQueue.sort((a, b) => order(a) - order(b));
   while (s.triggerQueue.length) {
     const t = s.triggerQueue[0];
-    const combos = targetCombos(s, t.controller, lookup(t.key).targets);
+    const combos = targetCombos(s, t.controller, lookup(t.key).targets, t.sourceId);
     if (!combos.length) { s.triggerQueue.shift(); continue; } // no legal target: removed from the stack
     if (combos.length > 1) {
-      s.pending = { player: t.controller, kind: 'triggerTargets', source: t.sourceName, options: combos };
+      s.pending = { player: t.controller, kind: 'triggerTargets', source: t.sourceName, key: t.key, options: combos };
       return false;
     }
     s.triggerQueue.shift();
-    s.stack.push({ kind: 'ability', key: t.key, sourceId: t.sourceId, sourceName: t.sourceName, controller: t.controller, targets: combos[0], ev: t.ev });
+    s.stack.push(abilityItem(t, combos[0]));
   }
   return true;
 }
+const abilityItem = (t, targets) => ({ kind: 'ability', key: t.key, sourceId: t.sourceId, sourceOid: t.sourceOid, sourceName: t.sourceName, controller: t.controller, targets, ev: t.ev });
+
+// ─── Targets ─────────────────────────────────────────────────────────────────
+// A target spec entry is a named kind or an object:
+//   { players: bool, perm(s, c, controller, sourceId, h), card(s, c, controller, sourceId, h), upTo: bool }
+// perm → a permanent on the battlefield; card → a card in a graveyard; upTo → "up to one".
+const TARGET_KINDS = {
+  any: { players: true, perm: (s, c) => isType(c, 'Creature', s) || isType(c, 'Planeswalker', s) },
+  creature: { perm: (s, c) => isType(c, 'Creature', s) },
+  creatureOrPlaneswalker: { perm: (s, c) => isType(c, 'Creature', s) || isType(c, 'Planeswalker', s) },
+  playerOrPlaneswalker: { players: true, perm: (s, c) => isType(c, 'Planeswalker', s) },
+};
+function normSpec(e) {
+  if (typeof e !== 'string') return e;
+  if (!TARGET_KINDS[e]) throw new Error(`Unknown target kind ${e}`);
+  return TARGET_KINDS[e];
+}
+const sameTarget = (a, b) => !!a && !!b && a.kind === b.kind && (a.kind === 'player' ? a.player === b.player : a.id === b.id);
+
+function isTargetLegal(s, caster, entry, t, sourceId) {
+  if (!t) return false;
+  const spec = normSpec(entry);
+  if (t.kind === 'player') return !!spec.players && (t.player === 0 || t.player === 1);
+  if (t.kind === 'perm') {
+    if (!spec.perm) return false;
+    const c = find(s, t.id);
+    if (!c) return false;
+    if (c.controller !== caster && hasKw(c, 'hexproof')) return false;
+    return !!spec.perm(s, c, caster, sourceId, helpers(s));
+  }
+  if (t.kind === 'card') {
+    if (!spec.card) return false;
+    const f = findAnywhere(s, t.id);
+    return !!f && f.zone === 'graveyard' && !!spec.card(s, f.card, caster, sourceId, helpers(s));
+  }
+  return false;
+}
+
+function legalTargets(s, caster, entry, sourceId) {
+  const spec = normSpec(entry);
+  const out = [];
+  if (spec.players) out.push({ kind: 'player', player: 0 }, { kind: 'player', player: 1 });
+  if (spec.perm) for (const c of s.battlefield) { const t = { kind: 'perm', id: c.id }; if (isTargetLegal(s, caster, entry, t, sourceId)) out.push(t); }
+  if (spec.card) for (const p of [0, 1]) for (const c of s.players[p].graveyard) { const t = { kind: 'card', id: c.id }; if (isTargetLegal(s, caster, entry, t, sourceId)) out.push(t); }
+  return out;
+}
+
+function targetCombos(s, controller, specList, sourceId) {
+  let combos = [[]];
+  for (const e of specList || []) {
+    const ts = legalTargets(s, controller, e, sourceId);
+    const opts = normSpec(e).upTo ? [null, ...ts] : ts;
+    combos = combos.flatMap(prev => opts.filter(t => !t || !prev.some(x => sameTarget(x, t))).map(t => [...prev, t]));
+  }
+  return combos;
+}
+
+/** 608.2b: a spell/ability with targets does nothing if ALL its chosen targets are illegal. */
+function allTargetsIllegal(s, controller, specList, targets, sourceId) {
+  const chosen = targets.map((t, i) => [t, i]).filter(([t]) => t);
+  return chosen.length > 0 && chosen.every(([t, i]) => !isTargetLegal(s, controller, specList[i], t, sourceId));
+}
 
 // ─── Effects API for card implementations (./cards) ──────────────────────────
-const plainCtx = (ctx) => ({ controller: ctx.controller, sourceId: ctx.sourceId, sourceName: ctx.sourceName, targets: ctx.targets, ev: ctx.ev || null, x: ctx.x || 0 });
+const plainCtx = (ctx) => ({ controller: ctx.controller, sourceId: ctx.sourceId, sourceOid: ctx.sourceOid || null, sourceName: ctx.sourceName, targets: ctx.targets, ev: ctx.ev || null, x: ctx.x || 0 });
 
 function sourceRef(s, ctx) {
   const onBf = find(s, ctx.sourceId);
   if (onBf) return onBf;
-  for (const p of [0, 1]) for (const z of ['graveyard', 'exile', 'hand']) {
-    const c = s.players[p][z].find(x => x.id === ctx.sourceId);
-    if (c) return c;
-  }
+  const f = findAnywhere(s, ctx.sourceId);
+  if (f) return f.card;
   const onStack = s.stack.find(i => i.card && i.card.id === ctx.sourceId);
   if (onStack) return onStack.card;
   return { id: ctx.sourceId, name: ctx.sourceName, controller: ctx.controller, owner: ctx.controller, counters: {}, mods: [] }; // last known info
 }
 
-function findAnywhere(s, id) {
-  for (const p of [0, 1]) for (const z of ['graveyard', 'exile', 'hand', 'library']) {
-    const c = s.players[p][z].find(x => x.id === id);
-    if (c) return { card: c, zone: z, player: p };
-  }
-  return null;
+/** The source permanent if it is still the same object on the battlefield. */
+function sameObject(s, id, oid) {
+  const c = find(s, id);
+  return c && (!oid || c.oid === oid) ? c : null;
 }
 
 function makeFx(s, key, ctx) {
   const suspend = (pending, cont) => { s.pending = pending; s.suspended = { key, cont: cont || null, ctx: plainCtx(ctx) }; };
+  const createToken = (p, def, opts = {}) => {
+    const { name, ...rest } = def;
+    const t = { id: `t${s.nextId++}`, name, owner: p, controller: p, token: rest, tapped: false, sick: false, damage: 0, deathtouched: false, counters: {}, mods: [] };
+    enterBattlefield(s, t, p, opts);
+    return t.id;
+  };
+  const h = helpers(s);
   const fx = {
     state: s,
-    find: (id) => find(s, id),
-    isType,
+    ...h,
     damage: (source, target, n) => applyDamage(s, source, target, n),
     destroy: (id) => { const c = find(s, id); if (c && !hasKw(c, 'indestructible')) leaveBattlefield(s, id, 'graveyard'); },
     exile: (id) => { if (find(s, id)) leaveBattlefield(s, id, 'exile'); },
     draw: (p, n) => drawCards(s, p, n),
     loseLife: (p, n) => loseLife(s, p, n),
     gainLife: (p, n) => gainLife(s, p, n),
-    creatures: () => s.battlefield.filter(c => isType(c, 'Creature')),
+    creatures: () => s.battlefield.filter(c => isType(c, 'Creature', s)),
+    attackers: () => (s.combat ? s.combat.attackers.map(a => find(s, a.id)).filter(Boolean) : []),
+    addCounter: (id, type, n) => { const c = find(s, id); if (c) c.counters[type] = (c.counters[type] || 0) + n; },
     /** +P/+T (and keywords) until end of turn. */
     pump: (id, power, toughness, keywords) => { const c = find(s, id); if (c) c.mods.push({ until: 'eot', power, toughness, keywords }); },
     addMod: (id, mod) => { const c = find(s, id); if (c) c.mods.push({ until: 'eot', ...mod }); },
-    createToken: (p, def, opts = {}) => {
-      const { name, ...rest } = def;
-      const t = { id: `t${s.nextId++}`, name, owner: p, controller: p, token: rest, tapped: false, sick: false, damage: 0, deathtouched: false, counters: {}, mods: [] };
-      enterBattlefield(s, t, p, opts);
-      return t.id;
-    },
+    createToken,
+    investigate: (p) => createToken(p, CLUE),
     /** A delayed triggered ability (e.g. "at end of combat") created by this effect. */
-    delayed: (when, abilityKey, ev) => s.delayed.push({ when, key: abilityKey, controller: ctx.controller, sourceId: ctx.sourceId, sourceName: ctx.sourceName, ev: ev || null }),
+    delayed: (when, abilityKey, ev) => s.delayed.push({ when, key: abilityKey, controller: ctx.controller, sourceId: ctx.sourceId, sourceOid: null, sourceName: ctx.sourceName, ev: ev || null }),
     noPrevention: () => { s.noPrevention = true; },
     /** Exile the top n of p's library; p may play them until the end of p's next turn. */
     exileTopPlayable: (p, n) => {
       const P = s.players[p];
       const untilTurn = s.active === p ? s.turn + 2 : s.turn + 1;
       for (const c of P.library.splice(0, n)) { c.playable = { player: p, untilTurn }; P.exile.push(c); }
+    },
+    /** Exile a permanent and remember it on the source (Skyclave Apparition). */
+    exileLinked: (targetId) => {
+      const t = find(s, targetId);
+      if (!t) return;
+      const info = { id: t.id, owner: t.owner, mv: t.token ? 0 : baseChar(t).cmc, token: !!t.token };
+      leaveBattlefield(s, targetId, 'exile');
+      const src = sameObject(s, ctx.sourceId, ctx.sourceOid);
+      if (src) { src.linked = src.linked || { exiled: [] }; src.linked.exiled.push(info); }
+    },
+    /** Exile a permanent until the source leaves the battlefield (Portable Hole, 610.3c). */
+    exileUntilLeaves: (targetId) => {
+      const src = sameObject(s, ctx.sourceId, ctx.sourceOid);
+      const t = find(s, targetId);
+      if (!src || !t) return; // the source already left: nothing is exiled
+      const keep = !t.token;
+      leaveBattlefield(s, targetId, 'exile');
+      if (keep) src.exiledUntilLeaves = [...(src.exiledUntilLeaves || []), targetId];
     },
     canPay: (p, cost) => !!solvePayment(parseCost(cost), manaSources(s, p), s.players[p].life),
     pay: (p, cost) => {
@@ -332,12 +507,12 @@ function makeFx(s, key, ctx) {
       return true;
     },
     inGraveyard: (id) => { const f = findAnywhere(s, id); return !!(f && f.zone === 'graveyard'); },
-    /** Return a card from its owner's graveyard to the battlefield (opts as enterBattlefield). */
-    graveyardToBattlefield: (id, opts) => {
+    /** Return a card from a graveyard to the battlefield (opts as enterBattlefield + controller). */
+    graveyardToBattlefield: (id, opts = {}) => {
       const f = findAnywhere(s, id);
       if (!f || f.zone !== 'graveyard') return false;
       s.players[f.player].graveyard.splice(s.players[f.player].graveyard.indexOf(f.card), 1);
-      enterBattlefield(s, f.card, f.card.owner, opts);
+      enterBattlefield(s, f.card, opts.controller !== undefined ? opts.controller : f.card.owner, opts);
       return true;
     },
     attackTargetOf: (id) => { const a = s.combat && s.combat.attackers.find(x => x.id === id); return a ? a.target : 'player'; },
@@ -352,28 +527,6 @@ function makeFx(s, key, ctx) {
   return fx;
 }
 
-// ─── Targets ─────────────────────────────────────────────────────────────────
-function isTargetLegal(s, caster, kind, t) {
-  if (!t) return false;
-  if (t.kind === 'player') return (kind === 'any' || kind === 'playerOrPlaneswalker') && (t.player === 0 || t.player === 1);
-  if (t.kind !== 'perm') return false;
-  const c = find(s, t.id);
-  if (!c) return false;
-  if (c.controller !== caster && hasKw(c, 'hexproof')) return false;
-  const cr = isType(c, 'Creature'), pw = isType(c, 'Planeswalker');
-  if (kind === 'any' || kind === 'creatureOrPlaneswalker') return cr || pw;
-  if (kind === 'creature') return cr;
-  if (kind === 'playerOrPlaneswalker') return pw;
-  return false;
-}
-
-function legalTargets(s, caster, kind) {
-  const out = [];
-  if (kind === 'any' || kind === 'playerOrPlaneswalker') out.push({ kind: 'player', player: 0 }, { kind: 'player', player: 1 });
-  for (const c of s.battlefield) { const t = { kind: 'perm', id: c.id }; if (isTargetLegal(s, caster, kind, t)) out.push(t); }
-  return out;
-}
-
 // ─── Mana ────────────────────────────────────────────────────────────────────
 function manaSources(s, p, excludeId) {
   const out = [];
@@ -381,21 +534,22 @@ function manaSources(s, p, excludeId) {
     if (c.controller !== p || c.tapped || c.id === excludeId || c.token) continue;
     const opts = db.manaOptions(c.name);
     if (!opts) continue;
-    if (isType(c, 'Creature') && c.sick && !hasKw(c, 'haste')) continue;
+    if (isType(c, 'Creature', s) && c.sick && !hasKw(c, 'haste')) continue;
     out.push({ id: c.id, options: opts });
   }
   return out;
 }
 
-/** Payment for a cost string; prefers not to tap `avoidId` (e.g. the ability's own source). */
-function payCost(s, p, costStr, x, avoidId) {
+/** Payment for a cost string (+ extra generic, e.g. Thalia); prefers not to tap avoidId. */
+function payCost(s, p, costStr, x, avoidId, extra = 0) {
   const cost = parseCost(costStr, x);
+  cost.generic += extra;
   if (avoidId) { const r = solvePayment(cost, manaSources(s, p, avoidId), s.players[p].life); if (r) return r; }
   return solvePayment(cost, manaSources(s, p), s.players[p].life);
 }
 
-function maxX(s, p, costStr) {
-  for (let x = manaSources(s, p).length; x >= 0; x--) if (payCost(s, p, costStr, x)) return x;
+function maxX(s, p, costStr, extra) {
+  for (let x = manaSources(s, p).length; x >= 0; x--) if (payCost(s, p, costStr, x, undefined, extra)) return x;
   return -1;
 }
 
@@ -424,6 +578,16 @@ function faceInfo(card, face, alt) {
   return { name: ch.name, types: ch.types, cost, impl: impl.spell, permanent: ch.isPermanent, flash: ch.keywords.includes('flash') };
 }
 
+/** Cost increases/reductions from static abilities (Thalia: noncreature spells cost {1} more). */
+function costDelta(s, p, f) {
+  let n = 0;
+  for (const c of s.battlefield) {
+    const st = staticOf(c);
+    if (st.spellCostDelta) n += st.spellCostDelta(s, c, { player: p, types: f.types }, helpers(s));
+  }
+  return n;
+}
+
 /** Cards p may cast or play right now from each zone. */
 function castSources(s, p) {
   const P = s.players[p];
@@ -436,13 +600,13 @@ function castSources(s, p) {
 }
 
 function canPlayLand(s, p, src) {
-  return isType(src.card, 'Land') && !src.onlyMain && sorceryTiming(s, p) && s.players[p].landsPlayed < 1;
+  return isType(src.card, 'Land', s) && !src.onlyMain && sorceryTiming(s, p) && s.players[p].landsPlayed < 1;
 }
 
 /** Concrete cast options for one source: [{ face, alt, targets, x }]. */
 function castOptions(s, p, src) {
   const { card } = src;
-  if (isType(card, 'Land')) return [];
+  if (isType(card, 'Land', s)) return [];
   const out = [];
   const faces = ['main'];
   if (src.from === 'hand' && baseChar(card).adventure) faces.push('adventure');
@@ -454,12 +618,44 @@ function castOptions(s, p, src) {
       const f = faceInfo(card, face, alt);
       if (!f) continue;
       if (!(f.types.includes('Instant') || f.flash) && !sorceryTiming(s, p)) continue;
-      const x = parseCost(f.cost, 0).hasX ? maxX(s, p, f.cost) : 0;
-      if (x < 0 || !payCost(s, p, f.cost, x)) continue;
-      for (const targets of targetCombos(s, p, f.impl && f.impl.targets)) out.push({ face, alt, targets, x });
+      const extra = costDelta(s, p, f);
+      const x = parseCost(f.cost, 0).hasX ? maxX(s, p, f.cost, extra) : 0;
+      if (x < 0 || !payCost(s, p, f.cost, x, undefined, extra)) continue;
+      for (const targets of targetCombos(s, p, f.impl && f.impl.targets, card.id)) out.push({ face, alt, targets, x });
     }
   }
   return out;
+}
+
+/** "Remove N counters from among creatures you control": every way to pick them. */
+function counterRemovalOptions(s, p, rc) {
+  const pool = s.battlefield.filter(c => c.controller === p && isType(c, 'Creature', s) && (c.counters[rc.type] || 0) > 0);
+  const out = [];
+  const rec = (i, left, acc) => {
+    if (!left) { out.push(acc.slice()); return; }
+    if (i >= pool.length) return;
+    const c = pool[i];
+    for (let k = Math.min(left, c.counters[rc.type]); k >= 0; k--) {
+      for (let j = 0; j < k; j++) acc.push(c.id);
+      rec(i + 1, left - k, acc);
+      acc.length -= k;
+    }
+  };
+  rec(0, rc.n, []);
+  return out;
+}
+
+function canActivate(s, p, c, a) {
+  if (a.loyalty !== undefined) {
+    const st = staticOf(c);
+    const instant = st.loyaltyInstantSpeed && st.loyaltyInstantSpeed(s, c);
+    if (!instant && !sorceryTiming(s, p)) return false;
+    if (c.loyaltyUsedTurn === s.turn) return false; // one loyalty ability per turn
+    if ((c.counters.loyalty || 0) + a.loyalty < 0) return false;
+  } else if (a.sorcerySpeed && !sorceryTiming(s, p)) return false;
+  if (a.tap && (c.tapped || (isType(c, 'Creature', s) && c.sick && !hasKw(c, 'haste')))) return false;
+  if (a.cost && !payCost(s, p, a.cost, 0, c.id)) return false;
+  return true;
 }
 
 function activationOptions(s, p) {
@@ -469,11 +665,15 @@ function activationOptions(s, p) {
     const impl = implOf(c);
     if (!impl || !impl.abilities) continue;
     for (const [k, a] of Object.entries(impl.abilities)) {
-      if (a.kind !== 'activated') continue;
-      if (a.sorcerySpeed && !sorceryTiming(s, p)) continue;
-      if (a.tap && (c.tapped || (isType(c, 'Creature') && c.sick && !hasKw(c, 'haste')))) continue;
-      if (a.cost && !payCost(s, p, a.cost, 0, c.id)) continue;
-      for (const targets of targetCombos(s, p, a.targets)) out.push({ type: 'activate', player: p, cardId: c.id, ability: k, targets });
+      if (a.kind !== 'activated' || !canActivate(s, p, c, a)) continue;
+      const removals = a.removeCounters ? counterRemovalOptions(s, p, a.removeCounters) : [null];
+      for (const targets of targetCombos(s, p, a.targets, c.id)) {
+        for (const rem of removals) {
+          const act = { type: 'activate', player: p, cardId: c.id, ability: k, targets };
+          if (rem) act.removeFrom = rem;
+          out.push(act);
+        }
+      }
     }
   }
   return out;
@@ -481,12 +681,13 @@ function activationOptions(s, p) {
 
 // ─── Combat ──────────────────────────────────────────────────────────────────
 function eligibleAttackers(s) {
-  return s.battlefield.filter(c => c.controller === s.active && isType(c, 'Creature') && !c.tapped
-    && (!c.sick || hasKw(c, 'haste')) && !hasKw(c, 'defender'));
+  return s.battlefield.filter(c => c.controller === s.active && isType(c, 'Creature', s) && !c.tapped
+    && (!c.sick || hasKw(c, 'haste')) && !hasKw(c, 'defender') && !restricted(s, c, 'cantAttack'));
 }
 
 function eligibleBlockers(s) {
-  return s.battlefield.filter(c => c.controller !== s.active && isType(c, 'Creature') && !c.tapped && !staticOf(c).cantBlock);
+  return s.battlefield.filter(c => c.controller !== s.active && isType(c, 'Creature', s) && !c.tapped
+    && !staticOf(c).cantBlock && !restricted(s, c, 'cantBlock'));
 }
 
 function canBlock(blocker, attacker) {
@@ -541,7 +742,9 @@ function dealCombatDamage(s, firstStrikeStep) {
     if (p) dmg.push({ source: B, target: { kind: 'perm', id: A.id }, n: p });
   }
   // Combat damage is dealt simultaneously: compute everything first, then apply.
-  for (const d of dmg) applyDamage(s, d.source, d.target, d.n, { combat: true });
+  const gains = [0, 0];
+  for (const d of dmg) applyDamage(s, d.source, d.target, d.n, { combat: true, gains });
+  for (const p of [0, 1]) gainLife(s, p, gains[p]); // one life-gain event per player
   if (firstStrikeStep) cb.hadFirstStrike = true;
 }
 
@@ -565,14 +768,21 @@ function checkSBA(s) {
     }
     if (losers.length) { endGame(s, losers, why.join('; ')); return; }
 
+    // 506.4: a permanent that stops being a creature is removed from combat.
+    if (s.combat) {
+      const isCr = (id) => { const c = find(s, id); return !!c && isType(c, 'Creature', s); };
+      s.combat.attackers = s.combat.attackers.filter(a => isCr(a.id));
+      s.combat.blocks = s.combat.blocks.filter(b => isCr(b.blocker) && isCr(b.attacker));
+    }
+
     let changed = false;
     for (const c of s.battlefield.slice()) {
-      if (isType(c, 'Creature')) {
+      if (isType(c, 'Creature', s)) {
         const t = toughOf(s, c);
         const lethal = c.damage >= t || (c.deathtouched && c.damage > 0);
         if (t <= 0 || (lethal && !hasKw(c, 'indestructible'))) { leaveBattlefield(s, c.id, 'graveyard'); changed = true; continue; }
       }
-      if (isType(c, 'Planeswalker') && (c.counters.loyalty || 0) <= 0) { leaveBattlefield(s, c.id, 'graveyard'); changed = true; }
+      if (isType(c, 'Planeswalker', s) && (c.counters.loyalty || 0) <= 0) { leaveBattlefield(s, c.id, 'graveyard'); changed = true; }
     }
     // Legend rule: keep the newest of each legendary name per controller.
     const seen = new Set();
@@ -621,6 +831,9 @@ function runStep(s) {
       case 'draw':
         if (s.turn > 1) drawCards(s, a, 1); // the starting player skips their first draw
         return givePriority(s, a);
+      case 'beginCombat':
+        emit(s, { type: 'beginCombat', player: a }); // "at the beginning of combat on your turn"
+        return givePriority(s, a);
       case 'declareAttackers':
         if (!eligibleAttackers(s).length) { s.combat = { attackers: [], blocks: [], blockedIds: [] }; return givePriority(s, a); }
         s.pending = { player: a, kind: 'attackers' };
@@ -641,7 +854,7 @@ function runStep(s) {
         // Delayed triggers "at end of combat" (e.g. exile Kari Zev's Ragavan).
         const due = s.delayed.filter(d => d.when === 'endCombat');
         s.delayed = s.delayed.filter(d => d.when !== 'endCombat');
-        for (const d of due) s.triggerQueue.push({ key: d.key, sourceId: d.sourceId, sourceName: d.sourceName, controller: d.controller, ev: d.ev });
+        for (const d of due) s.triggerQueue.push({ key: d.key, sourceId: d.sourceId, sourceOid: d.sourceOid, sourceName: d.sourceName, controller: d.controller, ev: d.ev });
         return givePriority(s, a);
       }
       case 'cleanup': {
@@ -649,7 +862,8 @@ function runStep(s) {
         if (excess > 0) { s.pending = { player: a, kind: 'discard', count: excess }; return; }
         for (const c of s.battlefield) {
           c.damage = 0; c.deathtouched = false;
-          c.mods = modsOf(c).filter(m => m.until !== 'eot'); // "until end of turn" effects end
+          // "until end of turn" effects end; "for as long as" effects whose condition ended are dropped.
+          c.mods = modsOf(c).filter(m => m.until !== 'eot' && modActive(s, c, m));
         }
         s.noPrevention = false;
         s.combat = null;
@@ -658,7 +872,7 @@ function runStep(s) {
         s.step = 'untap';
         continue;
       }
-      default: // upkeep, main1, beginCombat, main2, end
+      default: // upkeep, main1, main2, end
         return givePriority(s, a);
     }
   }
@@ -698,10 +912,8 @@ function resolveTop(s) {
   const item = s.stack[s.stack.length - 1];
   if (item.kind === 'ability') {
     const ab = lookup(item.key);
-    const spec = ab.targets || [];
-    const allIllegal = spec.length > 0 && item.targets.every((t, i) => !isTargetLegal(s, item.controller, spec[i], t));
-    if (!allIllegal) {
-      const ctx = { controller: item.controller, sourceId: item.sourceId, sourceName: item.sourceName, targets: item.targets, ev: item.ev, x: 0 };
+    if (!allTargetsIllegal(s, item.controller, ab.targets || [], item.targets, item.sourceId)) {
+      const ctx = { controller: item.controller, sourceId: item.sourceId, sourceOid: item.sourceOid, sourceName: item.sourceName, targets: item.targets, ev: item.ev, x: 0 };
       ctx.source = sourceRef(s, ctx);
       ab.resolve(makeFx(s, item.key, ctx), ctx);
     }
@@ -714,11 +926,10 @@ function resolveTop(s) {
   if (f.permanent && item.face !== 'adventure') { s.stack.pop(); enterBattlefield(s, card, item.controller); return true; }
   let fizzled = false;
   if (f.impl) {
-    const spec = f.impl.targets || [];
-    fizzled = spec.length > 0 && item.targets.every((t, i) => !isTargetLegal(s, item.controller, spec[i], t));
+    fizzled = allTargetsIllegal(s, item.controller, f.impl.targets || [], item.targets, card.id);
     if (!fizzled) {
       const key = `${card.name}#${item.face === 'adventure' ? 'adventure' : 'spell'}`;
-      const ctx = { controller: item.controller, sourceId: card.id, sourceName: card.name, targets: item.targets, ev: null, x: item.x || 0, source: card };
+      const ctx = { controller: item.controller, sourceId: card.id, sourceOid: null, sourceName: card.name, targets: item.targets, ev: null, x: item.x || 0, source: card };
       f.impl.resolve(makeFx(s, key, ctx), ctx);
     }
   } else {
@@ -761,7 +972,7 @@ function legalActions(s) {
       return [{ type: 'discard', player: p, template: true, count: pend.count, options: handIds }];
     case 'attackers': {
       const defender = 1 - s.active;
-      const pws = s.battlefield.filter(c => c.controller === defender && isType(c, 'Planeswalker')).map(c => c.id);
+      const pws = s.battlefield.filter(c => c.controller === defender && isType(c, 'Planeswalker', s)).map(c => c.id);
       return [{ type: 'declareAttackers', player: p, template: true, eligible: eligibleAttackers(s).map(c => c.id), targets: ['player', ...pws] }];
     }
     case 'blockers':
@@ -807,9 +1018,12 @@ function nextMulliganDecision(s) {
   else startFirstTurn(s);
 }
 
-function validateTargets(s, p, spec, targets, label) {
+function validateTargets(s, p, spec, targets, label, sourceId) {
   if (!Array.isArray(targets) || targets.length !== spec.length) fail(`${label} needs ${spec.length} target(s)`);
-  spec.forEach((kind, i) => { if (!isTargetLegal(s, p, kind, targets[i])) fail(`illegal target for ${label}`); });
+  spec.forEach((entry, i) => {
+    if (targets[i] === null) { if (!normSpec(entry).upTo) fail(`${label} requires a target`); return; }
+    if (!isTargetLegal(s, p, entry, targets[i], sourceId)) fail(`illegal target for ${label}`);
+  });
   for (let i = 0; i < targets.length; i++) for (let j = i + 1; j < targets.length; j++) if (sameTarget(targets[i], targets[j])) fail('same target chosen twice');
 }
 
@@ -862,7 +1076,7 @@ function applyAction(s, action) {
       const chosen = pend.options.find(o => JSON.stringify(o) === JSON.stringify(action.targets));
       if (!chosen) fail('not one of the offered target choices');
       const t = s.triggerQueue.shift();
-      s.stack.push({ kind: 'ability', key: t.key, sourceId: t.sourceId, sourceName: t.sourceName, controller: t.controller, targets: chosen, ev: t.ev });
+      s.stack.push(abilityItem(t, chosen));
       s.pending = null;
       givePriority(s, s.resumePriority);
       return s;
@@ -895,7 +1109,7 @@ function applyAction(s, action) {
         if (!eligible.has(a.id)) fail(`${a.id} cannot attack`);
         if (a.target !== 'player') {
           const pw = find(s, a.target);
-          if (!pw || pw.controller !== defender || !isType(pw, 'Planeswalker')) fail('invalid attack target');
+          if (!pw || pw.controller !== defender || !isType(pw, 'Planeswalker', s)) fail('invalid attack target');
         }
       }
       for (const a of list) { const c = find(s, a.id); if (!hasKw(c, 'vigilance')) c.tapped = true; }
@@ -947,7 +1161,7 @@ function applyAction(s, action) {
         const src = castSources(s, p).find(x => x.card.id === action.cardId);
         if (!src) fail('cannot cast that card from where it is');
         const card = src.card;
-        if (isType(card, 'Land')) fail('lands are played, not cast');
+        if (isType(card, 'Land', s)) fail('lands are played, not cast');
         const face = action.face || 'main';
         if (face !== 'main' && face !== 'adventure') fail('unknown face');
         if (face === 'adventure' && (src.from !== 'hand' || !baseChar(card).adventure)) fail('no adventure to cast');
@@ -960,19 +1174,19 @@ function applyAction(s, action) {
         if (!Number.isInteger(x) || x < 0) fail('invalid X');
         if (x > 0 && !parseCost(f.cost, 0).hasX) fail('X given for a spell without X');
         const targets = action.targets || [];
-        validateTargets(s, p, (f.impl && f.impl.targets) || [], targets, f.name);
-        const pay = payCost(s, p, f.cost, x);
+        validateTargets(s, p, (f.impl && f.impl.targets) || [], targets, f.name, card.id);
+        const pay = payCost(s, p, f.cost, x, undefined, costDelta(s, p, f));
         if (!pay) fail(`cannot pay for ${f.name}`);
         for (const id of pay.tap) find(s, id).tapped = true;
         loseLife(s, p, pay.life);
         removeFromZone(s, p, card);
         delete card.playable; delete card.onAdventure;
         card.controller = p;
-        s.stack.push({ kind: 'spell', card, controller: p, face, alt, targets: targets.map(t => ({ ...t })), x });
+        s.stack.push({ kind: 'spell', card, controller: p, face, alt, targets: targets.map(t => (t ? { ...t } : null)), x });
         s.stats.casts[card.name] = (s.stats.casts[card.name] || 0) + 1;
         s.passes = 0;
         emit(s, { type: 'cast', player: p, cardId: card.id, noncreature: !f.types.includes('Creature') });
-        for (const t of targets) if (t.kind === 'perm') emit(s, { type: 'becomesTarget', targetId: t.id, bySpell: true, spellController: p });
+        for (const t of targets) if (t && t.kind === 'perm') emit(s, { type: 'becomesTarget', targetId: t.id, bySpell: true, spellController: p });
         givePriority(s, p);
         return s;
       }
@@ -982,16 +1196,23 @@ function applyAction(s, action) {
         const impl = implOf(c);
         const a = impl && impl.abilities && impl.abilities[action.ability];
         if (!a || a.kind !== 'activated') fail('no such activated ability');
-        if (a.sorcerySpeed && !sorceryTiming(s, p)) fail('sorcery-speed ability');
-        if (a.tap && (c.tapped || (isType(c, 'Creature') && c.sick && !hasKw(c, 'haste')))) fail('cannot tap it now');
+        if (!canActivate(s, p, c, a)) fail(`cannot activate ${c.name} now`);
         const targets = action.targets || [];
-        validateTargets(s, p, a.targets || [], targets, `${c.name} ability`);
+        validateTargets(s, p, a.targets || [], targets, `${c.name} ability`, c.id);
+        if (a.removeCounters) {
+          const want = JSON.stringify((action.removeFrom || []).slice().sort());
+          if (!counterRemovalOptions(s, p, a.removeCounters).some(o => JSON.stringify(o.slice().sort()) === want)) fail('invalid counters to remove');
+        }
         const pay = a.cost ? payCost(s, p, a.cost, 0, c.id) : { tap: [], life: 0 };
         if (!pay) fail(`cannot pay ${a.cost}`);
         for (const id of pay.tap) find(s, id).tapped = true;
         loseLife(s, p, pay.life);
+        if (a.removeCounters) for (const id of action.removeFrom) find(s, id).counters[a.removeCounters.type] -= 1;
         if (a.tap) c.tapped = true;
-        s.stack.push({ kind: 'ability', key: `${c.name}#${action.ability}`, sourceId: c.id, sourceName: c.name, controller: p, targets, ev: null });
+        if (a.loyalty !== undefined) { c.counters.loyalty = (c.counters.loyalty || 0) + a.loyalty; c.loyaltyUsedTurn = s.turn; }
+        const item = { kind: 'ability', key: `${prefixOf(c)}#${action.ability}`, sourceId: c.id, sourceOid: c.oid, sourceName: c.name, controller: p, targets, ev: null };
+        if (a.sacrifice) leaveBattlefield(s, c.id, 'graveyard');
+        s.stack.push(item);
         s.passes = 0;
         givePriority(s, p);
         return s;
@@ -1009,6 +1230,6 @@ module.exports = {
   createGame, legalActions, applyAction,
   // exposed for tests, invariants and the bot
   STEPS, IMPLEMENTED_KEYWORDS, unimplementedText, powerOf, toughOf, hasKw, isType, find, baseChar, staticOf,
-  eligibleAttackers, eligibleBlockers, canBlock, manaSources, checkSBA, blankState, newCard,
+  lookup, devotion, eligibleAttackers, eligibleBlockers, canBlock, manaSources, checkSBA, blankState, newCard,
   enterBattlefield, runStep, givePriority, MAX_HAND,
 };
