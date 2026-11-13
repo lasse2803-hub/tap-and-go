@@ -59,10 +59,12 @@ npm test                                    # all tests, incl. test/engine.test.
 npm run sim -- --games 1000                 # simulate games
 npm run sim -- --replay 137 --decks "Red Aggro|Blue Control" --policy chaos --verbose
 npm run build:cards                         # refetch card data from Scryfall (+ legality check)
+npm run mutation-test                       # inject rules bugs; every one must make a test fail
 ```
 
 A simulator failure prints seed, decks and bot policies; `--replay` reproduces it
-action for action.
+action for action. Run `npm run mutation-test` after changing the engine: a test suite
+that stays green when the rules are broken is worthless.
 
 ## M1 scope (done)
 
@@ -76,16 +78,41 @@ loyalty, legend rule), cleanup discard. Six cards fully implemented as proof of 
 card mechanism: Lightning Strike, Infernal Grasp, Hero's Downfall, Vraska's Contempt,
 Night's Whisper, Damnation.
 
-### Known simplifications (all M2)
+## M2 progress — card pool, one deck at a time
 
-- Everything else on a card beyond the keywords above: triggered, activated, static and
-  loyalty abilities, tokens, auras/equipment, alternative costs (spectacle, flashback,
-  escape, overload, adventure side), cost changes. The simulator lists every such card
-  by how often it was played.
-- Lands: enters-tapped conditions, pain-land damage, pathway face choice (treated as
-  either color), creature lands, utility abilities. Nykthos taps for {C} only.
+Each deck is finished completely (every card's whole rules text, one test per card)
+before the next. Card implementations live in `cards/index.js`; the header documents
+the entry shape.
+
+| Deck | Status |
+|---|---|
+| Red Aggro | ✅ 12/12 cards — `test/engine.redaggro.test.js` |
+| other 14 decks | backlog (see `npm run sim`) |
+
+Engine machinery added for Red Aggro (reused by every later deck):
+triggered abilities on the stack (APNAP order, targets chosen when put on the stack,
+removed if no legal target), events (`cast`, `etb`, `attacks`, `attackWith`,
+`becomesTarget`), graveyard triggers, delayed triggers ("at end of combat"),
+activated abilities, tokens (incl. entering tapped and attacking), continuous effects
+until end of turn (P/T, keywords, "becomes a creature"), prowess, damage replacement
+effects, enters-tapped conditions, "can't block", alternative costs (spectacle) with
+"lost life this turn" tracking, adventure (cast the adventure, then the creature from
+exile), "exile and you may play" until the end of your next turn, and decisions
+during resolution (scry, "you may pay").
+
+### Known simplifications
+
+- Cards outside finished decks: only their keywords and P/T work. The simulator lists
+  them by how often they were played.
+- Lands outside finished decks: enters-tapped conditions, pain-land damage, pathway face
+  choice (treated as either color), creature lands, utility abilities. Nykthos taps for
+  {C} only.
 - `*`-power/toughness creatures (Adeline, Burrowguard Mentor, Tymaret) count as 0.
-- Double-faced/adventure cards use their front face.
+- Double-faced cards use their front face.
+- Simultaneous triggers of one player go on the stack in event order (the player does
+  not choose the order yet). Creatures put onto the battlefield attacking attack the
+  same target as their source (Ragavan, Goblin tokens) or the defending player
+  (Phoenix Chick).
 - X is chosen as the maximum affordable when listed by `legalActions` (any X is
   accepted by `applyAction`). Damage-assignment order follows the block order.
 

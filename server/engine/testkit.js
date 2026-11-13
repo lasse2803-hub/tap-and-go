@@ -75,6 +75,18 @@ function passUntil(s, pred, cap = 200) {
   return s;
 }
 
+/** Like passUntil, but also declares no attackers / no blockers along the way. */
+function skipTo(s, pred, cap = 400) {
+  for (let i = 0; i < cap && !s.over && !pred(s); i++) {
+    const k = s.pending.kind;
+    if (k === 'priority') pass(s);
+    else if (k === 'attackers') act(s, { type: 'declareAttackers', attackers: [] });
+    else if (k === 'blockers') act(s, { type: 'declareBlockers', blocks: [] });
+    else return s;
+  }
+  return s;
+}
+
 /**
  * Run one combat from beginCombat: declare `attackers` ([{id,target}] or ids),
  * the defender declares `blocks`, then pass through damage. Stops at end of combat.
@@ -94,4 +106,4 @@ const where = (s, card) => {
   return s.stack.some(i => i.card === card) ? 'stack' : 'nowhere';
 };
 
-module.exports = { setup, add, lands, act, pass, passUntil, combat, where };
+module.exports = { setup, add, lands, act, pass, passUntil, skipTo, combat, where };

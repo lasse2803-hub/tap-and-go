@@ -321,7 +321,7 @@ test('invariants: skipped state-based actions, land on stack, extra land drop ar
   const t = K.setup();
   const land = K.add(t, 0, 'Forest', 'hand');
   t.players[0].hand.pop();
-  t.stack.push({ card: land, controller: 0, targets: [], x: 0 });
+  t.stack.push({ kind: 'spell', card: land, controller: 0, face: 'main', targets: [], x: 0 });
   t.players[0].landsPlayed = 2;
   const msg = checkInvariants(t).join('\n');
   assert.match(msg, /land Forest on the stack/);

@@ -9,7 +9,8 @@
     "test": "node --test \"test/**/*.test.js\"",
     "test:integration": "node test-online.js && node test-decks.js",
     "sim": "node server/engine/sim.js",
-    "build:cards": "node scripts/build-card-db.js"
+    "build:cards": "node scripts/build-card-db.js",
+    "mutation-test": "node scripts/mutation-test.js"
   },
   "dependencies": {
     "express": "^4.18.2",

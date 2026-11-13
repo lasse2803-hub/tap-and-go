@@ -50,10 +50,31 @@ function buildChar(d) {
     keywords: (d.keywords || []).map(k => k.toLowerCase()),
     producedMana: d.produced_mana || [],
   };
+  // Adventure: the second face is an instant/sorcery cast from hand, then the card is
+  // exiled and the creature may be cast from exile later.
+  if (d.layout === 'adventure' && d.card_faces && d.card_faces[1]) {
+    const f = d.card_faces[1];
+    ch.adventure = { name: f.name, manaCost: f.mana_cost || '', typeLine: f.type_line, types: f.type_line.split(' — ')[0].split(/\s+/).filter(w => TYPE_WORDS.includes(w)) };
+  }
+  return finishChar(ch);
+}
+
+function finishChar(ch) {
   ch.is = (t) => ch.types.includes(t);
   ch.isPermanent = ch.types.some(t => ['Land', 'Creature', 'Enchantment', 'Artifact', 'Planeswalker', 'Battle'].includes(t));
   ch.isLegendary = ch.supertypes.includes('Legendary');
   return ch;
+}
+
+/** Characteristics of a token, from its plain definition stored on the token. */
+function makeTokenChar({ name, types = ['Creature'], subtypes = [], supertypes = [], power, toughness, keywords = [], colors = [] }) {
+  return finishChar({
+    name, fullName: name, layout: 'token', manaCost: '', cmc: 0,
+    typeLine: `${[...supertypes, ...types].join(' ')}${subtypes.length ? ' — ' + subtypes.join(' ') : ''}`,
+    types: types.slice(), supertypes: supertypes.slice(), subtypes: subtypes.slice(), oracle: '',
+    power: power === undefined ? undefined : String(power), toughness: toughness === undefined ? undefined : String(toughness),
+    keywords: keywords.map(k => k.toLowerCase()), producedMana: [], colors,
+  });
 }
 
 const CHARS = {};
@@ -93,4 +114,4 @@ function _registerTestCard(def) {
   return CHARS[d.name];
 }
 
-module.exports = { CARDS, DECKS, char, manaOptions, num, getDeck, MANA_CREATURES, _registerTestCard };
+module.exports = { CARDS, DECKS, char, manaOptions, num, getDeck, MANA_CREATURES, makeTokenChar, _registerTestCard };

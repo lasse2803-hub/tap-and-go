@@ -48,6 +48,11 @@ function chaos(s, actions, rng) {
       return { type: a.type, player: a.player, attackers: a.eligible.filter(() => R.rand(rng) < 0.5).map(id => ({ id, target: R.pick(rng, a.targets) })) };
     case 'declareBlockers':
       return { type: a.type, player: a.player, blocks: fillBlocks(s, rng, a, () => R.rand(rng) < 0.5) };
+    case 'scry': {
+      const cards = R.shuffle(rng, a.cards.slice());
+      const k = R.int(rng, cards.length + 1);
+      return { type: 'scry', player: a.player, top: cards.slice(0, k), bottom: cards.slice(k) };
+    }
     default: throw new Error(`chaos: unknown template ${a.type}`);
   }
 }
@@ -98,25 +103,49 @@ function sensible(s, actions, rng) {
         }),
       };
     }
+    case 'chooseTargets': {
+      const good = actions.filter(a => goodTargets(s, a.targets, opp));
+      return R.pick(rng, good.length ? good : actions);
+    }
+    case 'choose':
+      return actions.find(a => a.option === 'pay') || first;
+    case 'scry': {
+      const landsOut = s.battlefield.filter(c => c.controller === p && G.isType(c, 'Land')).length;
+      const keep = (id) => {
+        const c = cardIn(s, id);
+        const ch = db.char(c.name);
+        return ch.is('Land') ? landsOut < 5 : ch.cmc <= landsOut + 1;
+      };
+      return { type: 'scry', player: p, top: first.cards.filter(keep), bottom: first.cards.filter(id => !keep(id)) };
+    }
     default: break;
   }
 
-  // Priority.
-  const land = actions.find(a => a.type === 'playLand');
-  if (land) return land;
+  // Priority. Lands first — exiled "may play" cards before they expire.
+  const lands = actions.filter(a => a.type === 'playLand');
+  if (lands.length) return lands.find(a => P.exile.some(c => c.id === a.cardId)) || lands[0];
   const casts = actions.filter(a => a.type === 'cast');
   const myMain = s.active === p && (s.step === 'main1' || s.step === 'main2') && s.stack.length === 0;
-  const goodTarget = (a) => a.targets.every(t => t.kind === 'player' ? t.player === opp : (G.find(s, t.id) || {}).controller === opp);
-  const sane = casts.filter(goodTarget);
+  const sane = casts.filter(a => goodTargets(s, a.targets, opp));
   if (sane.length) {
     if (myMain) {
-      const best = Math.max(...sane.map(a => db.char(cardIn(s, a.cardId).name).cmc));
-      return R.pick(rng, sane.filter(a => db.char(cardIn(s, a.cardId).name).cmc === best));
+      const cmc = (a) => db.char(cardIn(s, a.cardId).name).cmc;
+      const best = Math.max(...sane.map(cmc));
+      const top = sane.filter(a => cmc(a) === best);
+      const cheap = top.filter(a => a.alt); // e.g. spectacle: same spell, less mana
+      return R.pick(rng, cheap.length ? cheap : top);
     }
     // Instant-speed play outside own main phase, now and then (exercises the stack).
     if (R.rand(rng) < 0.25) return R.pick(rng, sane);
   }
+  // Activated abilities (e.g. animate a creature land before combat), once per permanent.
+  const acts = actions.filter(a => a.type === 'activate' && !(G.find(s, a.cardId).mods || []).length);
+  if (acts.length && s.active === p && s.step === 'beginCombat' && R.rand(rng) < 0.6) return R.pick(rng, acts);
   return actions.find(a => a.type === 'pass');
+}
+
+function goodTargets(s, targets, opp) {
+  return targets.every(t => (t.kind === 'player' ? t.player === opp : (G.find(s, t.id) || {}).controller === opp));
 }
 
 function makeBot(policy, seed) {
